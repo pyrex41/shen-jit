@@ -80,7 +80,7 @@ tests it with a C compiler alone. Moving the kernel, the host or Shen/Scheme upd
 ## Releasing
 
 Move what is under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) to a heading with the version and the date, then push `main` and a tag `vM.N` that matches `VERSION`, together if you like. CI builds Linux x86-64 and arm64 (dynamic, in a container with an old glibc, and static, which cannot load libraries), macOS arm64 and Windows
-x86-64, and runs the fast suites on them. GC stress, the sanitizers and the mutated code objects ran on `main`, so a tag leaves them out. It then makes a draft release of those archives (`tools/package.sh`), each with the rendered guide, the source tarball and `SHA256SUMS`, with the version's section of the changelog as the notes, and refuses if that section is empty (`sh tools/release-notes.sh VERSION` shows them). A tag with a hyphen is a prerelease. Making a draft public is done by hand, on GitHub, and only by the project's owner, once `main`'s run on that commit has passed.
+x86-64, and runs the fast suites on them. GC stress, the sanitizers and the mutated code objects ran on `main`, so a tag leaves them out. It then makes a draft release of those archives (`tools/package.sh`), each with the rendered guide, the source tarball and `SHA256SUMS`, with the tag as the title and the version's section of the changelog as the notes, and refuses if that section is empty (`sh tools/release-notes.sh VERSION` shows them). A tag with a hyphen is a prerelease. Making a draft public is done by hand, on GitHub, and only by the project's owner, once `main`'s run on that commit has passed.
 
 ## Measuring performance
 

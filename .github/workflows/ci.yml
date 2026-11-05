@@ -144,4 +144,4 @@ jobs:
           sha256sum -- * > SHA256SUMS
           prerelease=
           case "$TAG" in *-*) prerelease=--prerelease ;; esac
-          gh release create "$TAG" --draft --verify-tag --notes-file "$RUNNER_TEMP/release-notes.md" $prerelease -- *
+          gh release create "$TAG" --draft --verify-tag --title "$TAG" --notes-file "$RUNNER_TEMP/release-notes.md" $prerelease -- *
