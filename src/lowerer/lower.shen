@@ -252,7 +252,8 @@
                             shen-jit.read-file shen-jit.append shen-jit.arity?
                             shen-jit.inlined? shen-jit.u8 shen-jit.u16 shen-jit.u32
                             shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor
-                            shen-jit.shift-left shen-jit.shift-right shen-jit.rotate32])
+                            shen-jit.shift-left shen-jit.shift-right shen-jit.rotate32
+                            shen-jit.decimal])
   F -> 3 where (element? F [address-> shen-jit.dict-put shen-jit.absvector3 shen-jit.deref
                             shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.bytes->string
                             shen-jit.bytes->pointer shen-jit.pointer->bytes])

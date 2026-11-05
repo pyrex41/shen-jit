@@ -126,6 +126,7 @@ enum Prim {
     /* Bit operations on fixnums (docs/bytecode.md). */
     P_BIT_AND, P_BIT_OR, P_BIT_XOR, P_BIT_NOT, P_SHIFT_LEFT, P_SHIFT_RIGHT,
     P_ROTATE32, P_BSWAP32, P_POPCOUNT, P_CLZ, P_CTZ,
+    P_DECIMAL, /* shen-jit.decimal: a literal past the fixnum range, for the reader */
     /* Prolog variables as immediate values (docs/bytecode.md). */
     P_PVAR, P_PVARP, P_PVAR_OFFSET, P_DEREF, P_SAMEP,
     P_THREAD, /* shen-jit.thread: runs a procedure in a new thread (thread.c) */

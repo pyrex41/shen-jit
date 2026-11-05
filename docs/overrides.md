@@ -51,7 +51,7 @@ The functions that Shen/Scheme 0.53 replaces in its `src/overrides.shen`, with w
 | `shen.<atom>` | Tries the number rules only when the first byte is a digit, `-`, `+` or `.`, the only bytes any of them can start with |
 | `shen.record-kl` | Puts a name without a `shen.source` property straight on `shen.*userdefs*`, instead of an `adjoin` over every definition |
 | `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written |
-| `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become reals instead of overflowing ([semantics.md](semantics.md), section 3) |
+| `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become the nearest real instead of overflowing ([semantics.md](semantics.md), section 3) |
 | `shen.read-evaluate-print`, `shen.x.launcher.main`, `shen-jit.repl-read` | Backtraces, Ctrl-C and the port's own options |
 
 ## Candidates found by profiling

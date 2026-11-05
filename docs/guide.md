@@ -663,7 +663,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | --- | --- |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
-| `make test-kl` | 850 `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
+| `make test-kl` | 857 `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |

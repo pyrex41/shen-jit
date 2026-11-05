@@ -180,6 +180,9 @@ plus:
   `shen-jit.shift-right`, `shen-jit.rotate32` (2), `shen-jit.bit-not`,
   `shen-jit.bswap32`, `shen-jit.popcount`, `shen-jit.clz` and `shen-jit.ctz` (1): bit
   operations, below.
+- `shen-jit.decimal`: arity 2, a string holding a decimal number, which may have an
+  exponent, and a power of ten to scale it by. It gives the nearest real, for the reader's
+  literals past the fixnum range.
 
 `input+` is not a primitive; the port defines it.
 

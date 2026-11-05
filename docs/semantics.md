@@ -92,13 +92,13 @@ collector copies them with it, and reuses them once it is dead (heap.c).
 - **Literals** are computed by the kernel reader with integer arithmetic
   (`shen.compute-integer`, and `shen.expt` for exponents), so a literal beyond
   the fixnum range, such as `1e300`, would overflow. Small overrides of
-  `shen.compute-integer` and `shen.compute-E` make such literals reals, computed
-  digit by digit, so one may land a little off the nearest double.
-  "8.0" still reads as the integer 8, as in Shen/Scheme.
-  *Deviation:* the smallest fixnum cannot be written as a literal. A minus sign
-  applies after its digits are read, and those alone are past the range, so
-  `-2305843009213693952` reads as a real, where Shen/Scheme reads an integer.
-  `(- -2305843009213693951 1)` gives it.
+  `shen.compute-integer` and `shen.compute-E` make such literals the nearest real,
+  or next to it if the digits before an exponent were already rounded, in a fraction
+  or as more digits than a real holds. "8.0" still reads as the integer 8, as in Shen/Scheme.
+  *Deviation:* Shen/Scheme reads such a literal as a bignum. So too the smallest
+  fixnum: a minus sign applies after its digits are read, and those alone are past
+  the range, so `-2305843009213693952` reads as a real, equal to that integer by
+  value. `(- -2305843009213693951 1)` gives the integer itself.
 - **Printing:** `str` prints integers in decimal and reals with the shortest
   digits that read back exactly, always with a decimal point or exponent
   (`(str (+ 0.5 0.5))` is "1.0"). The choice between positional and exponent

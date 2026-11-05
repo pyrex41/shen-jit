@@ -91,6 +91,7 @@ const Primitive primitive_table[] = {
     {"shen-jit.popcount", 1, NULL},
     {"shen-jit.clz", 1, NULL},
     {"shen-jit.ctz", 1, NULL},
+    {"shen-jit.decimal", 2, NULL},
     {"shen-jit.pvar", 1, NULL},
     {"shen-jit.pvar?", 1, NULL},
     {"shen-jit.pvar-offset", 1, NULL},
@@ -1199,6 +1200,31 @@ static bool bytes_range(V b, V start, V n)
            (uint64_t)fixval(start) + (uint64_t)fixval(n) <= string_length(b);
 }
 
+/* The double nearest to the decimal number in s, times 10^e, for a literal past the
+   fixnum range: arithmetic on doubles would only land near it. s may have an exponent
+   of its own, as str prints a large real. */
+static V decimal(VM *vm, V s, V e)
+{
+    if (!is_type(s, T_STRING) || !is_fix(e))
+        return sj_raise_value(vm, "shen-jit.decimal: ~S is not a string and an exponent", s);
+    size_t n = string_length(s);
+    char *text = malloc(n + 32);
+    if (!text)
+        return sj_raise(vm, "out of memory");
+    memcpy(text, string_bytes(s), n);
+    text[n] = 0;
+    long long exponent = fixval(e);
+    char *own = strchr(text, 'e');
+    if (own) {
+        exponent += strtoll(own + 1, NULL, 10);
+        *own = 0;
+    }
+    snprintf(text + strlen(text), 32, "e%lld", exponent);
+    double d = strtod(text, NULL);
+    free(text);
+    return make_real(vm, d);
+}
+
 static V bytes_primitive(VM *vm, unsigned prim)
 {
     V a = vm->args[0], b = vm->args[1], c = vm->args[2];
@@ -1490,6 +1516,7 @@ V sj_primitive(VM *vm, size_t index)
     case P_BIT_AND: case P_BIT_OR: case P_BIT_XOR: case P_BIT_NOT: case P_SHIFT_LEFT: case P_SHIFT_RIGHT:
     case P_ROTATE32: case P_BSWAP32: case P_POPCOUNT: case P_CLZ: case P_CTZ:
         return bit_operation(vm, (unsigned)index);
+    case P_DECIMAL: return decimal(vm, a, b);
     case P_PVAR:
         if (!is_fix(a) || fixval(a) < 0 || (uint64_t)fixval(a) > PVAR_MAX_OFFSET)
             return sj_raise_value(vm, "shen-jit.pvar: ~S is not a valid offset", a);

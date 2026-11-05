@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- An integer literal too big for a fixnum, and one with a large exponent such as `1e300`, now reads as the
+  nearest real. They could land slightly off it, as `1e100` read as `1.0000000000000006e100`.
+
 ## [0.2] - 2026-11-05
 
 ### Added

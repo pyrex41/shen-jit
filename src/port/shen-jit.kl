@@ -615,8 +615,7 @@ them instead, and # < > are symbol characters, so #<procedure> would pass."
 "The reader's number overrides (docs/semantics.md, section 3). In Shen/Scheme a
 zero digit adds an exact 0 to a fraction, so 8.0 reads as the integer 8;
 skipping zero digits gives the same values here. Literals beyond the fixnum
-range become reals instead of overflowing. 0.0 would read as the integer 0,
-like 8.0, so (- 0.5 0.5) makes a real zero."
+range become the nearest real instead of overflowing."
 
 (defun shen.compute-fraction-h (Digits Expt)
   (cond ((= () Digits) 0)
@@ -625,10 +624,14 @@ like 8.0, so (- 0.5 0.5) makes a real zero."
                  (shen.compute-fraction-h (tl Digits) (- Expt 1))))))
 
 (defun shen.compute-integer (Digits)
-  (trap-error (shen-jit.horner Digits 0) (lambda E (shen-jit.horner Digits (- 0.5 0.5)))))
+  (trap-error (shen-jit.horner Digits 0)
+              (lambda E (shen-jit.decimal (shen-jit.digits-text Digits "") 0))))
 
 (defun shen-jit.horner (Digits N)
   (if (= () Digits) N (shen-jit.horner (tl Digits) (+ (* N 10) (hd Digits)))))
 
+(defun shen-jit.digits-text (Digits Text)
+  (if (= () Digits) Text (shen-jit.digits-text (tl Digits) (cn Text (str (hd Digits))))))
+
 (defun shen.compute-E (N Log10)
-  (trap-error (* N (shen.expt 10 Log10)) (lambda E (* N (shen.expt (+ 10 (- 0.5 0.5)) Log10)))))
+  (trap-error (* N (shen.expt 10 Log10)) (lambda E (shen-jit.decimal (str N) Log10))))

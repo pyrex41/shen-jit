@@ -638,14 +638,17 @@ that. Its readings decided nothing below.
 - **The smallest fixnum as a literal: a reader fix rejected** (2026-11-05). `-2305843009213693952` reads as a real, because `shen.compute-integer` gets only the digits, which are past the range, and the kernel's `shen.<number>` applies the sign
   afterwards. A fix would override `shen.<number>`, 1.4 KB of generated code to keep in step with the kernel, for one value in 2^62. `docs/semantics.md` records the limit, and `tests/kl/ops.kl` computes the value instead, which takes
   `kl/ops.sbc` out of the files that differ by host: lowered under `shen-jit` and under Shen/Scheme it is now the same byte for byte, where one line differed before.
+- **Literals past the fixnum range are the nearest real** (2026-11-05). `shen.compute-integer` and `shen.compute-E` fell back to arithmetic on doubles, whose errors build up: `1e100` read as `1.0000000000000006e100`, and `1e308` as `9.999999999999998e307`. They now hand a decimal string and an exponent to `strtod`, through
+  `shen-jit.decimal`. Against Python's reading of the same text, integers of 20 to 300 digits went from 26% on the nearest double, the worst 17 units in the last place off, to all of them, and an integer with a large exponent from 11%, the worst 5 off, to all of them, on macOS, with the same results checked on Windows. The digits before an exponent may
+  already be rounded, as in `0.3e300`, or `123456789012345678901234567890e5`, whose exact digits `shen.<number>` has lost by then, so those can land next to it. As a real, `-2305843009213693952` now equals the smallest fixnum by value, where before it was 512 off.
 - **A previous release is the default host** (2026-11-05, Apple M3 Max). `v0.1` makes the generated files, in 1.4 s against 5.5 under Shen/Scheme 0.53, which stays as the way in that does not start from Shen/JIT. All 52 files are now the same byte for byte under both, so one manifest
   serves them and CI's `shen-scheme-host` job checks it: `port/lower.kl`, and the two files made from it, differed only in how the compiler numbered variables, from a gensym count that depends on the host, and `tokl.shen` now starts it from zero in each definition. That also stops a change to one
   function renaming the rest. The rename the experiment above needed is a build step, so both hosts take one path: `build/tools/lower.shen` has the lowerer under `stage0.lower.`, as its real names are sealed in a host that is Shen/JIT.
 
 ### Not tried yet
 
-- **Correctly rounded literals past the fixnum range.** `shen.compute-integer` falls back to doubles digit by digit, so errors build up. The same arithmetic in Python (2026-11-05), on random integers: 55% of those of 19 digits land on the nearest
-  double, the worst 3 units in the last place off; 8% of those of 300 digits, the worst 23. Handing the digits to `strtod` should fix it. Fractions and exponents were not looked at.
+- **Correctly rounded fractions and negative exponents.** They do not overflow, so they read as the kernel reads them, as under Shen/Scheme: `0.3` as `0.30000000000000004`, and `1e-300` as `1.0000000000000022e-300`. Measured on 2026-11-05, 59% of random fractions land on the nearest double, the worst 1 unit
+  in the last place off. `shen-jit.decimal` could read them too, at the cost of differing from the kernel and Shen/Scheme.
 - The lowerer computing `(cons (hd X) Acc)` before `(tl X)`, so `tl X` goes straight into X's slot. It needs the
   lowerer to know X is a pair after its `cons?` test.
 - Lowering the last operand into the destination, for long `cons` chains: `shen.initialise-environment` uses 830

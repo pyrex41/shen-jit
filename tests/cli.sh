@@ -163,6 +163,22 @@ printf '(define mk 0 Acc -> Acc N Acc -> (mk (- N 1) [N | Acc]))\n(define deep [
 "$SHEN" script "$dir/deep.shen" > "$dir/deep.out" 2>&1
 check deep-recursion "$dir/deep.out" "300000 300001"
 
+# A literal past the fixnum range is the nearest real, which adding up its digits in
+# doubles is not, and the largest fixnum and 1e18 stay integers.
+cat > "$dir/big.shen" <<'EOF'
+(output "~A ~A ~A~%" 2305843009213693951 2305843009213693952 -2305843009213693952)
+(output "~A ~A~%" 123456789012345678901234567890 1e18)
+(output "~A ~A ~A ~A~%" 1e100 1e308 1.5e300 1.7976931348623157e308)
+(output "~A ~A~%" 1e309 -1e300)
+(output "~A~%" (= -2305843009213693952 (- -2305843009213693951 1)))
+EOF
+"$SHEN" script "$dir/big.shen" > "$dir/big.out" 2>&1 < /dev/null
+check literal-past-fixnum "$dir/big.out" "2305843009213693951 2.305843009213694e18 -2.305843009213694e18"
+check literal-many-digits "$dir/big.out" "1.2345678901234568e29 1000000000000000000"
+check literal-exponent "$dir/big.out" "1e100 1e308 1.5e300 1.7976931348623157e308"
+check literal-infinite "$dir/big.out" "+inf.0 -1e300"
+check literal-smallest-fixnum "$dir/big.out" "true"
+
 if [ "$posix" = yes ]; then
 # Ctrl-C at the REPL stops a loop that
 # makes no calls, even one inside the program's own trap-error, and the REPL
