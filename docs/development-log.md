@@ -752,10 +752,11 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
   notes, which with one commit are only a link to the tag. A release is now a draft that someone makes public by hand, and carries its
   section of `CHANGELOG.md`, as Shen/Scheme's and the kernel's do. A tag with an empty section makes no release: those two fall back to
   a line pointing at the file.
+- **A release job that checks `main`: rejected (2026-11-05).** One version failed at once if `main`'s run on the commit had not passed yet, which `v0.2` met when `main` and the tag were pushed together, and another waited for that run. Neither is needed: a tag only makes a draft, and whoever
+  makes it public can see `main`'s run.
 - **Tag runs leave out the heavy suites (2026-11-05).** In a run on `main`, GC stress took 176 to 312 s per job, the sanitizers 43 to
   59 s and the mutated code objects 69 s, and a tag repeated them on the same commit. A tag's run now builds and runs the fast suites,
-  10 to 19 s, on what it publishes, and the release job refuses a commit that has not passed on `main`. From those step times, a
-  release should take about 2.5 minutes against 8.
+  10 to 19 s, on what it publishes. `v0.2`'s tag took 2.2 minutes against about 8.
 - **bullseye moved to Debian's archive (2026-11-05).** The first run on GitHub failed both dynamic Linux jobs at `apt-get install`:
   `deb.debian.org` still lists bullseye's security updates but answers 404 for their files, which `archive.debian.org` has. The jobs
   use the archive rather than a newer Debian, to keep the executables needing only glibc 2.17, on both architectures.

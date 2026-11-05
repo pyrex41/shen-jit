@@ -1,8 +1,8 @@
 # Every platform builds and tests the same release tarball, with a C compiler
 # alone, as tests/linux.sh does. One job makes the tarball, since only it runs
 # a Shen and pandoc. A tag vM.N makes a draft release of what those jobs built,
-# after the fast suites only: its commit must have passed the heavy ones on main.
-# Someone then makes the draft public, on GitHub.
+# after the fast suites only, as the heavy ones run on main. Someone then makes
+# the draft public, on GitHub.
 name: CI
 
 on:
@@ -123,20 +123,8 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     permissions:
-      actions: read
       contents: write
     steps:
-      # If main's run has not finished, re-run this job once it has passed.
-      - name: Check that the commit passed on main
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          passed=$(gh run list --workflow CI --branch main --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId --jq length)
-          if [ "$passed" = 0 ]; then
-            echo "::error::$GITHUB_SHA has not passed CI on main"
-            exit 1
-          fi
       - uses: actions/checkout@v7
       # Not into assets/, which the checkout has too: all that is here goes in the release.
       - uses: actions/download-artifact@v8
