@@ -1,0 +1,43 @@
+(defun fib (N) (if (< N 2) N (+ (fib (- N 1)) (fib (- N 2)))))
+
+(defun tak (X Y Z) (if (< Y X) (tak (tak (- X 1) Y Z) (tak (- Y 1) Z X) (tak (- Z 1) X Y)) Z))
+
+(defun iota (N Acc) (if (= N 0) Acc (iota (- N 1) (cons N Acc))))
+
+(defun app (A B) (if (cons? A) (cons (hd A) (app (tl A) B)) B))
+
+(defun nrev (L) (if (cons? L) (app (nrev (tl L)) (cons (hd L) ())) ()))
+
+(defun nrev-loop (K L Acc) (if (= K 0) Acc (nrev-loop (- K 1) L (nrev L))))
+
+(defun len (L Acc) (if (cons? L) (len (tl L) (+ Acc 1)) Acc))
+
+(defun even? (N) (if (= N 0) true (odd? (- N 1))))
+
+(defun odd? (N) (if (= N 0) false (even? (- N 1))))
+
+(defun closure-loop (F N Acc) (if (= N 0) Acc (closure-loop F (- N 1) (F Acc))))
+
+(defun closure-calls (N) (closure-loop (lambda X (+ X 1)) N 0))
+
+(defun trap-loop (N Acc) (if (= N 0) Acc (trap-loop (- N 1) (trap-error (+ Acc 1) (lambda E 0)))))
+
+(defun raise-loop (N Acc) (if (= N 0) Acc (raise-loop (- N 1) (trap-error (simple-error "x") (lambda E (+ Acc 1))))))
+
+(defun deep (N) (if (= N 0) 0 (+ 1 (deep (- N 1)))))
+
+(defun deep-raise (N) (if (= N 0) (simple-error "bottom") (+ 1 (deep-raise (- N 1)))))
+
+(defun catch-deep (N) (trap-error (deep-raise N) (lambda E (error-to-string E))))
+
+(defun big-frame (A B C D E) (let X (cons A B) (let Y (cons C D) (let Z (cons E X) (cons X (cons Y (cons Z (deep 10))))))))
+
+(defun alloc-loop (N Acc) (if (= N 0) (len Acc 0) (alloc-loop (- N 1) (cons N (cons N ())))))
+
+(defun wrong-arity () (fib 1 2))
+
+(defun not-boolean () (if 1 a b))
+
+(defun add-real () (+ 1 (/ 1 2)))
+
+(defun overflow () (+ 2305843009213693951 1))

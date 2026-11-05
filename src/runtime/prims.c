@@ -1,0 +1,1526 @@
+/* The primitive table and the general implementations that native code falls
+   back to (docs/semantics.md). */
+#define _DEFAULT_SOURCE /* sigaction under -std=c11 with glibc */
+#include "jit.h"
+#include "ops.h"
+#include "reader.h"
+#include "vm.h"
+
+#include <errno.h>
+#include <math.h>
+#include <signal.h>
+#include <stdlib.h>
+#include <string.h>
+#ifndef _WIN32
+#include <sys/select.h>
+#endif
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <time.h>
+#include <unistd.h>
+
+/* The order matches enum Prim in ops.h. Images record a checksum of the
+   names, so an image cannot load into a build with a different table. */
+const Primitive primitive_table[] = {
+    {"+", 2, NULL},           {"-", 2, NULL},
+    {"*", 2, NULL},           {"/", 2, NULL},
+    {"<", 2, NULL},           {">", 2, NULL},
+    {"<=", 2, NULL},          {">=", 2, NULL},
+    {"=", 2, NULL},           {"number?", 1, NULL},
+    {"cons", 2, NULL},        {"hd", 1, NULL},
+    {"tl", 1, NULL},          {"cons?", 1, NULL},
+    {"cn", 2, NULL},          {"pos", 2, NULL},
+    {"tlstr", 1, NULL},       {"str", 1, NULL},
+    {"string?", 1, NULL},     {"n->string", 1, NULL},
+    {"string->n", 1, NULL},   {"intern", 1, NULL},
+    {"absvector", 1, NULL},   {"absvector?", 1, NULL},
+    {"<-address", 2, NULL},   {"address->", 3, NULL},
+    {"set", 2, NULL},         {"value", 1, NULL},
+    {"simple-error", 1, NULL}, {"error-to-string", 1, NULL},
+    {"eval-kl", 1, NULL},     {"get-time", 1, NULL},
+    {"open", 2, NULL},        {"close", 1, NULL},
+    {"read-byte", 1, NULL},   {"write-byte", 2, NULL},
+    {"char-stream?", 1, NULL}, {"read-unit-string", 1, NULL},
+    {"write-string", 2, NULL},
+    {"shen-jit.install", 1, NULL},
+    {"shen-jit.symbol?", 1, NULL},
+    {"shen-jit.hash", 2, NULL},
+    {"shen-jit.exit", 1, NULL},
+    {"shen-jit.symbol-kind", 1, NULL},
+    {"shen-jit.filled-vector", 2, NULL},
+    {"shen-jit.dict-find", 2, NULL},
+    {"shen-jit.dict-put", 3, NULL},
+    {"shen-jit.dict-remove", 2, NULL},
+    {"shen-jit.dict-entries", 1, NULL},
+    {"shen-jit.tagged?", 2, NULL},
+    {"shen-jit.sealed?", 1, NULL},
+    {"shen-jit.sealing", 1, NULL},
+    {"shen-jit.inline-body", 1, NULL},
+    {"shen-jit.vector?", 1, NULL},
+    {"shen-jit.absvector3", 3, NULL},
+    {"shen-jit.quiet?", 0, NULL},
+    {"shen-jit.mark-toplevel", 0, NULL},
+    {"shen-jit.trace-text", 1, NULL},
+    {"shen-jit.backtrace", 0, NULL},
+    {"shen-jit.read-file", 2, NULL},
+    {"shen-jit.integer?", 1, NULL},
+    {"shen-jit.append", 2, NULL},
+    {"shen-jit.arity?", 2, NULL},
+    {"shen-jit.inlined?", 2, NULL},
+    {"shen-jit.save-executable", 2, NULL},
+    {"shen-jit.bytes", 1, NULL},
+    {"shen-jit.bytes?", 1, NULL},
+    {"shen-jit.bytes-length", 1, NULL},
+    {"shen-jit.u8", 2, NULL},
+    {"shen-jit.u16", 2, NULL},
+    {"shen-jit.u32", 2, NULL},
+    {"shen-jit.u8!", 3, NULL},
+    {"shen-jit.u16!", 3, NULL},
+    {"shen-jit.u32!", 3, NULL},
+    {"shen-jit.string->bytes", 1, NULL},
+    {"shen-jit.bytes->string", 3, NULL},
+    {"shen-jit.copy-bytes", 5, NULL},
+    {"shen-jit.bit-and", 2, NULL},
+    {"shen-jit.bit-or", 2, NULL},
+    {"shen-jit.bit-xor", 2, NULL},
+    {"shen-jit.bit-not", 1, NULL},
+    {"shen-jit.shift-left", 2, NULL},
+    {"shen-jit.shift-right", 2, NULL},
+    {"shen-jit.rotate32", 2, NULL},
+    {"shen-jit.bswap32", 1, NULL},
+    {"shen-jit.popcount", 1, NULL},
+    {"shen-jit.clz", 1, NULL},
+    {"shen-jit.ctz", 1, NULL},
+    {"shen-jit.pvar", 1, NULL},
+    {"shen-jit.pvar?", 1, NULL},
+    {"shen-jit.pvar-offset", 1, NULL},
+    {"shen-jit.deref", 3, NULL},
+    {"shen-jit.same?", 2, NULL},
+    {"shen-jit.thread", 1, NULL},
+    {"shen-jit.foreign", 2, NULL},
+    {"shen-jit.pointer?", 1, NULL},
+    {"shen-jit.pointer-kind", 1, NULL},
+    {"shen-jit.pointer-address", 1, NULL},
+    {"shen-jit.bytes->pointer", 3, NULL},
+    {"shen-jit.pointer->string", 1, NULL},
+    {"shen-jit.pointer->bytes", 3, NULL},
+    {"shen-jit.errno", 0, NULL},
+    {"shen-jit.c-errno", 0, NULL},
+    {"shen-jit.pointer-kill", 1, NULL},
+};
+
+const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
+
+/* Raising from C costs one small allocation. The message is a string
+   literal, whose string is made once and cached by address; an offending
+   value is kept beside it, and exception_message puts the two together only
+   when the text is asked for. */
+enum { MESSAGE_CACHE = sizeof ((VM *)0)->message_keys / sizeof (const char *) };
+
+static V message_string(VM *vm, const char *message)
+{
+    size_t i = ((uintptr_t)message >> 3) % MESSAGE_CACHE;
+    if (vm->messages != V_NIL && vm->message_keys[i] == message && ptr(vm->messages)[1 + i] != V_NIL)
+        return ptr(vm->messages)[1 + i];
+    if (vm->messages == V_NIL) {
+        V cache = make_vector(vm, MESSAGE_CACHE, V_NIL);
+        if (cache == V_CLEARED)
+            return V_CLEARED;
+        vm->messages = cache;
+    }
+    V s = make_string(vm, message, strlen(message));
+    if (s != V_CLEARED) {
+        ptr(vm->messages)[1 + i] = s;
+        vm->message_keys[i] = message;
+    }
+    return s;
+}
+
+/* An error raised while the innermost handler is quiet needs no exception:
+   that handler's code never reads it (Handler, vm.h). */
+static bool quiet_handler(VM *vm)
+{
+    return vm->nhandlers && (vm->handlers[vm->nhandlers - 1].fp_offset & 1);
+}
+
+/* Backtraces: an error that the program does not
+   catch records the frames on the stack, which the REPL or main prints: one
+   raised with no handler active, or whose innermost handler is the REPL's
+   (its frame is at or below the REPL's floor). Only the first such error in
+   each REPL evaluation is kept, since the kernel's REPL raises some again
+   from its own frames. Errors that the program catches record nothing, so
+   they stay as cheap as before. */
+enum { TRACE_FRAMES = 256, TRACE_LINES = 24 };
+
+static void capture_trace(VM *vm)
+{
+    if (vm->trace != V_NIL ||
+        (vm->nhandlers && (vm->trace_floor == SIZE_MAX ||
+                           (vm->handlers[vm->nhandlers - 1].fp_offset >> 1) > vm->trace_floor)))
+        return;
+    bool evaluated;
+    size_t n = jit_backtrace(vm, NULL, 0, &evaluated);
+    if (!evaluated || n == 0)
+        return; /* not from running code, or raised where it was written */
+    size_t k = n < TRACE_FRAMES ? n : TRACE_FRAMES;
+    V t = make_vector(vm, 1 + k, V_NIL);
+    if (t == V_CLEARED)
+        return;
+    ptr(t)[1] = fix((int64_t)n);
+    jit_backtrace(vm, ptr(t) + 2, k, &evaluated); /* after the allocation, which may move them */
+    vm->trace = t;
+}
+
+/* The captured backtrace as lines "  in NAME", innermost first, a run of
+   one name being one line with its count, at most TRACE_LINES of them.
+   Empty when nothing was captured. */
+size_t sj_trace_text(VM *vm, char *text, size_t size, bool newline_first)
+{
+    size_t len = 0;
+    text[0] = 0;
+    if (vm->trace == V_NIL)
+        return 0;
+    size_t total = (size_t)fixval(ptr(vm->trace)[1]), k = hdr_size(ptr(vm->trace)[0]) - 1, lines = 0, i = 0;
+    while (i < k && lines < TRACE_LINES && len + 128 < size) {
+        V name = ptr(vm->trace)[2 + i];
+        size_t run = 1;
+        while (i + run < k && ptr(vm->trace)[2 + i + run] == name)
+            run++;
+        int namelen = is_symbol(name) ? (int)string_length(ptr(name)[SYM_NAME]) : 1;
+        const char *bytes = is_symbol(name) ? string_bytes(ptr(name)[SYM_NAME]) : "?";
+        len += (size_t)snprintf(text + len, size - len, "%s  in %.*s", (len || newline_first) ? "\n" : "",
+                                namelen > 64 ? 64 : namelen, bytes);
+        if (run > 1)
+            len += (size_t)snprintf(text + len, size - len, " (%zu times)", run);
+        i += run;
+        lines++;
+    }
+    if (i < total)
+        len += (size_t)snprintf(text + len, size - len, "%s  ... %zu more", len ? "\n" : "", total - i);
+    return len;
+}
+
+/* The value, if any, takes the place of ~S in the message when the text is
+   read (exception_message). */
+V sj_raise_value(VM *vm, const char *message, V value)
+{
+    if (quiet_handler(vm)) {
+        vm->exception = V_NIL;
+        return V_CLEARED;
+    }
+    vm_root(vm, &value);
+    capture_trace(vm);
+    V s = message_string(vm, message);
+    V e = s == V_CLEARED ? V_CLEARED : make_exception(vm, s, value);
+    vm_unroot(vm, 1);
+    vm->exception = e == V_CLEARED ? V_NIL : e;
+    return V_CLEARED;
+}
+
+V sj_raise(VM *vm, const char *message) { return sj_raise_value(vm, message, V_CLEARED); }
+
+/* For rare errors whose text is built when they are raised, or lasts no longer. */
+V sj_raise_text_value(VM *vm, const char *text, V value)
+{
+    if (quiet_handler(vm)) {
+        vm->exception = V_NIL;
+        return V_CLEARED;
+    }
+    vm_root(vm, &value);
+    capture_trace(vm);
+    V s = make_string(vm, text, strlen(text));
+    V e = s == V_CLEARED ? V_CLEARED : make_exception(vm, s, value);
+    vm_unroot(vm, 1);
+    vm->exception = e == V_CLEARED ? V_NIL : e;
+    return V_CLEARED;
+}
+
+V sj_raise_text(VM *vm, const char *text) { return sj_raise_text_value(vm, text, V_CLEARED); }
+
+static bool is_real(V v) { return is_object(v) && obj_type(v) == T_REAL; }
+static bool is_number(V v) { return is_fix(v) || is_real(v); }
+static double number(V v) { return is_fix(v) ? (double)fixval(v) : real_value(v); }
+static bool is_type(V v, unsigned type) { return is_object(v) && obj_type(v) == type; }
+
+static void pointer_text(V v, char *text, size_t size)
+{
+    V kind = ptr(ptr(v)[POINTER_KIND])[SYM_NAME];
+    snprintf(text, size, "#<pointer %.*s 0x%llx>", string_length(kind) < 40 ? (int)string_length(kind) : 40,
+             string_bytes(kind), (unsigned long long)ptr(v)[POINTER_ADDRESS]);
+}
+
+/* Two values that are not identical, each a fixnum, a symbol or another
+   immediate, are not equal: only a real can equal a fixnum it is not. */
+static bool distinct_atoms(V a, V b)
+{
+    return (!is_ptr(a) || is_symbol(a)) && (!is_ptr(b) || is_symbol(b));
+}
+
+/* = (docs/semantics.md, section 6). Lists are walked along their tails, and a
+   head identical to the other is not compared further, nor are two distinct
+   atoms. Strings compare whole words: equal headers mean equal lengths, and
+   the padding is always 0. */
+bool sj_equal(V a, V b)
+{
+    for (;;) {
+        if (a == b)
+            return true;
+        if (is_pair(a)) {
+            if (!is_pair(b))
+                return false;
+            V ha = ptr(a)[0], hb = ptr(b)[0];
+            if (ha != hb && (distinct_atoms(ha, hb) || !sj_equal(ha, hb)))
+                return false;
+            a = ptr(a)[1];
+            b = ptr(b)[1];
+            continue;
+        }
+        if (is_number(a) && is_number(b))
+            return !(is_fix(a) && is_fix(b)) && number(a) == number(b);
+        if ((is_type(a, T_STRING) && is_type(b, T_STRING)) || (is_type(a, T_BYTES) && is_type(b, T_BYTES))) {
+            if (ptr(a)[0] != ptr(b)[0])
+                return false;
+            for (size_t i = 1, n = obj_words(ptr(a)[0]); i < n; i++)
+                if (ptr(a)[i] != ptr(b)[i])
+                    return false;
+            return true;
+        }
+        if (is_type(a, T_VECTOR) && is_type(b, T_VECTOR)) {
+            size_t n = (size_t)hdr_size(ptr(a)[0]);
+            if (n != hdr_size(ptr(b)[0]))
+                return false;
+            for (size_t i = 0; i < n; i++) {
+                V x = ptr(a)[1 + i], y = ptr(b)[1 + i];
+                if (x != y && (distinct_atoms(x, y) || !sj_equal(x, y)))
+                    return false;
+            }
+            return true;
+        }
+        if (is_type(a, T_POINTER) && is_type(b, T_POINTER))
+            return ptr(a)[POINTER_KIND] == ptr(b)[POINTER_KIND] && ptr(a)[POINTER_ADDRESS] == ptr(b)[POINTER_ADDRESS];
+        return false;
+    }
+}
+
+static V boolean(bool b) { return b ? V_TRUE : V_FALSE; }
+
+static V arithmetic(VM *vm, unsigned prim, V a, V b)
+{
+    if (!is_number(a))
+        return sj_raise_value(vm, "~S is not a number", a);
+    if (!is_number(b))
+        return sj_raise_value(vm, "~S is not a number", b);
+    if (prim == P_DIV && (is_fix(b) ? fixval(b) == 0 : real_value(b) == 0.0))
+        return sj_raise(vm, "division by zero");
+    if (is_fix(a) && is_fix(b)) {
+        int64_t x = fixval(a), y = fixval(b), r = 0;
+        bool overflow = false;
+        switch (prim) {
+        case P_ADD: overflow = __builtin_add_overflow(x, y, &r); break;
+        case P_SUB: overflow = __builtin_sub_overflow(x, y, &r); break;
+        case P_MUL: overflow = __builtin_mul_overflow(x, y, &r); break;
+        default: /* P_DIV */
+            if (x % y != 0)
+                return make_real(vm, (double)x / (double)y);
+            r = x / y;
+        }
+        if (overflow || !fix_fits(r))
+            return sj_raise(vm, "integer overflow");
+        return fix(r);
+    }
+    double x = number(a), y = number(b);
+    switch (prim) {
+    case P_ADD: return make_real(vm, x + y);
+    case P_SUB: return make_real(vm, x - y);
+    case P_MUL: return make_real(vm, x * y);
+    default: return make_real(vm, x / y);
+    }
+}
+
+static V comparison(VM *vm, unsigned prim, V a, V b)
+{
+    if (!is_number(a))
+        return sj_raise_value(vm, "~S is not a number", a);
+    if (!is_number(b))
+        return sj_raise_value(vm, "~S is not a number", b);
+    /* Fixnums compare exactly; anything else compares as doubles. */
+    int64_t ix = is_fix(a) ? fixval(a) : 0, iy = is_fix(b) ? fixval(b) : 0;
+    double x = number(a), y = number(b);
+    if (is_fix(a) && is_fix(b)) {
+        x = (double)((ix > iy) - (ix < iy));
+        y = 0;
+    }
+    switch (prim) {
+    case P_LT: return boolean(x < y);
+    case P_GT: return boolean(x > y);
+    case P_LE: return boolean(x <= y);
+    default: return boolean(x >= y);
+    }
+}
+
+static V fail_symbol(VM *vm)
+{
+    if (vm->fail == V_NIL)
+        vm->fail = intern_cstr(vm, "shen.fail!");
+    V fail = vm->fail;
+    if (fail == V_CLEARED)
+        vm->fail = V_NIL;
+    return fail;
+}
+
+/* hash (docs/semantics.md, section 6): consistent with =, so numbers hash by
+   mathematical value, strings by bytes, symbols by their stored name hash,
+   and pairs and absvectors by their elements. Procedures, streams and
+   exceptions hash by family, since they have no stable address. A budget
+   bounds the work on large structures; equal values are walked the same way,
+   so they spend it identically. */
+static uint64_t mix(uint64_t x)
+{
+    x ^= x >> 33;
+    x *= UINT64_C(0xff51afd7ed558ccd);
+    x ^= x >> 33;
+    x *= UINT64_C(0xc4ceb9fe1a85ec53);
+    return x ^ (x >> 33);
+}
+
+static uint64_t hash_value(V v, int *budget)
+{
+    if (--*budget < 0)
+        return 0;
+    if (is_fix(v))
+        return mix((uint64_t)fixval(v));
+    if (is_real(v)) {
+        double d = real_value(v);
+        if (d == trunc(d) && fabs(d) < 9.2e18)
+            return mix((uint64_t)(int64_t)d); /* 8.0 like 8, -0.0 like 0 */
+        uint64_t bits;
+        memcpy(&bits, &d, sizeof bits);
+        return mix(bits);
+    }
+    if (is_symbol(v))
+        return ptr(v)[SYM_HASH];
+    if (is_pair(v)) {
+        uint64_t h = 0x70;
+        for (; is_pair(v) && *budget > 0; v = ptr(v)[1])
+            h = mix(h ^ hash_value(ptr(v)[0], budget));
+        return mix(h ^ hash_value(v, budget));
+    }
+    if (is_type(v, T_STRING) || is_type(v, T_BYTES))
+        return hash_bytes(string_bytes(v), string_length(v));
+    if (is_type(v, T_VECTOR)) {
+        uint64_t h = 0x76;
+        for (size_t i = 0; i < hdr_size(ptr(v)[0]) && *budget > 0; i++)
+            h = mix(h ^ hash_value(ptr(v)[1 + i], budget));
+        return h;
+    }
+    if (is_type(v, T_POINTER))
+        return mix(ptr(ptr(v)[POINTER_KIND])[SYM_HASH] ^ ptr(v)[POINTER_ADDRESS]);
+    if (!is_ptr(v))
+        return mix(v); /* specials */
+    return mix(is_proc(v) ? 0x50 : obj_type(v));
+}
+
+/* The 256 one-byte strings, made on first use and shared by pos and
+   n->string; strings are immutable, so sharing them is invisible. */
+static V byte_string(VM *vm, unsigned byte)
+{
+    if (vm->chars == V_NIL) {
+        V chars = make_vector(vm, 256, V_NIL);
+        if (chars == V_CLEARED)
+            return sj_raise(vm, "out of memory");
+        vm->chars = chars;
+        for (unsigned i = 0; i < 256; i++) {
+            char c = (char)i;
+            V s = make_string(vm, &c, 1);
+            if (s == V_CLEARED) {
+                vm->chars = V_NIL;
+                return sj_raise(vm, "out of memory");
+            }
+            ptr(vm->chars)[1 + i] = s;
+        }
+    }
+    return ptr(vm->chars)[1 + byte];
+}
+
+uint64_t sj_hash(V v)
+{
+    int budget = 256;
+    return hash_value(v, &budget);
+}
+
+/* shen-jit.symbol-kind: 0 for what the kernel's symbol? rejects, 1 for a
+   symbol, 2 for a variable, computed when the symbol was made (objects.c). */
+static V symbol_kind(V v) { return fix(is_symbol(v) ? (int64_t)((ptr(v)[SYM_CELL] >> 56) & 3) : 0); }
+
+/* The kernel's portable hash returns 1 to Bound - 1, never 0. */
+static V hash(VM *vm, V v, V bound)
+{
+    if (!is_fix(bound) || fixval(bound) <= 0)
+        return sj_raise_value(vm, "hash: ~S is not a valid bound", bound);
+    uint64_t h = sj_hash(v) % (uint64_t)fixval(bound);
+    return fix(h == 0 ? 1 : (int64_t)h);
+}
+
+/* Strings (docs/semantics.md, section 4): immutable byte sequences. */
+
+static V alloc_string(VM *vm, size_t len)
+{
+    uint64_t h = HEADER(T_STRING, len);
+    uint64_t *p = vm_alloc_object(vm, obj_words(h));
+    if (!p)
+        return sj_raise(vm, "out of memory");
+    p[0] = h;
+    p[obj_words(h) - 1] = 0;
+    return tagged(p, TAG_OBJECT);
+}
+
+/* A substring of vm->args[0], copied after allocating. */
+static V substring(VM *vm, size_t from, size_t len)
+{
+    V s = alloc_string(vm, len);
+    if (s != V_CLEARED)
+        memcpy(string_bytes(s), string_bytes(vm->args[0]) + from, len);
+    return s;
+}
+
+static V concatenate(VM *vm)
+{
+    size_t la = string_length(vm->args[0]), lb = string_length(vm->args[1]);
+    V s = alloc_string(vm, la + lb);
+    if (s != V_CLEARED) {
+        memcpy(string_bytes(s), string_bytes(vm->args[0]), la);
+        memcpy(string_bytes(s) + la, string_bytes(vm->args[1]), lb);
+    }
+    return s;
+}
+
+/* Reals print with the shortest digits that read back exactly, always with a
+   decimal point or an exponent, and exponents as Chez prints them. */
+static void format_real(double d, char *out, size_t cap)
+{
+    if (isnan(d)) {
+        snprintf(out, cap, "+nan.0");
+        return;
+    }
+    if (isinf(d)) {
+        snprintf(out, cap, d > 0 ? "+inf.0" : "-inf.0");
+        return;
+    }
+    char buf[48];
+    for (int precision = 15; precision <= 17; precision++) {
+        snprintf(buf, sizeof buf, "%.*g", precision, d);
+        if (strtod(buf, NULL) == d)
+            break;
+    }
+    char *e = strchr(buf, 'e');
+    if (e) {
+        char mantissa[48], *digits = e + 1;
+        bool negative = *digits == '-';
+        if (*digits == '+' || *digits == '-')
+            digits++;
+        while (digits[0] == '0' && digits[1])
+            digits++;
+        *e = 0;
+        snprintf(mantissa, sizeof mantissa, "%s", buf);
+        snprintf(out, cap, "%se%s%s", mantissa, negative ? "-" : "", digits);
+    } else {
+        snprintf(out, cap, strchr(buf, '.') ? "%s" : "%s.0", buf);
+    }
+}
+
+/* Error messages show the offending value in Shen notation, cut after
+   SHOW_MAX bytes so that a large or circular value cannot flood them. */
+enum { SHOW_MAX = 60 };
+
+typedef struct {
+    char text[SHOW_MAX + 3];
+    size_t len;
+    bool cut;
+} Show;
+
+static void put(Show *s, const char *bytes, size_t n)
+{
+    if (s->len + n > SHOW_MAX) {
+        n = SHOW_MAX - s->len;
+        s->cut = true;
+    }
+    memcpy(s->text + s->len, bytes, n);
+    s->len += n;
+}
+
+static void put_text(Show *s, const char *text) { put(s, text, strlen(text)); }
+
+/* Error-to-string is on the path of some handlers, so integers avoid
+   snprintf, which is slow. */
+static void put_int(Show *s, int64_t n)
+{
+    char digits[24], *p = digits + sizeof digits;
+    uint64_t u = n < 0 ? -(uint64_t)n : (uint64_t)n;
+    do
+        *--p = (char)('0' + u % 10);
+    while (u /= 10);
+    if (n < 0)
+        *--p = '-';
+    put(s, p, (size_t)(digits + sizeof digits - p));
+}
+
+static void show(VM *vm, Show *s, V v)
+{
+    if (s->cut)
+        return;
+    if (is_pair(v)) {
+        put_text(s, "[");
+        for (show(vm, s, ptr(v)[0]); is_pair(v = ptr(v)[1]) && !s->cut; show(vm, s, ptr(v)[0]))
+            put_text(s, " ");
+        if (v != V_NIL && !s->cut) {
+            put_text(s, " | ");
+            show(vm, s, v);
+        }
+        put_text(s, "]");
+    } else if (is_type(v, T_VECTOR) && hdr_size(ptr(v)[0]) == 3 && is_symbol(ptr(v)[1]) &&
+               string_length(ptr(ptr(v)[1])[SYM_NAME]) == 10 &&
+               memcmp(string_bytes(ptr(ptr(v)[1])[SYM_NAME]), "shen.tuple", 10) == 0) {
+        put_text(s, "(@p ");
+        show(vm, s, ptr(v)[2]);
+        put_text(s, " ");
+        show(vm, s, ptr(v)[3]);
+        put_text(s, ")");
+    } else if (is_type(v, T_VECTOR)) {
+        /* A vector is <1 2 3>, with ... for an element not set; any other
+           absvector is <<...>> with all its elements. */
+        size_t n = (size_t)hdr_size(ptr(v)[0]), first = 0;
+        bool vector = n > 0 && is_fix(ptr(v)[1]) && fixval(ptr(v)[1]) >= 0 &&
+                      (size_t)fixval(ptr(v)[1]) < n;
+        if (vector) {
+            first = 1;
+            n = 1 + (size_t)fixval(ptr(v)[1]);
+        }
+        put_text(s, vector ? "<" : "<<");
+        for (size_t i = first; i < n && !s->cut; i++) {
+            if (i > first)
+                put_text(s, " ");
+            if (vector && ptr(v)[1 + i] == vm->fail)
+                put_text(s, "...");
+            else
+                show(vm, s, ptr(v)[1 + i]);
+        }
+        put_text(s, vector ? ">" : ">>");
+    } else if (is_type(v, T_STRING)) {
+        put_text(s, "\"");
+        put(s, string_bytes(v), string_length(v));
+        put_text(s, "\"");
+    } else if (is_symbol(v)) {
+        put(s, string_bytes(ptr(v)[SYM_NAME]), string_length(ptr(v)[SYM_NAME]));
+    } else if (is_fix(v)) {
+        put_int(s, fixval(v));
+    } else if (is_real(v)) {
+        char small[48];
+        format_real(real_value(v), small, sizeof small);
+        put_text(s, small);
+    } else if (is_pvar(v)) {
+        put_text(s, "Var");
+        put_int(s, (int64_t)pvar_offset(v));
+    } else if (is_type(v, T_POINTER)) {
+        char small[80];
+        pointer_text(v, small, sizeof small);
+        put_text(s, small);
+    } else {
+        put_text(s, v == V_TRUE ? "true" : v == V_FALSE ? "false" : v == V_NIL ? "[]"
+                    : is_proc(v) ? "#<procedure>" : is_type(v, T_STREAM) ? "#<stream>"
+                    : is_type(v, T_BYTES) ? "#<bytes>"
+                    : is_type(v, T_EXCEPTION) ? "#<exception>" : "#<value>");
+    }
+}
+
+/* An exception's message text, completed with its value on first use, or
+   V_CLEARED if there is no memory for it. */
+V exception_message(VM *vm, V e)
+{
+    V value = ptr(e)[EXC_VALUE], m = ptr(e)[EXC_MESSAGE];
+    if (value == V_CLEARED)
+        return m;
+    Show s = {.len = 0};
+    show(vm, &s, value);
+    if (s.cut) {
+        memcpy(s.text + s.len, "...", 3);
+        s.len += 3;
+    }
+    const char *bytes = string_bytes(m);
+    size_t len = string_length(m), at = 0, n;
+    if (len > 180)
+        len = 180; /* messages are literals in the runtime, much shorter */
+    while (at + 1 < len && !(bytes[at] == '~' && bytes[at + 1] == 'S'))
+        at++;
+    bool found = at + 1 < len;
+    char text[256];
+    if (found) {
+        memcpy(text, bytes, at);
+        n = at;
+    } else { /* the value follows the message */
+        memcpy(text, bytes, len);
+        text[len] = ' ';
+        n = at = len + 1;
+    }
+    memcpy(text + n, s.text, s.len);
+    n += s.len;
+    if (found) {
+        memcpy(text + n, bytes + at + 2, len - at - 2);
+        n += len - at - 2;
+    }
+    vm_root(vm, &e);
+    V string = make_string(vm, text, n);
+    vm_unroot(vm, 1);
+    if (string != V_CLEARED) {
+        ptr(e)[EXC_MESSAGE] = string;
+        ptr(e)[EXC_VALUE] = V_CLEARED;
+    }
+    return string;
+}
+
+static V to_string(VM *vm, V v)
+{
+    char small[80];
+    const char *text = small;
+    size_t len;
+    if (is_fix(v))
+        snprintf(small, sizeof small, "%lld", (long long)fixval(v));
+    else if (v == V_TRUE || v == V_FALSE)
+        text = v == V_TRUE ? "true" : "false";
+    else if (v == V_NIL)
+        text = "()";
+    else if (is_pvar(v))
+        snprintf(small, sizeof small, "Var%llu", (unsigned long long)pvar_offset(v));
+    else if (is_symbol(v)) /* strings are immutable, so the name itself */
+        return ptr(v)[SYM_NAME];
+    else if (is_type(v, T_STRING)) {
+        size_t n = string_length(v);
+        V s = alloc_string(vm, n + 2);
+        if (s != V_CLEARED) {
+            string_bytes(s)[0] = '"';
+            memcpy(string_bytes(s) + 1, string_bytes(vm->args[0]), n);
+            string_bytes(s)[n + 1] = '"';
+        }
+        return s;
+    } else if (is_real(v))
+        format_real(real_value(v), small, sizeof small);
+    else if (is_pair(v))
+        text = "#<pair>";
+    else if (is_proc(v))
+        text = "#<procedure>";
+    else if (is_type(v, T_VECTOR))
+        text = "#<absvector>";
+    else if (is_type(v, T_STREAM))
+        text = "#<stream>";
+    else if (is_type(v, T_BYTES))
+        text = "#<bytes>";
+    else if (is_type(v, T_EXCEPTION))
+        text = "#<exception>";
+    else if (is_type(v, T_POINTER))
+        pointer_text(v, small, sizeof small);
+    else
+        text = "#<value>";
+    len = strlen(text);
+    return make_string(vm, text, len);
+}
+
+/* Streams (docs/semantics.md, section 12). */
+
+static FILE *stream_file(V s, bool output)
+{
+    if (!is_type(s, T_STREAM))
+        return NULL;
+    uint64_t flags = ptr(s)[STREAM_FLAGS];
+    if (!(flags & STREAM_OPEN) || !(flags & STREAM_OUTPUT) != !output)
+        return NULL;
+    return (FILE *)(uintptr_t)ptr(s)[STREAM_HANDLE];
+}
+
+/* Interning can allocate and move symbols, so intern first and read the
+   operands from their rooted slots afterwards. */
+/* vm->args[0], a path relative to *home-directory*, as open takes it: a
+   malloc'd name, or NULL. */
+static char *home_path(VM *vm)
+{
+    V home_symbol = intern_cstr(vm, "*home-directory*");
+    if (home_symbol == V_CLEARED)
+        return NULL;
+    V home = *cell_value(vm, symbol_cell(home_symbol)), path = vm->args[0];
+    size_t lh = is_type(home, T_STRING) ? string_length(home) : 0, lp = string_length(path);
+    char *name = malloc(lh + lp + 1);
+    if (!name)
+        return NULL;
+    if (lh)
+        memcpy(name, string_bytes(home), lh);
+    memcpy(name + lh, string_bytes(path), lp);
+    name[lh + lp] = 0;
+    return name;
+}
+
+static FILE *open_path(VM *vm, const char *mode)
+{
+    char *name = home_path(vm);
+    FILE *f = name ? fopen(name, mode) : NULL;
+    free(name);
+    return f;
+}
+
+/* (shen-jit.save-executable Path Entry) writes a binary at Path, relative to
+   *home-directory* as open is: the runtime of this one and an image of the
+   heap. Entry is a function of no arguments to run instead of the launcher, or
+   []. It does not return. As for --save, the image holds what the cells,
+   constants and symbols reach and no frames, so there is nothing to go on
+   with: here the frames are dropped, as the launcher's return does. The file
+   is written beside Path and renamed, so a binary can replace itself. */
+static V save_executable(VM *vm)
+{
+    if (!thread_is_only(vm))
+        return sj_raise(vm, "save-executable: other threads are running");
+    V path = vm->args[0], entry = vm->args[1];
+    if (!is_type(path, T_STRING))
+        return sj_raise_value(vm, "~S is not a path", path);
+    if (entry != V_NIL) {
+        V f = is_symbol(entry) ? *cell_function(vm, symbol_cell(entry)) : V_NIL;
+        if (!is_proc(f) || hdr_type(ptr(f)[0]) != T_CLOSURE ||
+            (ptr(ptr(f)[CLO_CODE])[CODE_ARITY] & UINT32_MAX) != 0)
+            return sj_raise_value(vm, "~S is not a function of no arguments", entry);
+    }
+    if (!vm->self)
+        return sj_raise(vm, "save-executable: not running from an executable");
+    char *name = home_path(vm), *temporary = name ? malloc(strlen(name) + 5) : NULL;
+    if (temporary)
+        sprintf(temporary, "%s.tmp", name);
+    size_t home = symbol_cell(intern_cstr(vm, "*home-directory*"));
+    size_t hush = symbol_cell(intern_cstr(vm, "*hush*"));
+    size_t argv = symbol_cell(intern_cstr(vm, "*argv*"));
+    V empty = make_string(vm, "", 0);
+    if (!temporary || empty == V_CLEARED || !image_copy_runtime(vm->self, temporary)) {
+        free(name);
+        free(temporary);
+        return sj_raise_value(vm, "save-executable: cannot write ~S", vm->args[0]);
+    }
+    *cell_value(vm, home) = empty; /* where it was built means nothing where it runs */
+    /* Nothing else keeps this symbol alive, so its value is set before anything can
+       collect: a cell kept across an allocation may be freed and used again. */
+    size_t entry_cell = symbol_cell(intern_cstr(vm, "shen-jit.*entry*"));
+    *cell_value(vm, entry_cell) = vm->args[1]; /* after the intern, which may move it */
+    V *base = vm->stack + vm->launch_base; /* as the launcher's caller keeps them */
+    *cell_value(vm, hush) = base[0];
+    *cell_value(vm, argv) = base[1];
+    vm->fp = vm->top = base;
+#ifdef _WIN32
+    remove(name); /* rename does not replace a file there */
+#endif
+    if (!image_append(vm, temporary) || chmod(temporary, 0755) != 0 || rename(temporary, name) != 0) {
+        fprintf(stderr, "shen-jit: cannot write %s\n", name);
+        remove(temporary);
+        exit(1);
+    }
+    exit(0); /* flushes every open stream */
+}
+
+static V open_file(VM *vm)
+{
+    V out = intern_cstr(vm, "out"), in = intern_cstr(vm, "in");
+    V path = vm->args[0], direction = vm->args[1];
+    if (out == V_CLEARED || in == V_CLEARED)
+        return sj_raise(vm, "out of memory");
+    if (!is_type(path, T_STRING))
+        return sj_raise_value(vm, "open: ~S is not a string", path);
+    bool output = direction == out;
+    if (!output && direction != in)
+        return sj_raise_value(vm, "open: the direction ~S is not in or out", direction);
+    FILE *f = open_path(vm, output ? "wb" : "rb");
+    if (!f)
+        return sj_raise_value(vm, "open: cannot open ~S", vm->args[0]);
+    V s = make_stream(vm, STREAM_FILE | STREAM_OPEN | (output ? STREAM_OUTPUT : 0), f);
+    if (s == V_CLEARED || !vm_track_file(vm, s)) {
+        fclose(f);
+        return sj_raise(vm, "out of memory");
+    }
+    return s;
+}
+
+/* shen-jit.read-file, behind the port's read-file-as-bytelist and
+   read-file-as-string: a whole file, read in C, as a list of its bytes when
+   the second argument is true and as a string otherwise. The kernel's read
+   one read-byte at a time. */
+static V read_file(VM *vm)
+{
+    if (!is_type(vm->args[0], T_STRING))
+        return sj_raise_value(vm, "open: ~S is not a string", vm->args[0]);
+    bool bytes = vm->args[1] == V_TRUE;
+    FILE *f = open_path(vm, "rb");
+    if (!f)
+        return sj_raise_value(vm, "open: cannot open ~S", vm->args[0]);
+    size_t len = 0, cap = 1 << 16;
+    char *text = malloc(cap);
+    for (size_t n; text && (n = fread(text + len, 1, cap - len, f)) > 0;) {
+        len += n;
+        if (len == cap) {
+            char *more = realloc(text, cap *= 2);
+            if (!more)
+                free(text);
+            text = more;
+        }
+    }
+    fclose(f);
+    if (!text)
+        return sj_raise(vm, "out of memory");
+    V v = V_NIL;
+    if (!bytes) {
+        v = make_string(vm, text, len);
+    } else if (len) {
+        /* The pairs in one block, from the last byte back. */
+        uint64_t *p = vm_alloc(vm, 2 * len);
+        if (!p)
+            v = V_CLEARED;
+        for (size_t i = len; p && i-- > 0;) {
+            p[2 * i] = fix((unsigned char)text[i]);
+            p[2 * i + 1] = v;
+            v = tagged(p + 2 * i, TAG_PAIR);
+        }
+    }
+    free(text);
+    return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
+}
+
+/* shen-jit.append, behind the port's append: a copy of the first list,
+   ending in the second. The kernel's builds one pair per call, on its way
+   back from a recursion as deep as the list. The copy goes straight into
+   the free space in one pass, and is kept by moving the heap pointer past
+   it once the list proves proper; without room for it, or under GC stress,
+   the list is counted first and the copy allocated as one block. */
+static V append(VM *vm)
+{
+    V x = vm->args[0];
+    uint64_t *start = vm->hp, *q = start;
+    if (!vm->stress) {
+        for (; is_pair(x) && vm->hlimit - q >= 2; x = ptr(x)[1], q += 2) {
+            q[0] = ptr(x)[0];
+            q[1] = tagged(q + 2, TAG_PAIR);
+        }
+        if (x == V_NIL) {
+            if (q == start)
+                return vm->args[1];
+            q[-1] = vm->args[1];
+            vm->hp = q;
+            return tagged(start, TAG_PAIR);
+        }
+    }
+    size_t n = 0;
+    for (x = vm->args[0]; is_pair(x); x = ptr(x)[1])
+        n++;
+    if (x != V_NIL)
+        return sj_raise(vm, "attempt to append a non-list");
+    if (n == 0)
+        return vm->args[1];
+    uint64_t *p = vm_alloc(vm, 2 * n);
+    if (!p)
+        return sj_raise(vm, "out of memory");
+    x = vm->args[0]; /* the allocation may have moved it */
+    for (size_t i = 0; i < n; i++, x = ptr(x)[1]) {
+        p[2 * i] = ptr(x)[0];
+        p[2 * i + 1] = tagged(p + 2 * i + 2, TAG_PAIR);
+    }
+    p[2 * n - 1] = vm->args[1];
+    return tagged(p, TAG_PAIR);
+}
+
+static V close_stream(VM *vm, V s)
+{
+    if (!is_type(s, T_STREAM))
+        return sj_raise_value(vm, "close: ~S is not a stream", s);
+    uint64_t *o = ptr(s);
+    if (o[STREAM_FLAGS] & STREAM_OPEN) {
+        FILE *f = (FILE *)(uintptr_t)o[STREAM_HANDLE];
+        if ((o[STREAM_FLAGS] & STREAM_KIND_MASK) == STREAM_FILE)
+            fclose(f);
+        else
+            fflush(f);
+        o[STREAM_FLAGS] &= ~(uint64_t)STREAM_OPEN;
+    }
+    return V_NIL;
+}
+
+/* Whether to raise "interrupted" for a pending Ctrl-C. It is raised again from
+   every check until the REPL's handler is the innermost, so the program's own
+   handlers cannot keep it from reaching the REPL. Outside that handler the REPL
+   is printing its prompt or an error, with nothing to stop and nothing to
+   catch the error: the Ctrl-C is dropped. */
+bool sj_take_interrupt(VM *vm)
+{
+    if (vm->nhandlers <= vm->repl_handlers) {
+        vm->interrupted = 0;
+        vm_set_limit(vm, vm->stack_limit);
+    }
+    return vm->nhandlers >= vm->repl_handlers;
+}
+
+/* Standard input is read here rather than through stdio, whose read would
+   restart after a Ctrl-C (SA_RESTART, which writes need) and which does not say
+   when it is about to wait. The wait is in select, which a signal always ends.
+   Only the wait is without the lock, so threads reading at once take turns over
+   the buffer: others run meanwhile, and whoever gets the lock first reads. */
+static unsigned char input[4096];
+static size_t input_next, input_end;
+
+#ifndef _WIN32
+static bool input_ready(bool wait)
+{
+    fd_set in;
+    FD_ZERO(&in);
+    FD_SET(STDIN_FILENO, &in);
+    struct timeval now = {0, 0};
+    int ready = select(STDIN_FILENO + 1, &in, NULL, NULL, wait ? NULL : &now);
+    return ready > 0 || (ready < 0 && errno != EINTR); /* a bad descriptor: read reports it */
+}
+#endif
+
+static V read_stdin(VM *vm)
+{
+    fflush(stdout);
+    while (input_next == input_end) {
+        /* A Ctrl-C is for the main thread, which the REPL runs in. */
+        if (vm->interrupted == INTERRUPT && (!vm->thread || vm->thread->main) && sj_take_interrupt(vm))
+            return sj_raise(vm, "interrupted");
+#ifdef _WIN32
+        /* select is for sockets there, so the read itself waits, without the lock,
+           and a Ctrl-C ends it. One thread reads at a time; the others look again. */
+        static bool input_busy;
+        Thread *t = vm->threads ? thread_leave(vm) : NULL;
+        long n = 1;
+        if (input_busy) {
+            win_sleep_briefly();
+        } else {
+            input_busy = true;
+            n = win_read_input(input, sizeof input);
+            input_busy = false;
+            if (n > 0) {
+                input_next = 0;
+                input_end = (size_t)n;
+            }
+        }
+        if (t)
+            thread_enter(t);
+        if (n == 0)
+            return fix(-1);
+#else
+        if (input_ready(false)) {
+            ssize_t n = read(STDIN_FILENO, input, sizeof input);
+            if (n <= 0)
+                return fix(-1);
+            input_next = 0;
+            input_end = (size_t)n;
+        } else {
+            Thread *t = vm->threads ? thread_leave(vm) : NULL;
+            input_ready(true);
+            if (t)
+                thread_enter(t);
+        }
+#endif
+    }
+    return fix(input[input_next++]);
+}
+
+static V read_byte(VM *vm, V s)
+{
+    FILE *f = stream_file(s, false);
+    if (!f)
+        return sj_raise_value(vm, "read-byte: ~S is not an open input stream", s);
+    if (f == stdin)
+        return read_stdin(vm);
+    int c = fgetc(f);
+    return fix(c == EOF ? -1 : c);
+}
+
+/* Ctrl-C at the REPL, which installs this when it starts (P_MARK_TOPLEVEL):
+   it only marks the interrupt and clears the limit compiled code checks
+   (vm.h), and ends a wait for input (read_stdin). Elsewhere SIGINT keeps its
+   default and ends the process. */
+static VM *interrupt_vm;
+
+static void on_interrupt(int sig)
+{
+    (void)sig;
+    interrupt_vm->interrupted = INTERRUPT;
+    interrupt_vm->check_limit = NULL;
+}
+
+/* Code compiled so far has no loop checks, and from here on a loop without them
+   could not be stopped at all: it may have run while a file loaded, before
+   the REPL started. */
+static void catch_interrupts(VM *vm)
+{
+    if (interrupt_vm == vm)
+        return;
+    interrupt_vm = vm;
+    if (!vm->interruptible) {
+        vm->interruptible = true;
+        jit_recompile(vm);
+    }
+#ifdef _WIN32
+    win_catch_interrupts(on_interrupt);
+#else
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_interrupt;
+    sa.sa_flags = SA_RESTART;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGINT, &sa, NULL);
+#endif
+}
+
+static V write_byte(VM *vm, V b, V s)
+{
+    FILE *f = stream_file(s, true);
+    if (!f)
+        return sj_raise_value(vm, "write-byte: ~S is not an open output stream", s);
+    if (!is_fix(b) || fixval(b) < 0 || fixval(b) > 255)
+        return sj_raise_value(vm, "write-byte: ~S is not a byte", b);
+    fputc((int)fixval(b), f);
+    return b;
+}
+
+static V get_time(VM *vm)
+{
+    V run = intern_cstr(vm, "run"), unix_time = intern_cstr(vm, "unix");
+    V kind = vm->args[0];
+#ifdef _WIN32
+    if (kind == run && run != V_CLEARED)
+        return make_real(vm, win_run_seconds());
+    if (kind == unix_time && unix_time != V_CLEARED)
+        return make_real(vm, win_unix_seconds());
+#else
+    if (kind == run && run != V_CLEARED)
+        return make_real(vm, (double)clock() / CLOCKS_PER_SEC);
+    if (kind == unix_time && unix_time != V_CLEARED) {
+        struct timeval tv;
+        gettimeofday(&tv, NULL);
+        return make_real(vm, (double)tv.tv_sec + tv.tv_usec * 1e-6);
+    }
+#endif
+    return sj_raise_value(vm, "get-time: ~S is not run or unix", vm->args[0]);
+}
+
+/* The standard streams and the host globals the runtime owns. */
+bool sj_init_host(VM *vm)
+{
+    static const struct {
+        const char *global;
+        uint64_t flags;
+    } std[] = {{"*stinput*", STREAM_STDIN | STREAM_OPEN},
+               {"*stoutput*", STREAM_STDOUT | STREAM_OUTPUT | STREAM_OPEN},
+               {"*sterror*", STREAM_STDERR | STREAM_OUTPUT | STREAM_OPEN}};
+    FILE *files[] = {stdin, stdout, stderr};
+    for (size_t i = 0; i < 3; i++) {
+        V s = make_stream(vm, std[i].flags, files[i]);
+        V g = s == V_CLEARED ? V_CLEARED : intern_cstr(vm, std[i].global);
+        if (g == V_CLEARED)
+            return false;
+        *cell_value(vm, symbol_cell(g)) = s;
+    }
+    V home = intern_cstr(vm, "*home-directory*");
+    if (home == V_CLEARED)
+        return false;
+    if (*cell_value(vm, symbol_cell(home)) == V_CLEARED) {
+        V empty = make_string(vm, "", 0);
+        if (empty == V_CLEARED)
+            return false;
+        *cell_value(vm, symbol_cell(intern_cstr(vm, "*home-directory*"))) = empty;
+    }
+    return true;
+}
+
+static bool vector_index(V v, V i)
+{
+    return is_type(v, T_VECTOR) && is_fix(i) && fixval(i) >= 0 &&
+           (uint64_t)fixval(i) < hdr_size(ptr(v)[0]);
+}
+
+/* The general implementation of every primitive. Operands are in
+   vm->args[0..2], where they stay rooted while this allocates. Returns
+   V_CLEARED after raising. */
+/* shen-jit.trace-text and shen-jit.backtrace. Their buffers are kept
+   out of sj_primitive, whose frame every primitive call pays for. */
+static __attribute__((noinline)) V trace_text(VM *vm, V message)
+{
+    char text[4096];
+    bool newline = is_type(message, T_STRING) && string_length(message) > 0 &&
+                   string_bytes(message)[string_length(message) - 1] != '\n';
+    size_t len = sj_trace_text(vm, text, sizeof text, newline);
+    return make_string(vm, text, len);
+}
+
+static __attribute__((noinline)) V backtrace(VM *vm)
+{
+    bool evaluated;
+    size_t n = jit_backtrace(vm, NULL, 0, &evaluated);
+    if (n > TRACE_FRAMES)
+        n = TRACE_FRAMES;
+    uint64_t *p = vm_alloc(vm, 2 * n);
+    if (!p && n)
+        return sj_raise(vm, "out of memory");
+    V names[TRACE_FRAMES];
+    jit_backtrace(vm, names, n, &evaluated); /* after the allocation, which may move them */
+    V list = V_NIL;
+    for (size_t i = n; i-- > 0;) {
+        p[2 * i] = names[i];
+        p[2 * i + 1] = list;
+        list = tagged(p + 2 * i, TAG_PAIR);
+    }
+    return list;
+}
+
+/* Byte buffers (docs/bytecode.md). Values are little-endian, as on every target. */
+static V bytes_access(VM *vm, unsigned prim)
+{
+    V b = vm->args[0], i = vm->args[1], x = vm->args[2];
+    size_t width = (size_t)1 << ((prim - P_U8) % 3);
+    if (!is_type(b, T_BYTES))
+        return sj_raise_value(vm, "bytes: ~S is not a byte buffer", b);
+    if (!is_fix(i) || fixval(i) < 0 || (uint64_t)fixval(i) + width > string_length(b))
+        return sj_raise_value(vm, "bytes: ~S is not a valid index", i);
+    uint64_t n = 0;
+    if (prim <= P_U32) {
+        memcpy(&n, string_bytes(b) + fixval(i), width);
+        return fix((int64_t)n);
+    }
+    if (!is_fix(x) || fixval(x) < 0 || (uint64_t)fixval(x) >> (8 * width))
+        return sj_raise_value(vm, "bytes: ~S does not fit", x);
+    n = (uint64_t)fixval(x);
+    memcpy(string_bytes(b) + fixval(i), &n, width);
+    return b;
+}
+
+/* Whether the n bytes from start lie within buffer b. */
+static bool bytes_range(V b, V start, V n)
+{
+    return is_fix(start) && is_fix(n) && fixval(start) >= 0 && fixval(n) >= 0 &&
+           (uint64_t)fixval(start) + (uint64_t)fixval(n) <= string_length(b);
+}
+
+static V bytes_primitive(VM *vm, unsigned prim)
+{
+    V a = vm->args[0], b = vm->args[1], c = vm->args[2];
+    V d = vm->args[3], n = vm->args[4];
+    V v;
+    switch (prim) {
+    case P_BYTES:
+        if (!is_fix(a) || fixval(a) < 0 || fixval(a) >> 48)
+            return sj_raise_value(vm, "shen-jit.bytes: ~S is not a valid length", a);
+        v = make_bytes(vm, NULL, (size_t)fixval(a));
+        return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
+    case P_BYTES_LENGTH:
+        return is_type(a, T_BYTES) ? fix((int64_t)string_length(a))
+                                   : sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
+    case P_STRING_BYTES:
+        if (!is_type(a, T_STRING))
+            return sj_raise_value(vm, "shen-jit.string->bytes: ~S is not a string", a);
+        v = make_bytes(vm, NULL, string_length(a));
+        if (v == V_CLEARED)
+            return sj_raise(vm, "out of memory");
+        memcpy(string_bytes(v), string_bytes(vm->args[0]), string_length(v));
+        return v;
+    case P_BYTES_STRING:
+        if (!is_type(a, T_BYTES))
+            return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
+        if (!bytes_range(a, b, c))
+            return sj_raise_value(vm, "shen-jit.bytes->string: ~S is not a valid range", b);
+        return substring(vm, (size_t)fixval(b), (size_t)fixval(c));
+    default: /* P_COPY_BYTES: to, its start, from, its start, how many */
+        if (!is_type(a, T_BYTES) || !is_type(c, T_BYTES))
+            return sj_raise_value(vm, "bytes: ~S is not a byte buffer", is_type(a, T_BYTES) ? c : a);
+        if (!bytes_range(a, b, n) || !bytes_range(c, d, n))
+            return sj_raise_value(vm, "shen-jit.copy-bytes: ~S is not a valid count", n);
+        memmove(string_bytes(a) + fixval(b), string_bytes(c) + fixval(d), (size_t)fixval(n));
+        return a;
+    }
+}
+
+/* Bit operations (docs/bytecode.md), on the 62 bits of a fixnum. A fixnum's tag bits
+   are zero, so its value shifted left by two is its own word. */
+static V bit_operation(VM *vm, unsigned prim)
+{
+    V a = vm->args[0], b = vm->args[1];
+    if (!is_fix(a))
+        return sj_raise_value(vm, "bit operation: ~S is not an integer", a);
+    switch (prim) {
+    case P_BIT_NOT: return ~a & ~(V)3;
+    case P_POPCOUNT: return fix(__builtin_popcountll(a));
+    case P_CLZ: return fix(a ? __builtin_clzll(a) : 62);
+    case P_CTZ: return fix(a ? __builtin_ctzll(a) - 2 : 62);
+    case P_BSWAP32:
+        if ((uint64_t)fixval(a) >> 32)
+            return sj_raise_value(vm, "shen-jit.bswap32: ~S does not fit in 32 bits", a);
+        return fix(__builtin_bswap32((uint32_t)fixval(a)));
+    default: break;
+    }
+    if (!is_fix(b))
+        return sj_raise_value(vm, "bit operation: ~S is not an integer", b);
+    switch (prim) {
+    case P_BIT_AND: return a & b;
+    case P_BIT_OR: return a | b;
+    case P_BIT_XOR: return a ^ b;
+    default: break;
+    }
+    if ((uint64_t)fixval(b) > 63)
+        return sj_raise_value(vm, "bit operation: ~S is not a valid shift", b);
+    unsigned k = (unsigned)fixval(b);
+    if (prim == P_SHIFT_LEFT)
+        return a << k;
+    if (prim == P_SHIFT_RIGHT)
+        return (V)((int64_t)a >> k) & ~(V)3;
+    /* P_ROTATE32: left */
+    if ((uint64_t)fixval(a) >> 32)
+        return sj_raise_value(vm, "shen-jit.rotate32: ~S does not fit in 32 bits", a);
+    uint32_t x = (uint32_t)fixval(a);
+    k &= 31;
+    return fix((uint32_t)(x << k | x >> ((32 - k) & 31)));
+}
+
+void sj_report(VM *vm, const char *what)
+{
+    V e = vm->exception;
+    if (is_object(e) && obj_type(e) == T_EXCEPTION) {
+        V m = exception_message(vm, e);
+        if (m == V_CLEARED)
+            m = ptr(vm->exception)[EXC_MESSAGE];
+        int len = (int)string_length(m);
+        if (len > 0 && string_bytes(m)[len - 1] == '\n')
+            len--; /* some of the kernel's messages end with one */
+        fprintf(stderr, "shen-jit: %s: %.*s\n", what, len, string_bytes(m));
+        char trace[4096];
+        if (sj_trace_text(vm, trace, sizeof trace, false))
+            fprintf(stderr, "%s\n", trace);
+    } else {
+        fprintf(stderr, "shen-jit: %s failed\n", what);
+    }
+}
+
+V sj_primitive(VM *vm, size_t index)
+{
+    V a = vm->args[0], b = vm->args[1];
+    switch (index) {
+    case P_ADD: case P_SUB: case P_MUL: case P_DIV:
+        return arithmetic(vm, (unsigned)index, a, b);
+    case P_LT: case P_GT: case P_LE: case P_GE:
+        return comparison(vm, (unsigned)index, a, b);
+    case P_EQ: return boolean(sj_equal(a, b));
+    case P_NUMBERP: return boolean(is_number(a));
+    case P_CONS: return make_pair(vm, a, b);
+    case P_HD: return is_pair(a) ? ptr(a)[0] : sj_raise_value(vm, "hd: ~S is not a pair", a);
+    case P_TL: return is_pair(a) ? ptr(a)[1] : sj_raise_value(vm, "tl: ~S is not a pair", a);
+    case P_CONSP: return boolean(is_pair(a));
+    case P_STRINGP: return boolean(is_type(a, T_STRING));
+    case P_ABSVECTOR:
+        if (!is_fix(a) || fixval(a) < 0)
+            return sj_raise_value(vm, "absvector: ~S is not a valid length", a);
+        else {
+            V fail = fail_symbol(vm);
+            return fail == V_CLEARED ? sj_raise(vm, "out of memory")
+                                     : make_vector(vm, (size_t)fixval(vm->args[0]), fail);
+        }
+    case P_ABSVECTORP: return boolean(is_type(a, T_VECTOR));
+    case P_GET_ADDRESS:
+        if (vector_index(a, b))
+            return ptr(a)[1 + fixval(b)];
+        return is_type(a, T_VECTOR) ? sj_raise_value(vm, "<-address: ~S is not a valid index", b)
+                                    : sj_raise_value(vm, "<-address: ~S is not an absvector", a);
+    case P_SET_ADDRESS:
+        if (!vector_index(a, b))
+            return is_type(a, T_VECTOR) ? sj_raise_value(vm, "address->: ~S is not a valid index", b)
+                                        : sj_raise_value(vm, "address->: ~S is not an absvector", a);
+        ptr(a)[1 + fixval(b)] = vm->args[2];
+        return a;
+    case P_SET:
+        if (!is_symbol(a))
+            return sj_raise_value(vm, "set: ~S is not a symbol", a);
+        return *cell_value(vm, symbol_cell(a)) = b;
+    case P_VALUE:
+        if (!is_symbol(a))
+            return sj_raise_value(vm, "value: ~S is not a symbol", a);
+        if (*cell_value(vm, symbol_cell(a)) == V_CLEARED)
+            return sj_raise_value(vm, "~S has no value", a);
+        return *cell_value(vm, symbol_cell(a));
+    case P_SIMPLE_ERROR:
+        if (!is_type(a, T_STRING))
+            return sj_raise_value(vm, "simple-error: ~S is not a string", a);
+        else if (quiet_handler(vm)) {
+            vm->exception = V_NIL;
+            return V_CLEARED;
+        } else {
+            capture_trace(vm);
+            V e = make_exception(vm, vm->args[0], V_CLEARED);
+            vm->exception = e == V_CLEARED ? V_NIL : e;
+            return V_CLEARED;
+        }
+    case P_ERROR_TO_STRING:
+        if (!is_type(a, T_EXCEPTION))
+            return sj_raise_value(vm, "error-to-string: ~S is not an exception", a);
+        else {
+            V s = exception_message(vm, a);
+            return s == V_CLEARED ? sj_raise(vm, "out of memory") : s;
+        }
+    case P_CN:
+        if (!is_type(a, T_STRING) || !is_type(b, T_STRING))
+            return sj_raise_value(vm, "cn: ~S is not a string", is_type(a, T_STRING) ? b : a);
+        return concatenate(vm);
+    case P_POS:
+        if (!is_type(a, T_STRING) || !is_fix(b) || fixval(b) < 0 ||
+            (uint64_t)fixval(b) >= string_length(a))
+            return is_type(a, T_STRING) ? sj_raise_value(vm, "pos: ~S is not a valid index", b)
+                                        : sj_raise_value(vm, "pos: ~S is not a string", a);
+        return byte_string(vm, (unsigned char)string_bytes(a)[fixval(b)]);
+    case P_TLSTR:
+        if (!is_type(a, T_STRING) || string_length(a) == 0)
+            return sj_raise_value(vm, "tlstr: ~S is not a non-empty string", a);
+        return substring(vm, 1, string_length(a) - 1);
+    case P_STR: return to_string(vm, a);
+    case P_N_STRING:
+        if (!is_fix(a) || fixval(a) < 0 || fixval(a) > 255)
+            return sj_raise_value(vm, "n->string: ~S is not a byte", a);
+        return byte_string(vm, (unsigned)fixval(a));
+    case P_STRING_N:
+        if (!is_type(a, T_STRING) || string_length(a) == 0)
+            return sj_raise_value(vm, "string->n: ~S is not a non-empty string", a);
+        return fix((unsigned char)string_bytes(a)[0]);
+    case P_INTERN:
+        if (!is_type(a, T_STRING))
+            return sj_raise_value(vm, "intern: ~S is not a string", a);
+        if (string_length(a) == 4 && memcmp(string_bytes(a), "true", 4) == 0)
+            return V_TRUE;
+        if (string_length(a) == 5 && memcmp(string_bytes(a), "false", 5) == 0)
+            return V_FALSE;
+        else {
+            V sym = intern_string(vm, a);
+            return sym == V_CLEARED ? sj_raise(vm, "out of memory") : sym;
+        }
+    case P_GET_TIME: return get_time(vm);
+    case P_OPEN: return open_file(vm);
+    case P_CLOSE: return close_stream(vm, a);
+    case P_READ_BYTE: return read_byte(vm, a);
+    case P_WRITE_BYTE: return write_byte(vm, a, b);
+    case P_CHAR_STREAMP: return V_FALSE;
+    case P_READ_UNIT_STRING:
+    case P_WRITE_STRING: return sj_raise(vm, "character streams are not supported");
+    case P_INSTALL: return sj_install(vm, a);
+    case P_SYMBOLP: return boolean(is_symbol(a));
+    case P_HASH: return hash(vm, a, b);
+    case P_SYMBOL_KIND: return symbol_kind(a);
+    case P_SEALEDP:
+        /* A sealed name; or, while sealing is on, a name not defined yet,
+           which the first sealed call will bind (jit.c). */
+        return boolean(is_symbol(a) && (symbol_sealed(a) ||
+                                        (vm->seal_user && !is_proc(*cell_function(vm, symbol_cell(a))))));
+    case P_INLINE_BODY:
+        if (is_symbol(a)) {
+            V f = *cell_function(vm, symbol_cell(a));
+            if (is_proc(f) && hdr_type(ptr(f)[0]) == T_CLOSURE)
+                return ptr(ptr(f)[CLO_CODE])[CODE_INLINE];
+        }
+        return V_NIL;
+    case P_SEALING:
+        if (!is_boolean(a))
+            return sj_raise_value(vm, "~S is not a boolean", a);
+        vm->seal_user = a == V_TRUE;
+        return a;
+    case P_TAGGEDP:
+        return boolean(is_type(a, T_VECTOR) && hdr_size(ptr(a)[0]) > 0 && ptr(a)[1] == b);
+    case P_VECTORP: /* an absvector whose element 0 is a number, at least 0 */
+        return boolean(is_type(a, T_VECTOR) && hdr_size(ptr(a)[0]) > 0 && is_number(ptr(a)[1]) &&
+                       number(ptr(a)[1]) >= 0);
+    case P_QUIETP: return boolean(quiet_handler(vm));
+    case P_MARK_TOPLEVEL:
+        vm->trace_floor = (size_t)(vm->fp - vm->stack);
+        vm->trace = V_NIL;
+        vm->repl_handlers = vm->nhandlers;
+        catch_interrupts(vm);
+        return V_TRUE;
+    case P_TRACE_TEXT: return trace_text(vm, a);
+    case P_BACKTRACE: return backtrace(vm);
+    case P_READ_FILE: return read_file(vm);
+    case P_APPEND: return append(vm);
+    case P_INLINEDP: {
+        if (!is_symbol(a))
+            return V_FALSE;
+        V f = *cell_function(vm, symbol_cell(a));
+        return boolean(is_proc(f) && hdr_type(ptr(f)[0]) == T_CLOSURE && ptr(ptr(f)[CLO_CODE])[CODE_INLINE] == b);
+    }
+    case P_ARITYP: {
+        if (!is_symbol(a) || !is_fix(b))
+            return V_FALSE;
+        V f = *cell_function(vm, symbol_cell(a));
+        return boolean(is_proc(f) && hdr_type(ptr(f)[0]) == T_CLOSURE &&
+                       (ptr(ptr(f)[CLO_CODE])[CODE_ARITY] & UINT32_MAX) == (uint64_t)fixval(b));
+    }
+    case P_INTEGERP: /* a fixnum, or a finite real without a fraction */
+        return is_fix(a) || (is_type(a, T_REAL) && isfinite(real_value(a)) && real_value(a) == floor(real_value(a)))
+                   ? V_TRUE
+                   : V_FALSE;
+    case P_ABSVECTOR3: {
+        V v = make_vector(vm, 3, V_NIL);
+        if (v != V_CLEARED)
+            for (int i = 0; i < 3; i++)
+                ptr(v)[1 + i] = vm->args[i];
+        return v;
+    }
+    case P_DICT_FIND: return sj_dict_find(vm);
+    case P_DICT_PUT: return sj_dict_put(vm);
+    case P_DICT_REMOVE: return sj_dict_remove(vm);
+    case P_DICT_ENTRIES: return sj_dict_entries(vm);
+    case P_FILLED_VECTOR:
+        if (!is_fix(a) || fixval(a) < 0)
+            return sj_raise_value(vm, "shen-jit.filled-vector: ~S is not a valid length", a);
+        else {
+            V v = make_vector(vm, (size_t)fixval(a), b);
+            return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
+        }
+    case P_EXIT:
+        if (!is_fix(a) || fixval(a) < 0 || fixval(a) > 255)
+            return sj_raise_value(vm, "~S is not an exit status", a);
+        if (vm->threads)
+            thread_exit(vm, (int)fixval(a));
+        exit((int)fixval(a)); /* flushes every open stream */
+    case P_SAVE_EXECUTABLE: return save_executable(vm);
+    case P_BYTESP: return boolean(is_type(a, T_BYTES));
+    case P_BYTES: case P_BYTES_LENGTH: case P_STRING_BYTES: case P_BYTES_STRING: case P_COPY_BYTES:
+        return bytes_primitive(vm, (unsigned)index);
+    case P_U8: case P_U16: case P_U32: case P_SET_U8: case P_SET_U16: case P_SET_U32:
+        return bytes_access(vm, (unsigned)index);
+    case P_BIT_AND: case P_BIT_OR: case P_BIT_XOR: case P_BIT_NOT: case P_SHIFT_LEFT: case P_SHIFT_RIGHT:
+    case P_ROTATE32: case P_BSWAP32: case P_POPCOUNT: case P_CLZ: case P_CTZ:
+        return bit_operation(vm, (unsigned)index);
+    case P_PVAR:
+        if (!is_fix(a) || fixval(a) < 0 || (uint64_t)fixval(a) > PVAR_MAX_OFFSET)
+            return sj_raise_value(vm, "shen-jit.pvar: ~S is not a valid offset", a);
+        return (uint64_t)fixval(a) << 8 | PVAR_TAG;
+    case P_PVARP: return boolean(is_pvar(a));
+    case P_SAMEP: return boolean(a == b);
+    case P_THREAD: return thread_start(vm);
+    case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
+    case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
+        return ffi_primitive(vm, (unsigned)index);
+    case P_DEREF: {
+        /* What X is bound to in the vector b, along a chain of variables; the
+           third argument marks a variable with no binding. */
+        V x = a;
+        while (is_pvar(x)) {
+            if (!is_type(b, T_VECTOR) || pvar_offset(x) >= hdr_size(ptr(b)[0]))
+                return sj_raise_value(vm, "shen-jit.deref: ~S has no binding here", x);
+            V bound = ptr(b)[1 + pvar_offset(x)];
+            if (bound == vm->args[2])
+                return x;
+            x = bound;
+        }
+        return x;
+    }
+    case P_PVAR_OFFSET:
+        return is_pvar(a) ? fix((int64_t)pvar_offset(a))
+                          : sj_raise_value(vm, "shen-jit.pvar-offset: ~S is not a Prolog variable", a);
+    case P_EVAL_KL: return sj_raise(vm, "eval-kl is lowered as a call to shen-jit.eval-kl");
+    default:
+        if (index == PRIM_RAISE_COND)
+            return sj_raise(vm, "cond: no clause applies");
+        return sj_raise(vm, "unknown primitive");
+    }
+}

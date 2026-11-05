@@ -1,0 +1,693 @@
+# Shen/JIT guide
+
+A small implementation of [Shen](https://shenlanguage.org) that compiles every function to native code.
+
+Shen is a functional language with pattern matching, optional static types, macros and an embedded Prolog,
+built on a small core called KLambda. Shen/JIT lowers KLambda to a register bytecode, and a baseline JIT turns
+each function into native code the first time it is called. Its lowerer is written in Shen, and compiles
+itself. Programs start in a few milliseconds from a heap image carried inside the executable, which is a single
+file of about 1 MB.
+
+## Start
+
+### Install
+
+Each [release](https://github.com/tizoc/shen-jit/releases) has an archive for each platform, holding two
+executables, the optional libraries and this guide: `shen-jit`, `shen-jit-stlib`, which has the
+[standard library](#the-standard-library) loaded, `lib/`, `include/` and `guide/index.html`.
+
+| Platform | Archive | Can load C libraries |
+| --- | --- | --- |
+| macOS, arm64 | `shen-jit-VERSION-macos-arm64.tar.gz` | Yes |
+| Linux, x86-64 | `shen-jit-VERSION-linux-x86_64.tar.gz` | Yes |
+| Linux, arm64 | `shen-jit-VERSION-linux-arm64.tar.gz` | Yes |
+| Linux, x86-64, static | `shen-jit-VERSION-linux-x86_64-static.tar.gz` | No |
+| Linux, arm64, static | `shen-jit-VERSION-linux-arm64-static.tar.gz` | No |
+| Windows 10 or later, x86-64 | `shen-jit-VERSION-windows-x86_64.zip` | Yes |
+
+On Linux, take a dynamic build unless your system is too old for it or has a different C library: those are
+built against an old glibc so that they run on newer ones. A static build runs anywhere, but cannot
+[call C](#calling-c). The executable is the whole installation, so copy it anywhere, such as a directory on your
+`PATH`.
+
+```sh
+tar xzf shen-jit-VERSION-linux-x86_64.tar.gz
+cd shen-jit-VERSION-linux-x86_64
+./shen-jit --version
+```
+
+If macOS refuses to run a downloaded executable, clear its quarantine: `xattr -dr com.apple.quarantine .` in the
+directory you unpacked.
+
+#### From source
+
+A release's source tarball needs only a C11 compiler (clang or gcc), `make` and a POSIX system with the maths
+library: on Debian or Ubuntu, `apt install gcc make`. It carries, in `generated/`, the files that only Shen/Scheme
+can make.
+
+```sh
+tar xzf shen-jit-VERSION.tar.gz
+cd shen-jit-VERSION
+make                              # build/shen-jit
+make stlib                        # build/shen-jit-stlib
+make install PREFIX=/usr/local    # copies build/shen-jit to PREFIX/bin
+```
+
+`make release` makes the same executable without the runtime's symbols and debug information: 0.98 MB instead of
+1.02 on macOS, and 0.97 MB instead of 2.14 on Linux, where gcc's debug information takes 1.1 MB. `make STATIC=1`
+links statically, for an executable that runs anywhere and cannot load libraries.
+
+The JIT maps memory that is writable and executable, so a system that forbids that will not run it.
+
+A checkout also needs what makes the generated files, the Shen kernel and Shen/Scheme.
+[`make deps`](#building-and-testing) fetches both.
+
+#### On Windows
+
+Shen/JIT builds natively on 64-bit Windows 10 or later, with gcc in [MSYS2](https://www.msys2.org)'s UCRT64
+environment:
+
+```sh
+pacman -S --needed make diffutils mingw-w64-ucrt-x86_64-gcc
+make SHEN_SCHEME=false release stlib    # from a source tarball: build/shen-jit.exe, build/shen-jit-stlib.exe
+```
+
+The executable is statically linked and runs from PowerShell or cmd with nothing else installed.
+
+- **Ctrl-C** works as elsewhere. To end the REPL from a console, use Ctrl-Z then Enter, or `(shen-jit.exit 0)`:
+  Ctrl-D is not the end of input there.
+- **Not available:** `SHEN_JIT_PROFILE`, and scripts that run directly through `#!`.
+- **`(get-time run)`** is elapsed time, not processor time.
+- **Non-ASCII text** at the console has not been tested.
+
+### First steps
+
+With no arguments, `shen-jit` starts the REPL.
+
+```repl
+(0-) (+ 1 2)
+3
+
+(1-) (define greet Name -> (cn "hello, " Name))
+(fn greet)
+
+(2-) (greet "world")
+"hello, world"
+
+(3-) (map (+ 1) [1 2 3])
+[2 3 4]
+```
+
+Errors name the value they are about, and show where they happened:
+
+```repl
+(4-) (define test X Y -> (+ X Y))
+(fn test)
+
+(5-) (test 1 "A")
+"A" is not a number
+  in test
+```
+
+- **Ctrl-C** stops a running evaluation, or a program waiting for input, and returns to the prompt. At the prompt
+  it drops what you have typed of an expression.
+- **Ctrl-D** ends the REPL. On Windows, use Ctrl-Z then Enter, or `(shen-jit.exit 0)`.
+- **Line editing:** the REPL has none of its own. For history and arrow keys, run it under
+  [rlwrap](https://github.com/hanslub42/rlwrap): `rlwrap shen-jit`.
+
+### Running programs
+
+```sh
+shen-jit                               # the REPL
+shen-jit script prog.shen a b          # *argv* is ["prog.shen" "a" "b"]
+shen-jit eval -l prog.shen -e '(main)' # load a file, evaluate an expression
+```
+
+The commands come from the kernel's launcher (`shen-jit --help`):
+
+| Command | What it does |
+| --- | --- |
+| `repl` | The interactive REPL, and the default |
+| `script FILE [ARGS]` | Runs FILE, with `*argv*` set to `[FILE \| ARGS]` |
+| `eval ARGS` | Evaluates, from left to right: `-e EXPR`, `-l FILE`, `-s KEY VALUE`. `-q` silences output, and `-r` starts the REPL afterwards |
+
+Options for Shen/JIT itself go before the command:
+
+| Option | What it does |
+| --- | --- |
+| `--seal` | Seals user definitions too: see [Sealing](#sealing) |
+| `--save IMAGE` | After `eval` or `script` returns, writes the heap to IMAGE, so what they defined loads with the kernel: see [Saving a program](#saving-a-program). `-q` and the script's `*argv*` are not saved |
+| `--version` | Prints the version |
+
+A script whose first line starts with `#!` can run directly, with Shen/JIT on your `PATH`, and `load` skips that
+line. This does not work on Windows.
+
+```shen
+#!/usr/bin/env -S shen-jit script
+(output "~A~%" (tl (value *argv*)))
+```
+
+### The language
+
+Everything here is standard Shen, and the [Shen site](https://shenlanguage.org) teaches the language. A short
+taste, starting with functions defined by pattern matching:
+
+```shen
+(define total
+  [] -> 0
+  [X | Xs] -> (+ X (total Xs)))
+
+(total [1 2 3])    \\ 6
+```
+
+Static typing is optional, and `(tc +)` turns it on:
+
+```repl
+(0-) (tc +)
+true
+
+(1+) (define inc {number --> number} X -> (+ X 1))
+(fn inc) : (number --> number)
+
+(2+) (inc 1)
+2 : number
+
+(3+) (inc "a")
+type error
+```
+
+Prolog and a compiler-compiler are built in:
+
+```shen
+(defprolog parent
+  ann bob <--;
+  bob cid <--;)
+
+(defprolog grandparent
+  X Z <-- (parent X Y) (parent Y Z);)
+
+(prolog? (grandparent ann cid))    \\ true
+
+(defcc <digits>
+  0 <digits> := [0 | <digits>];
+  1 <digits> := [1 | <digits>];
+  <e> := [];)
+
+(compile (fn <digits>) [1 0 1])    \\ [1 0 1]
+```
+
+## Programs
+
+### The standard library
+
+`shen-jit` leaves the kernel's standard library out. `shen-jit-stlib` has it already loaded: maths, rationals,
+complex numbers, numerals, lists, strings, vector macros, pretty printing, files and tuples. It is about 2 MB, and
+starts in about the same time.
+
+```sh
+shen-jit-stlib eval -e '(prime? 7)'    # true
+```
+
+The names it exports are system functions, so a program running on it cannot `define` its own `take` or `drop`.
+That is why it is not in the default image.
+
+It is the kernel's precompiled `klambda/stlib.kl`, which a source tarball carries. The kernel's build of that file
+leaves out Encrypt, Regex, Calendar, Data and Tk, whose sources are in its `lib/`. Any binary can load that file and
+save itself, which is all `make stlib` does. To add a library or a program of your own, see
+[Saving a program](#saving-a-program).
+
+```sh
+shen-jit script tools/stlib.shen stlib.kl shen-jit-stlib
+```
+
+### Saving a program
+
+A program can write its own binary, with nothing but the `shen-jit` it runs on. The result is about 1 MB; 2 on
+Linux unless the one running comes from `make release`, as gcc's debug information comes along.
+
+```shen
+(define main -> (output "hello ~A~%" (hd (tl (value *argv*)))))
+(shen-jit.save-executable "hello" main)
+```
+
+```sh
+shen-jit eval -q -l hello.shen
+./hello world    # hello world
+```
+
+- **It runs the entry point,** a function of no arguments, instead of the launcher. All its arguments are its own,
+  in `*argv*` after its name, and its exit status is 0 unless it calls `shen-jit.exit` or an error reaches the top.
+  With `[]` as the entry point, it keeps the launcher: `repl`, `script`, `eval`.
+- **It does not return:** it writes the file and ends the process. The path is relative to `*home-directory*`, as
+  `open`'s is.
+- **All the heap lasts:** definitions, globals, property lists, macros, datatypes and type signatures, so code
+  loaded later type checks against them. The stack and open files do not, and `*home-directory*` starts empty.
+- **It runs only on the kind of system it was made on.** It holds bytecode, compiled to native code on first call
+  as always.
+- **On macOS** it keeps the linker's ad-hoc signature, which runs. `codesign --verify` rejects it, as it does
+  `shen-jit`, for the image appended to the runtime, which matters only for notarized distribution.
+
+To save the heap as an image instead, without an executable:
+
+```sh
+shen-jit --save app.img eval -q -l app.shen
+SHEN_JIT_IMAGE=app.img shen-jit eval -e '(main)'
+```
+
+An image starts with your program already loaded, and loads only into the build that wrote it. After a build from
+source, one appended to the runtime makes an executable of its own:
+
+```sh
+cat build/runtime app.img > app && chmod +x app
+./app eval -e '(main)'
+```
+
+### Threads
+
+`(thread Frozen)` runs a frozen expression in a new thread and returns `true`, as programs written for Shen/Scheme
+expect. Threads are real, and one runs at a time, holding a global lock. So they give concurrency, for work that
+waits or runs beside the main program, and no speed-up from more cores.
+
+```shen
+(set done false)
+(define work 0 -> (set done true) N -> (work (- N 1)))
+(thread (freeze (work 1000000)))
+
+(define wait -> (if (value done) finished (wait)))
+(wait)    \\ finished
+```
+
+- **Switching:** every 10 ms if another thread is waiting, at a function's entry or a loop's next turn, and whenever
+  a thread waits for input on stdin or a socket. Between those points no other thread runs, though a program should
+  not count on where they fall.
+- **Errors:** one that nothing catches ends its thread and is printed to stderr. The other threads go on.
+- **The end:** the process ends when the main thread does, or when any thread calls `(shen-jit.exit N)`. An image
+  saved with `--save` holds what the main thread reaches, and `shen-jit.save-executable` refuses to run while other
+  threads do.
+- **Ctrl-C** at the REPL stops the main thread's work, and threads beside it go on.
+- **Not provided,** as in Shen/Scheme: join, mutexes and channels. A thread signals another through a global, which
+  the other can spin on, as above.
+- **Waiting elsewhere:** reading a file that blocks, such as a FIFO, holds the lock, and Ctrl-C does not end that
+  wait.
+- **Cost:** nothing until the first thread starts. All code then compiles again on its next call, with a test at
+  each loop's turn. The time is shared with the threads that are running.
+
+### Sealing
+
+Kernel and port functions are sealed: calls to them are direct, and redefining one raises
+`F is sealed and cannot be redefined`. Your definitions are open: you can redefine them at any time, and their
+callers see the new definition.
+
+With `--seal`, `SHEN_JIT_SEAL=1` or `(shen-jit.seal +)`, new definitions are sealed too, so calls to them are
+direct, and they cannot be redefined. `(shen-jit.seal -)` turns that off. This gains little, as open calls are
+inlined too, and patched when a function is redefined.
+
+## Close to the machine
+
+### Bytes and bits
+
+Primitives for raw bytes, with every access checked. The collector frees the buffers, and saved executables keep
+them.
+
+```shen
+(define fnv1a
+  _ I I H -> H
+  B I N H -> (fnv1a B (+ I 1) N
+               (shen-jit.bit-and (* (shen-jit.bit-xor H (shen-jit.u8 B I)) 16777619) 4294967295)))
+
+(let B (shen-jit.string->bytes "a")
+  (fnv1a B 0 (shen-jit.bytes-length B) 2166136261))    \\ 3826002220
+```
+
+| Function | What it does |
+| --- | --- |
+| `(shen-jit.bytes N)` | A new buffer of N zero bytes |
+| `(shen-jit.bytes? X)`, `(shen-jit.bytes-length B)` | Whether X is a buffer, and B's length |
+| `(shen-jit.u8 B I)`, `u16`, `u32` | The unsigned value at byte offset I, little-endian, at any alignment |
+| `(shen-jit.u8! B I X)`, `u16!`, `u32!` | Stores X at I and returns B. X must fit |
+| `(shen-jit.string->bytes S)` | A new buffer with S's bytes |
+| `(shen-jit.bytes->string B I N)` | A new string of the N bytes from I |
+| `(shen-jit.copy-bytes To I From J N)` | Copies N bytes from J in From to I in To, which may overlap, and returns To |
+
+On a fixnum's 62 bits: `shen-jit.bit-and`, `bit-or`, `bit-xor`, `bit-not`, `shift-left`, `shift-right`, `rotate32`,
+`bswap32`, `popcount`, `clz` and `ctz`.
+
+[docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Byte buffers and bit operations",
+has the details.
+
+### Calling C
+
+`lib/ffi.shen` lets Shen call plain C functions, with nothing to compile. It is not in the image, and has to be
+loaded before the code that uses it, as a macro applies only to files read after it is defined.
+
+```shen
+(shen-jit.library libm ["libm.so.6" "libm.dylib" "ucrtbase.dll"])
+(define-foreign c-cos libm "cos" (double) --> double)
+
+(output "~A~%" (c-cos 0))    \\ 1.0
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l cos.shen
+```
+
+A library is a symbol and the file names to try, in order. `[]` means the executable and what it links, which on
+Windows reaches nothing, as the executable is static. A static Linux build cannot load libraries, and says so.
+
+| Type | As an argument | As a result |
+| --- | --- | --- |
+| `int64` | A fixnum | Raises if it does not fit 62 bits |
+| `int32`, `uint32` | A fixnum in range | The low 32 bits, sign- or zero-extended |
+| `double` | A real or a fixnum | A new real |
+| `string` | Copied for the call, and a NUL inside raises | Copied into a new string, and NULL is `[]` |
+| `pointer` | A pointer of any kind, or `[]` for NULL | A pointer of kind `pointer`, and NULL is `[]` |
+| `bytes` | The address of a byte buffer, for the call | Not allowed |
+| `bool` | `true` or `false` | The low byte alone |
+| `void` | Not allowed | `[]` |
+
+> C's `int` is `int32`. A function returning `int` leaves the upper half of the result register undefined, so
+> declaring it `int64` reads garbage. There is deliberately no type called `int` or `long`, as `long` is 32 bits on
+> Windows and 64 elsewhere.
+
+A function takes at most 6 arguments that are not doubles and 8 that are, and no structs by value. After the result,
+two flags:
+
+- **`blocking`** gives up the lock during the call, so other threads run. Its byte buffers are copied and back, as
+  another thread's collection may move them.
+- **`(varargs N)`** marks a variadic function with N fixed arguments, from 1 to 3, all integers.
+
+```shen
+(define-foreign c-recv sockets "recv" (int32 bytes int64 int32) --> int32 blocking)
+(define-foreign c-fcntl sockets "fcntl" (int32 int32 int32) --> int32 (varargs 2))
+```
+
+Functions are found at their first call, so a saved program finds them again. One that cannot be found raises
+`foreign: cannot find cos in libm`. `(shen-jit.errno)` is what the last call on this thread left in `errno`, or on
+Windows in `GetLastError`, where `(shen-jit.c-errno)` is the C library's.
+
+[docs/ffi.md](https://github.com/tizoc/shen-jit/blob/main/docs/ffi.md) has the rest, and how it works.
+
+#### Pointers
+
+A pointer has a kind, a symbol, for reading and for messages. `=` compares kind and address, and one prints as
+`#<pointer sqlite3 0x...>`. One saved in an image is dead there, and raises when given to C.
+
+| Function | What it does |
+| --- | --- |
+| `(shen-jit.pointer? X)` | Whether X is a pointer |
+| `(shen-jit.pointer-kind P)`, `(shen-jit.pointer-address P)` | Its kind, and its address as a fixnum |
+| `(shen-jit.bytes->pointer B I Kind)` | The pointer at offset I in a buffer, for out-parameters, and `[]` if NULL |
+| `(shen-jit.pointer->string P)` | Copies the NUL-terminated string it points to |
+| `(shen-jit.pointer->bytes P I N)` | Copies N bytes from offset I. It cannot check them |
+| `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C |
+
+In typed code, a declaration whose types are all plain Shen types, and whose result cannot be NULL, can be called at
+once. Others are for the program to `declare`, under `(tc -)`.
+
+### SQLite
+
+`lib/sqlite.shen` is written over the FFI, in Shen alone. It needs SQLite's library, which macOS and Windows 10 have,
+and most Linux systems do.
+
+```shen
+(let Db (sqlite.open "people.db")
+  (do (sqlite.exec Db "CREATE TABLE IF NOT EXISTS people (name TEXT, age INTEGER)")
+      (sqlite.run Db "INSERT INTO people VALUES (?, ?)" ["Ann" 30])
+      (output "~S~%" (sqlite.query Db "SELECT name, age FROM people WHERE age > ?" [20]))
+      (sqlite.close Db)))    \\ [["Ann" 30]]
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/sqlite.shen -l people.shen
+```
+
+| Function | What it does |
+| --- | --- |
+| `(sqlite.open Path)`, `(sqlite.close Db)` | `":memory:"` is a database in memory. Closing raises if a statement is still open |
+| `(sqlite.exec Db Sql)` | Runs statements with no parameters or results |
+| `(sqlite.run Db Sql Params)` | Runs one, and gives the rows it changed |
+| `(sqlite.query Db Sql Params)` | Gives its rows, each a list |
+| `(sqlite.each Db Sql Params F)` | Calls F on each row, keeping none |
+| `(sqlite.transaction Db (freeze ...))` | Commits, or rolls back on an error |
+| `(sqlite.last-insert-id Db)`, `(sqlite.version)` | The last row inserted, and the library's version |
+
+To use a statement many times: `sqlite.prepare`, `sqlite.bind`, `sqlite.step`, which gives `row` or `done`,
+`sqlite.row`, `sqlite.reset` and `sqlite.finalize`. The comments at the top of the file list every function.
+
+Values go in and come out as Shen values: a number is an INTEGER or a REAL, a string is TEXT, a byte buffer is a
+BLOB, and `[]` is NULL. `true` and `false` go in as 1 and 0. Errors raise, with SQLite's message. A connection belongs
+to one thread: other threads run while a query does, and some builds of SQLite, Apple's among them, do not allow two
+threads on one.
+
+### Sockets
+
+`lib/socket.shen` is TCP, over IPv4 and IPv6, also in Shen alone.
+
+```shen
+(let S (socket.connect "example.com" 80)
+  (do (socket.send S "GET / HTTP/1.0c#13;c#10;c#13;c#10;")
+      (output "~A~%" (socket.recv-string S 4096))
+      (socket.close S)))
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l program.shen
+```
+
+A server, in a thread, with a client beside it:
+
+```shen
+(set l (socket.listen "127.0.0.1" 0))
+
+(thread (freeze (let S (socket.accept (value l))
+                  (do (socket.send S (socket.recv S 100))
+                      (socket.close S)))))
+
+(let C (socket.connect "127.0.0.1" (socket.port (value l)))
+  (do (socket.send C "hello")
+      (output "~A~%" (socket.recv-string C 100))    \\ hello
+      (socket.close C)))
+```
+
+| Function | What it does |
+| --- | --- |
+| `(socket.connect Host Port)` | Tries each address the name has |
+| `(socket.listen Host Port)`, `(socket.port S)` | Port 0 means any free one, and `socket.port` says which |
+| `(socket.accept Listener)` | Waits for a client, and gives its socket |
+| `(socket.send S Data)` | Sends all of a string or byte buffer |
+| `(socket.recv S N)` | Waits for data, and gives a buffer of at most N bytes. An empty one means the other end has finished |
+| `(socket.recv-into S B)`, `(socket.recv-string S N)` | Fills what it can of a buffer and says how much, and the same as `socket.recv` as a string |
+| `(socket.readable? S Ms)` | Whether there is something to read, waiting that long at most |
+| `(socket.shutdown S)`, `(socket.no-delay S)`, `(socket.close S)` | Tells the other end nothing more will be sent, sends small writes at once, and closes |
+
+A socket is an integer. Waiting lets other threads run, and Ctrl-C at the REPL ends it. A send to a closed connection
+raises instead of ending the process. The comments at the top of the file list every function.
+
+### C written for Shen
+
+C can also take and return Shen values and call Shen, with
+[`include/shen.h`](https://github.com/tizoc/shen-jit/blob/main/include/shen.h). It links against nothing, as the
+runtime hands it a table of functions.
+
+```c
+#include "shen.h"
+
+shen_value sum_list(shen_vm *vm, shen_value *args)
+{
+    int64_t sum = 0;
+    for (shen_value l = args[0]; shen_is_pair(vm, l); l = shen_tail(vm, l)) {
+        shen_value x = shen_head(vm, l);
+        if (!shen_is_fixnum(x))
+            return shen_raise_value(vm, "sum_list: ~S is not an integer", x);
+        sum += shen_fixnum(x);
+    }
+    return shen_make_fixnum(sum);
+}
+```
+
+```sh
+cc -shared -fPIC -I include -o libmine.so mine.c
+```
+
+```shen
+(shen-jit.library mine ["./libmine.so" "./libmine.dylib" "mine.dll"])
+(define-foreign-procedure sum-list mine "sum_list" 1)
+
+(sum-list [1 2 3])    \\ 6
+```
+
+- **Values** are valid until the next call that may allocate, unless in a root: `shen_root(vm, &local)` for a call, or
+  `shen_root_new` for longer. Reads do not allocate, so the loop above needs no root.
+- **Errors** come back by value, as `SHEN_ERROR`. `shen_call` calls Shen, and no `longjmp` crosses C, so a C library
+  calling back is safe.
+- **Waiting:** `shen_release` and `shen_acquire` let other threads run while C waits.
+- **Limits:** up to 8 arguments, and a thread the runtime did not start cannot call in.
+
+> Test with `SHEN_JIT_GC_STRESS=1`, which collects at every allocation and finds most mistakes with values. `shen.h`
+> opens with the rules. **This API is not stable until 1.0:** it may change before then, and `SHEN_API_VERSION` says
+> when it has.
+
+### Native code by hand
+
+`lib/native.shen` lets a program write a procedure in Shen/JIT's own instructions, choosing its slots, branches and
+calls, and the JIT compiles it like any other. It is not in the image, and has to be loaded before the code that uses
+it, under `(tc -)`.
+
+```shen
+(define-native sum-list (Xs Acc)
+  (prim T cons? Xs)
+  (jump-if-false T done)
+  (prim H hd Xs)
+  (prim Acc + Acc H)
+  (prim Xs tl Xs)
+  (tail-call sum-list Xs Acc)
+  (label done)
+  (return Acc))
+
+(sum-list [1 2 3] 0)    \\ 6
+```
+
+```sh
+shen-jit eval -l lib/native.shen -l sum.shen
+```
+
+A variable is a slot, a symbol is itself, and `[1 2]` is a list. The code is checked first, by the rules the lowerer's
+own output is held to, so wrong code is refused instead of crashing. A program generating code at run time passes
+lists to `shen-jit.assemble` and `shen-jit.install-code`. Values stay tagged, as in all Shen code: untagged data and
+foreign memory are not there yet, and [bytes and bits](#bytes-and-bits) are primitives here as anywhere.
+[docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Native code written by hand", has
+the instructions.
+
+## Reference
+
+### Debugging
+
+An error that nothing catches prints a backtrace, even through inlined functions:
+
+```text
+shen-jit: uncaught error: hd: 1 is not a pair
+  in inner
+  in outer
+```
+
+| Function | What it does |
+| --- | --- |
+| `(shen-jit.backtrace)` | The names of the active functions, innermost first |
+| `(shen-jit.code F)` | The bytecode of F, a function defined after startup |
+| `(shen-jit.exit N)` | Ends the process with exit status N |
+
+```repl
+(0-) (define twice X -> (+ X X))
+(fn twice)
+
+(1-) (shen-jit.code twice)
+[defun twice [code twice 1 4 [] [[prim 3 + 2 2] [return 3]] [] [[V33] [+ V33 V33]]]]
+```
+
+The kernel's `track`, `spy` and `step` work as in other ports. For where the time goes, `SHEN_JIT_PROFILE=1` prints a
+flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the live heap by type.
+
+### Environment variables
+
+| Variable | What it does |
+| --- | --- |
+| `SHEN_JIT_IMAGE` | An image to load instead of the executable's own |
+| `SHEN_JIT_SEAL=1` | The same as `--seal` |
+| `SHEN_JIT_SEMISPACE=SIZE` | Starts each of the two semispaces at SIZE bytes (with K, M or G) instead of 32 MB, or at what the image needs if that is more. They still grow with live data, up to 64 GiB each, or stay at SIZE if that is more. Less collects more often and uses less memory |
+| `SHEN_JIT_MAX_HEAP=SIZE` | Limits the heap to SIZE bytes (with K, M or G; at least the initial semispace). An allocation past it raises `out of memory`. The collector copies, so the process uses about twice SIZE; vectors and strings of 256 KB or more stay apart, uncopied, and count once |
+| `SHEN_JIT_PROFILE=1` | Samples the program and prints a flat profile to stderr at exit, naming both Shen and C functions. Not on Windows |
+| `SHEN_JIT_STATS=1` | Prints collection statistics, the live heap and its roots, and the native code compiled and freed, at exit |
+| `SHEN_JIT_PERF_MAP=1` | Writes `/tmp/perf-PID.map`, so external profilers can name compiled code |
+| `SHEN_JIT_GC_STRESS=N` | Collects after every N words allocated and overwrites the old space, for testing |
+
+### Differences from Shen/Scheme
+
+- **No stlib in the default image.** Only the kernel and the extensions are there: see
+  [The standard library](#the-standard-library).
+- **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.
+- **Sealing.** Kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
+- **Numbers compare by value.** `(= 8 8.0)` is true, and `hash` gives 8 and 8.0 the same value.
+- **Threads run one at a time,** where Shen/Scheme's run in parallel.
+- **On Windows,** a few things differ: see [On Windows](#on-windows).
+
+[docs/semantics.md](https://github.com/tizoc/shen-jit/blob/main/docs/semantics.md) defines the behaviour in full, and
+marks each difference with *Deviation*.
+
+### Building and testing
+
+From a checkout, `make deps` fetches the Shen kernel and Shen/Scheme into `.deps/`, checked by hash. Shen/Scheme is
+used only to generate the files a source tarball already carries. It has binaries for Linux on x86-64, macOS on arm64
+and Windows on x86-64, where `make deps` also needs `unzip`. Elsewhere, use a source tarball, or set `SHEN_SCHEME` to
+one of your own.
+
+```sh
+git clone https://github.com/tizoc/shen-jit
+cd shen-jit
+make deps
+make
+```
+
+This writes `build/shen-jit`, a single file that carries its own image.
+[docs/design.md](https://github.com/tizoc/shen-jit/blob/main/docs/design.md#build-stages-and-startup) explains the
+stages. These can be set on the command line, or in a file `local.mk`, which git ignores:
+
+| Variable | Default | What it is |
+| --- | --- | --- |
+| `SHEN_SCHEME` | `.deps/shen-scheme/bin/shen-scheme` | The Shen/Scheme executable |
+| `KERNEL_KL` | `.deps/kernel/klambda` | The kernel's KLambda files |
+| `KERNEL_DIR` | `.deps/kernel` | The kernel, for `make test-kernel` |
+| `BENCH_DIR` | `.deps/shen-scheme-src` | Shen/Scheme's sources, for `make bench` |
+| `STLIB_DIR` | none | The standard library's sources, for `make bench-independent`, which leaves that workload out without them |
+
+`sh tools/ci-deps.sh shen-scheme-src .deps/shen-scheme-src` fetches what `make bench` needs.
+
+The fast tier takes about 20 s, and catches nearly everything:
+
+```sh
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-native test-ffi
+```
+
+| Target | What it does |
+| --- | --- |
+| `make test` | The runtime's unit tests |
+| `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
+| `make test-kl` | 850 `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
+| `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
+| `make test-stlib` | The executable with the standard library |
+| `make test-native` | Native code written by hand: what runs, and what must be refused |
+| `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, and the SQLite and socket libraries |
+| `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
+| `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
+| `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
+| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl` and the FFI's tests under AddressSanitizer and UBSan |
+| `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
+| `make fuzz-native` | Mutated code objects, run if the checker accepts them |
+| `make test-linux` | Every suite on Linux arm64 and x86-64, in Docker, from a source tarball. Needs pandoc, as `make dist` does |
+| `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
+| `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library), to check that gains are not fitted to the benchmarks |
+| `make guide` | Renders this guide to `build/guide/`, with [pandoc](https://pandoc.org) |
+| `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |
+
+To run the test suites from a source tarball, without Shen/Scheme, point `KERNEL_DIR` at a directory with the kernel's
+`tests` and `extensions`:
+
+```sh
+make SHEN_SCHEME=false KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel
+```
+
+On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that
+send a signal or use the profiler. The sanitizers stay on Linux and macOS.
+
+[AGENTS.md](https://github.com/tizoc/shen-jit/blob/main/AGENTS.md) has more on working on it.
+
+### More
+
+- [docs/design.md](https://github.com/tizoc/shen-jit/blob/main/docs/design.md): how it works.
+- [docs/semantics.md](https://github.com/tizoc/shen-jit/blob/main/docs/semantics.md): the behaviour it implements.
+- [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md): the instruction set and the
+  lowering rules.
+- [docs/ffi.md](https://github.com/tizoc/shen-jit/blob/main/docs/ffi.md): calling C, in full, and how it works.
+- [docs/overrides.md](https://github.com/tizoc/shen-jit/blob/main/docs/overrides.md): the kernel functions it replaces,
+  and why.
+- [docs/development-log.md](https://github.com/tizoc/shen-jit/blob/main/docs/development-log.md): what was tried or
+  rejected, why, and the numbers.

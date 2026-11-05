@@ -1,0 +1,634 @@
+"Shen/JIT port definitions, lowered at stage 0 with the kernel. A defun here
+with the name of a kernel defun replaces it: stage 0 omits the kernel's."
+
+"An expression runs in a call, not a tail call, so that this frame stays on
+the stack: backtraces stop at it. Anything but a list evaluates to itself,
+which the lowerer would make a constant: load evaluates what each define
+returns, (fn F)'s printer, and compiling that cost as much as the
+definition."
+
+(defun shen-jit.eval-kl (X)
+  (if (cons? X)
+      (let Lowered (shen-jit.lower.toplevel X ())
+        (if (= (hd Lowered) defun)
+            (shen-jit.install Lowered)
+            (let Result ((shen-jit.install Lowered)) Result)))
+      X))
+
+"The kernel calls input+ but leaves its definition to the port (41.3)."
+
+(defun input+ (Type Stream) (shen.input-h+ Type Stream))
+
+"Overrides."
+
+(defun hash (X Bound) (shen-jit.hash X Bound))
+
+"At end of input the REPL ends the process. The kernel's REPL would report an
+empty stream at every prompt, forever. Only the REPL's own read exits; a read
+in user code still raises the error."
+
+(defun shen.read-evaluate-print ()
+  (do (shen-jit.mark-toplevel)
+  (let Package (value shen.*package*)
+    (let Lineread (shen.package-user-input Package (shen-jit.repl-read (stinput)))
+      (let History (shen.update-history)
+        (shen.evaluate-lineread Lineread History (value shen.*tc*)))))))
+
+"Backtraces. The REPL's read-evaluate-print runs
+inside the kernel's top-level trap-error, so it marks that handler: an error
+raised while it is the innermost handler, or while none is, records the
+frames on the stack, and the display prints them after the message. Errors
+that the program catches record nothing."
+
+(defun shen.toplevel-display-exception (E)
+  (let Message (error-to-string E)
+    (do (pr Message (stoutput))
+        (pr (shen-jit.trace-text Message) (stoutput)))))
+
+(defun shen-jit.repl-read (Stream)
+  (let Byte (shen.my-read-byte Stream)
+    (if (= Byte -1)
+        (do (nl 1) (shen-jit.exit 0))
+        (shen.read-loop Stream Byte () (lambda X (shen.return? X))))))
+
+"The launcher exits with status 1 after reporting an error or an unknown
+argument, as Shen/Scheme does; the kernel's main only reports it."
+
+(defun shen.x.launcher.main (Argv)
+  (let Result (shen.x.launcher.launch-shen Argv)
+    (let Shown (shen.x.launcher.default-handle-result Result)
+      (if (and (cons? Result) (element? (hd Result) (cons error (cons unknown-arguments ()))))
+          (shen-jit.exit 1)
+          Shown))))
+
+"fn reads F's property list once, where the kernel's looks F up twice,
+through arity and get; the results and errors are the same."
+
+(defun fn (F)
+  (let Plist (trap-error (shen.<-dict (value *property-vector*) F) (lambda E ()))
+    (let Arity (trap-error (assoc arity Plist) (lambda E ()))
+      (if (and (cons? Arity) (= (tl Arity) 0))
+          (F)
+          (let Form (trap-error (assoc shen.lambda-form Plist) (lambda E ()))
+            (if (cons? Form)
+                (shen-jit.lambda-form F (tl Form))
+                (simple-error (cn "fn: " (shen.app F " is undefined
+" shen.a)))))))))
+
+"Lambda forms are made when fn first asks for them. Reading a definition
+stores F's arity and its lambda form, which the kernel makes by evaluating
+a curried lambda: one compilation per definition, about a fifth of loading
+a file of definitions, for a closure that fn rarely needs. The port stores
+[shen-jit.lazy-form N] instead, and fn replaces it with the real form the
+first time. The kernel's shen.lambda-function calls gensym once per
+argument, so the counter still moves by N, and later gensyms are the same;
+the lambda made later names its parameters without gensym."
+
+(defun shen.update-lambdatable (F N)
+  (do (set shen.*gensym* (+ (value shen.*gensym*) N))
+      (do (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))
+          N)))
+
+(defun shen-jit.lambda-form (F Form)
+  (if (shen-jit.tagged? Form shen-jit.lazy-form)
+      (let Lambda (eval-kl (shen-jit.curried (cons F ()) (<-address Form 1)))
+        (do (shen.set-lambda-form-entry (cons F Lambda)) Lambda))
+      Form))
+
+(defun shen-jit.curried (Call N)
+  (if (= N 0)
+      Call
+      (let X (intern (cn "shen-jit.lambda-form" (str N)))
+        (cons lambda (cons X (cons (shen-jit.curried (append Call (cons X ())) (- N 1)) ()))))))
+
+"Native dictionaries (src/runtime/dict.c). A dictionary is an absvector
+[shen.dictionary Count Buckets], with the kernel's tag at index 0 so that its
+dict? and printer still apply. The buckets start at 8 whatever size is asked
+for, since a large request such as the property vector's 20000 would leave
+mostly empty buckets for every collection to copy; they double when the count
+exceeds them, and entries change in place. A fold works on a snapshot of the entries taken
+when it starts, in no particular order, so changes made by the folded
+function do not affect it. A missing key builds no message when the innermost
+handler ignores it (shen-jit.quiet?)."
+
+(defun shen.dict (N)
+  (if (< N 1)
+      (simple-error (cn "invalid initial dict size: " (shen.app N "" shen.s)))
+      (let D (absvector 3)
+        (do (address-> D 0 shen.dictionary)
+            (do (address-> D 1 0)
+                (address-> D 2 (shen-jit.filled-vector 8 ())))))))
+
+(defun shen.dict-count (D) (<-address D 1))
+
+(defun shen.<-dict (D K)
+  (let Entry (shen-jit.dict-find D K)
+    (if (cons? Entry)
+        (tl Entry)
+        (simple-error (if (shen-jit.quiet?) "" (cn "value " (shen.app K " not found in dict
+" shen.a)))))))
+
+(defun shen.dict-> (D K V) (shen-jit.dict-put D K V))
+
+(defun shen.dict-rm (D K) (shen-jit.dict-remove D K))
+
+(defun shen.dict-fold (F D Acc) (shen-jit.fold-entries F (shen-jit.dict-entries D) Acc))
+
+(defun shen-jit.fold-entries (F Entries Acc)
+  (if (= () Entries)
+      Acc
+      (shen-jit.fold-entries F (tl Entries) (((F (hd (hd Entries))) (tl (hd Entries))) Acc))))
+
+"tuple? tests a tag at index 0 in one inline primitive; the kernel's needs a
+trap-error in case the absvector is empty."
+
+(defun tuple? (X) (shen-jit.tagged? X shen.tuple))
+
+"A Prolog variable is an immediate value holding the offset of its binding,
+where the kernel allocates an absvector of its name and offset. These are all
+the kernel's Prolog functions that build a variable or read its offset, so the
+rest is unchanged. Compiled Prolog code calls shen.lazyderef on every argument,
+and nearly every variable is one step from its value: a primitive does that
+step inline, even where shen.lazyderef is itself inlined two levels deep, as in
+is!."
+
+(defun shen.make-prolog-variable (N) (shen-jit.pvar N))
+
+(defun shen.pvar? (X) (shen-jit.pvar? X))
+
+(defun shen.lazyderef (X Bindings) (shen-jit.deref X Bindings shen.-null-))
+
+"Compiled Prolog code derefs every argument of a Shen expression, mostly variables
+bound to numbers or atoms: only a pair costs a call."
+
+(defun shen.deref (X Bindings)
+  (let Value (shen.lazyderef X Bindings)
+    (if (cons? Value) (shen-jit.deref-pair Value Bindings) Value)))
+
+(defun shen-jit.deref-pair (X Bindings)
+  (cons (shen.deref (hd X) Bindings) (shen.deref (tl X) Bindings)))
+
+"Unification, as the kernel's shen.lzy= and shen.lzy=! but with no closures: it
+binds what it can, keeping the variables it bound in a list, and returns that
+list, or undoes them and returns false. The continuation then runs once, and a
+false from it undoes them. Callers have dereferenced both terms. shen-jit.unify=!
+also checks that a variable does not occur in a pair it is to be bound to. Two
+lists are walked and not compared with =, which walks them too. With no occurs
+check a term can hold itself, and the kernel's = ends on two such terms that are
+equal: this ends on them too, as a cycle goes through a variable, and a variable
+leads to one and the same object, which shen-jit.same? tells."
+
+(defun shen-jit.undo (Trail Bindings)
+  (if (cons? Trail)
+      (do (shen.unwind (hd Trail) Bindings false) (shen-jit.undo (tl Trail) Bindings))
+      false))
+
+(defun shen-jit.unify= (X Y Bindings Trail)
+  (cond ((and (cons? X) (cons? Y))
+         (if (shen-jit.same? X Y)
+             Trail
+             (let A (shen.lazyderef (hd X) Bindings)
+               (let D (shen.lazyderef (hd Y) Bindings)
+                 (let Heads (cond ((or (cons? A) (cons? D)) (shen-jit.unify= A D Bindings Trail))
+                                  ((= A D) Trail)
+                                  ((shen-jit.pvar? A) (do (shen.bindv A D Bindings) (cons A Trail)))
+                                  ((shen-jit.pvar? D) (do (shen.bindv D A Bindings) (cons D Trail)))
+                                  (true (shen-jit.undo Trail Bindings)))
+                   (if (= Heads false)
+                       false
+                       (shen-jit.unify= (shen.lazyderef (tl X) Bindings) (shen.lazyderef (tl Y) Bindings)
+                                        Bindings Heads)))))))
+        ((= X Y) Trail)
+        ((shen-jit.pvar? X) (do (shen.bindv X Y Bindings) (cons X Trail)))
+        ((shen-jit.pvar? Y) (do (shen.bindv Y X Bindings) (cons Y Trail)))
+        (true (shen-jit.undo Trail Bindings))))
+
+"The kernel's shen.occurs-check? on the term shen.deref builds, without building it."
+
+(defun shen-jit.occurs-in? (Var Term Bindings)
+  (if (cons? Term)
+      (or (shen-jit.occurs-in? Var (shen.lazyderef (hd Term) Bindings) Bindings)
+          (shen-jit.occurs-in? Var (shen.lazyderef (tl Term) Bindings) Bindings))
+      (shen-jit.same? Var Term)))
+
+(defun shen-jit.occurs? (Var Term Bindings)
+  (and (cons? Term) (shen-jit.occurs-in? Var Term Bindings)))
+
+"Heads that are not pairs are unified here, with no call, which is most of them."
+
+(defun shen-jit.unify=! (X Y Bindings Trail)
+  (cond ((and (cons? X) (cons? Y))
+         (if (shen-jit.same? X Y)
+             Trail
+             (let A (shen.lazyderef (hd X) Bindings)
+               (let D (shen.lazyderef (hd Y) Bindings)
+                 (let Heads (cond ((or (cons? A) (cons? D)) (shen-jit.unify=! A D Bindings Trail))
+                                  ((= A D) Trail)
+                                  ((shen-jit.pvar? A) (do (shen.bindv A D Bindings) (cons A Trail)))
+                                  ((shen-jit.pvar? D) (do (shen.bindv D A Bindings) (cons D Trail)))
+                                  (true (shen-jit.undo Trail Bindings)))
+                   (if (= Heads false)
+                       false
+                       (shen-jit.unify=! (shen.lazyderef (tl X) Bindings) (shen.lazyderef (tl Y) Bindings)
+                                         Bindings Heads)))))))
+        ((= X Y) Trail)
+        ((shen-jit.pvar? X)
+         (if (shen-jit.occurs? X Y Bindings)
+             (shen-jit.undo Trail Bindings)
+             (do (shen.bindv X Y Bindings) (cons X Trail))))
+        ((shen-jit.pvar? Y)
+         (if (shen-jit.occurs? Y X Bindings)
+             (shen-jit.undo Trail Bindings)
+             (do (shen.bindv Y X Bindings) (cons Y Trail))))
+        (true (shen-jit.undo Trail Bindings))))
+
+(defun shen-jit.unified (Trail Bindings C)
+  (cond ((= Trail false) false)
+        ((cons? Trail)
+         (let Result (thaw C)
+           (if (= Result false) (shen-jit.undo Trail Bindings) Result)))
+        (true (thaw C))))
+
+(defun shen.lzy= (X Y Bindings C)
+  (shen-jit.unified (shen-jit.unify= X Y Bindings ()) Bindings C))
+
+(defun shen.lzy=! (X Y Bindings C)
+  (shen-jit.unified (shen-jit.unify=! X Y Bindings ()) Bindings C))
+
+(defun shen.bindv (X Value Bindings)
+  (address-> Bindings (shen-jit.pvar-offset X) Value))
+
+(defun shen.unwind (X Bindings Compute)
+  (do (address-> Bindings (shen-jit.pvar-offset X) shen.-null-) Compute))
+
+"vector? tests element 0 in one inline primitive, where the kernel's needs a
+trap-error in case the absvector is empty. The kernel's shen.+vector?, behind
+vector patterns, builds (vector 0) on every call to compare with; this one
+builds it only when element 0 is 0. @p allocates a tuple in one step. get
+looks the dictionary up itself, so that a missing entry raises once, with
+the kernel's messages. Like shen.<-dict, it builds no message when the
+innermost handler ignores it (shen-jit.quiet?)."
+
+(defun vector? (X) (shen-jit.vector? X))
+
+(defun shen.+vector? (X) (and (shen-jit.vector? X) (shen-jit.nonempty-vector? X)))
+
+(defun shen-jit.nonempty-vector? (X) (or (not (= (<-address X 0) 0)) (not (= X (vector 0)))))
+
+"Split so that it inlines into vector patterns: a value that is not a vector
+fails there, without a call. shen.+string?, behind string patterns, tests
+the type before comparing with the empty string, where the kernel's
+compares first; the answer is the same for every value, and a value that
+is not a string fails on one inline test."
+
+(defun shen.+string? (X) (and (string? X) (not (= X ""))))
+
+(defun @p (X Y) (shen-jit.absvector3 shen.tuple X Y))
+
+(defun get (X P D)
+  (let Entry (trap-error (shen-jit.dict-find D X) (lambda E ()))
+    (if (cons? Entry)
+        (let A (assoc P (tl Entry))
+          (if (empty? A)
+              (simple-error (if (shen-jit.quiet?) "" (cn "attribute " (shen.app P (cn " not found for " (shen.app X "
+" shen.s)) shen.s))))
+              (tl A)))
+        (simple-error (if (shen-jit.quiet?) "" (shen.app X (cn " has no attributes: " (shen.app P "
+" shen.s)) shen.a))))))
+
+"Sealing. Kernel functions are
+sealed: user code binds calls to them once, and redefining them raises an
+error. (shen-jit.seal +) seals every definition installed from then on,
+until (shen-jit.seal -); SHEN_JIT_SEAL=1 and --seal start with it on.
+Stage 1 registers its arity so that Shen code can call it."
+
+(defun shen-jit.seal (X)
+  (cond ((= X +) (do (shen-jit.sealing true) +))
+        ((= X -) (do (shen-jit.sealing false) -))
+        (true (simple-error "shen-jit.seal: expected + or -"))))
+
+"(shen-jit.code F) is F's bytecode, from lowering its KLambda again as
+define does. Kernel functions keep no
+KLambda, so ps, and this, refuse them, as in Shen/Scheme. It shows the
+definition factorised when it was evaluated so (shen.record-and-evaluate
+below)."
+
+(defun shen-jit.code (F)
+  (shen-jit.lower.toplevel
+    (if (trap-error (get F shen-jit.factorised (value *property-vector*)) (lambda E false))
+        (shen.factor (ps F))
+        (ps F))
+    ()))
+
+"Byte buffers and bit operations are primitives that Shen code calls by name and
+may use as values, as (fn shen-jit.u8)."
+
+(defun shen-jit.primitive (F N)
+  (do (shen.initialise-arity-table (cons F (cons N ())))
+      (shen.set-lambda-form-entry (cons F (shen-jit.absvector3 shen-jit.lazy-form N 0)))))
+
+(defun shen-jit.register-primitives ()
+  (do (shen-jit.primitive shen-jit.bytes 1)
+    (do (shen-jit.primitive shen-jit.bytes? 1)
+    (do (shen-jit.primitive shen-jit.bytes-length 1)
+    (do (shen-jit.primitive shen-jit.u8 2)
+    (do (shen-jit.primitive shen-jit.u16 2)
+    (do (shen-jit.primitive shen-jit.u32 2)
+    (do (shen-jit.primitive shen-jit.u8! 3)
+    (do (shen-jit.primitive shen-jit.u16! 3)
+    (do (shen-jit.primitive shen-jit.u32! 3)
+    (do (shen-jit.primitive shen-jit.string->bytes 1)
+    (do (shen-jit.primitive shen-jit.bytes->string 3)
+    (do (shen-jit.primitive shen-jit.copy-bytes 5)
+    (do (shen-jit.primitive shen-jit.bit-and 2)
+    (do (shen-jit.primitive shen-jit.bit-or 2)
+    (do (shen-jit.primitive shen-jit.bit-xor 2)
+    (do (shen-jit.primitive shen-jit.bit-not 1)
+    (do (shen-jit.primitive shen-jit.shift-left 2)
+    (do (shen-jit.primitive shen-jit.shift-right 2)
+    (do (shen-jit.primitive shen-jit.rotate32 2)
+    (do (shen-jit.primitive shen-jit.bswap32 1)
+    (do (shen-jit.primitive shen-jit.popcount 1)
+    (do (shen-jit.primitive shen-jit.clz 1)
+    (do (shen-jit.primitive shen-jit.ctz 1)
+    (do (shen-jit.primitive shen-jit.pvar 1)
+    (do (shen-jit.primitive shen-jit.pvar? 1)
+    (do (shen-jit.primitive shen-jit.pvar-offset 1)
+    (do (shen-jit.primitive shen-jit.deref 3)
+    (do (shen-jit.primitive shen-jit.same? 2)
+    (do (shen-jit.primitive shen-jit.thread 1)
+    (do (shen-jit.primitive shen-jit.foreign 2)
+    (do (shen-jit.primitive shen-jit.pointer? 1)
+    (do (shen-jit.primitive shen-jit.pointer-kind 1)
+    (do (shen-jit.primitive shen-jit.pointer-address 1)
+    (do (shen-jit.primitive shen-jit.bytes->pointer 3)
+    (do (shen-jit.primitive shen-jit.pointer->string 1)
+    (do (shen-jit.primitive shen-jit.pointer->bytes 3)
+    (do (shen-jit.primitive shen-jit.errno 0)
+    (do (shen-jit.primitive shen-jit.c-errno 0)
+    (do (shen-jit.primitive shen-jit.pointer-kill 1) shen.skip))))))))))))))))))))))))))))))))))))))))
+
+"Stage 1 calls this after the kernel and extensions are initialised: it
+registers the port functions meant for Shen code. (shen-jit.exit N) ends
+the process with status N; it is not named exit, since port definitions are
+sealed and programs may define their own exit. (shen-jit.save-executable Path
+Entry) writes a binary and ends the process. The others are for native.shen,
+which would otherwise compile its calls to them as look-ups with fn.
+
+(thread Frozen) runs Frozen in a new thread, as Shen/Scheme's does, with one
+thread at a time holding a lock (thread.c). It is defined here, once sealing has
+ended, since programs may define their own thread."
+
+(defun shen-jit.initialise ()
+  (do (shen-jit.register-primitives)
+  (do (eval-kl (cons defun (cons thread (cons (cons x ()) (cons (cons shen-jit.thread (cons x ())) ())))))
+  (do (shen.initialise-arity-table
+        (cons thread (cons 1 (cons shen-jit.seal (cons 1 (cons shen-jit.backtrace (cons 0
+          (cons shen-jit.exit (cons 1 (cons shen-jit.code (cons 1
+            (cons shen-jit.save-executable (cons 2
+              (cons shen-jit.install (cons 1 (cons shen-jit.symbol? (cons 1
+                (cons shen-jit.sealed? (cons 1
+                  (cons shen-jit.lower.builder (cons 3 (cons shen-jit.lower.emit (cons 2
+                    (cons shen-jit.lower.bind (cons 2 (cons shen-jit.lower.reserve (cons 2
+                      (cons shen-jit.lower.constant (cons 2 (cons shen-jit.lower.add-code (cons 2
+                        (cons shen-jit.lower.code-form (cons 1 (cons shen-jit.lower.prim-arity (cons 1
+                          (cons shen-jit.lower.fixed? (cons 1 ())))))))))))))))))))))))))))))))))))))
+      (do (shen.set-lambda-form-entry (shen.lambda-entry thread))
+      (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.seal))
+          (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.exit))
+              (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.code))
+                  (do (shen.set-lambda-form-entry (shen.lambda-entry shen-jit.save-executable))
+                      (set shen-jit.defined ()))))))))))
+
+"Definitions are factorised as they are evaluated, as Shen/Scheme's compiler
+does: the kernel's shen.factor binds each selector once and shares the tests
+of clauses that start alike, instead of recomputing (tl (tl ... X)) in every
+test of every clause. Only what define produced is factorised, since
+shen.factor expects its shape, and what is recorded for ps stays as define
+produced it; shen.*factorise?* stays false, as in Shen/Scheme. The kernel's
+shen.shendef->kldef-h, with the definition remembered:"
+
+(defun shen.shendef->kldef-h (F Rules)
+  (let Patterns (map (lambda R (fst R)) Rules)
+    (let Arity (shen.arity-chk F Patterns)
+      (let Checked (map (lambda R (shen.free-var-chk F R)) Rules)
+        (let Kl (shen.factorise-code (shen.compile-to-kl F (shen.unprotect Rules) Arity))
+          (do (set shen-jit.defined Kl) Kl))))))
+
+"The kernel's shen.record-and-evaluate, evaluating that definition factorised:"
+
+(defun shen.record-and-evaluate (Kl)
+  (if (and (cons? Kl) (and (= defun (hd Kl)) (and (cons? (tl Kl)) (and (cons? (tl (tl Kl)))
+        (and (cons? (tl (tl (tl Kl)))) (= () (tl (tl (tl (tl Kl))))))))))
+      (let F (hd (tl Kl))
+        (do (if (shen.sysfunc? F)
+                (simple-error (shen.app F " is not a legitimate function name " shen.a))
+                shen.skip)
+            (do (shen.store-arity F (length (hd (tl (tl Kl)))))
+                (do (shen.record-kl F Kl)
+                    (let Factor (= Kl (value shen-jit.defined))
+                      (do (put F shen-jit.factorised Factor (value *property-vector*))
+                          (do (eval-kl (if Factor (shen.factor Kl) Kl))
+                              (shen.fn-print F))))))))
+      Kl))
+
+"absvector fills a new vector with (fail) already, so vector only sets the
+length stamp; the kernel's version fills it again."
+
+(defun vector (N) (address-> (absvector (+ N 1)) 0 N))
+
+"<-vector is the kernel's, split in two so that each part is small enough
+to inline: a failing <-address,
+or either error, then happens in the caller's frame, where a quiet handler
+catches it with a jump. (fail) is the symbol shen.fail!."
+
+(defun <-vector (V N)
+  (if (= N 0)
+      (simple-error "cannot access 0th element of a vector
+")
+      (shen-jit.vector-element (<-address V N))))
+
+"integer? is a primitive, as in Shen/Scheme: the kernel's finds a power of
+two above the number and subtracts its way down, which took 21 ns for 7 and
+343 ns for 123456789. A fixnum is an integer; so is a finite real without a
+fraction."
+
+(defun integer? (X) (shen-jit.integer? X))
+
+"append copies its first list in C, in one block: the kernel's recursion
+builds one pair per call on its way back. The empty list stays inline. A
+list that does not end in [] raises the kernel's error."
+
+(defun append (X Y) (if (= X ()) Y (shen-jit.append X Y)))
+
+"The reader asks shen.misc? about every byte of a symbol that is not a
+lowercase letter, digits included; the kernel's is an element? over a list
+of 19 codes. The same codes as ranges: 33, 35-39, 42-43, 45-47, 60-64,
+95-96 and 126. Anything but a number is not one, as with element?."
+
+(defun shen.misc? (X)
+  (and (number? X)
+       (or (= X 33) (or (and (>= X 35) (<= X 39)) (or (and (>= X 42) (<= X 43))
+         (or (and (>= X 45) (<= X 47)) (or (and (>= X 60) (<= X 64))
+           (or (and (>= X 95) (<= X 96)) (= X 126)))))))))
+
+"The reader's rules call shen.<-out for every output and shen.hds=? for
+every one-byte rule, and the kernel's are too large to inline. The kernel's
+shen.<-out tests the shape of its argument and then takes (hd (tl X)) either
+way, so the test changes nothing."
+
+(defun shen.<-out (X) (hd (tl X)))
+
+(defun shen.hds=? (X B) (and (cons? X) (= (hd X) B)))
+
+"Runs of bytes, which the kernel's rules read one rule call per byte, with a
+parse result for each: a comment up to a return byte (9, 10 or 13, as
+shen.return?), whitespace, and digits, which every token is first tried as.
+Each gives what the kernel's gives."
+
+(defun shen.<shortnatters> (Bytes) (shen.comb (shen-jit.to-return Bytes) shen.skip))
+
+(defun shen-jit.to-return (Bytes)
+  (if (cons? Bytes)
+      (let B (hd Bytes)
+        (if (or (= B 10) (or (= B 13) (= B 9)))
+            Bytes
+            (shen-jit.to-return (tl Bytes))))
+      Bytes))
+
+(defun shen.<whitespaces> (Bytes)
+  (if (and (cons? Bytes) (shen.whitespace? (hd Bytes)))
+      (shen.comb (shen-jit.skip-whitespace (tl Bytes)) shen.skip)
+      (shen.parse-failure)))
+
+(defun shen-jit.skip-whitespace (Bytes)
+  (if (cons? Bytes)
+      (let B (hd Bytes)
+        (if (or (= B 32) (or (= B 10) (or (= B 13) (= B 9))))
+            (shen-jit.skip-whitespace (tl Bytes))
+            Bytes))
+      Bytes))
+
+(defun shen.<digits> (Bytes)
+  (if (and (cons? Bytes) (shen.digit? (hd Bytes)))
+      (shen-jit.digits Bytes)
+      (shen.parse-failure)))
+
+(defun shen-jit.digits (Bytes)
+  (let Rest (tl Bytes)
+    (if (and (cons? Rest) (shen.digit? (hd Rest)))
+        (let Digits (shen-jit.digits Rest)
+          (shen.comb (hd Digits) (cons (shen.byte->digit (hd Bytes)) (hd (tl Digits)))))
+        (shen.comb Rest (cons (shen.byte->digit (hd Bytes)) ())))))
+
+"A symbol's characters, joined with the same cn and n->string as the
+kernel's shen.<alphanum> and shen.<alphanums>, without their rule calls."
+
+(defun shen.<alphanums> (Bytes)
+  (if (and (cons? Bytes) (or (shen.alpha? (hd Bytes)) (shen.digit? (hd Bytes))))
+      (let Rest (shen.<alphanums> (tl Bytes))
+        (shen.comb (hd Rest) (cn (n->string (hd Bytes)) (hd (tl Rest)))))
+      (shen.comb Bytes "")))
+
+"An atom is a string, a number or a symbol, tried in that order. Every
+alternative of shen.<number> starts with a digit or one of - + . (bytes 45,
+43 and 46), so the kernel's number rules, five calls deep, are tried only
+on those; for the rest they fail anyway."
+
+(defun shen.<atom> (Bytes)
+  (let Str (shen.<str> Bytes)
+    (if (shen.parse-failure? Str)
+        (let Number (if (shen-jit.number-start? Bytes) (shen.<number> Bytes) (shen.parse-failure))
+          (if (shen.parse-failure? Number)
+              (let Sym (shen.<sym> Bytes)
+                (if (shen.parse-failure? Sym)
+                    Sym
+                    (let S (shen.<-out Sym)
+                      (shen.comb (shen.in-> Sym) (if (= S "<>") (cons vector (cons 0 ())) (intern S))))))
+              Number))
+        Str)))
+
+(defun shen-jit.number-start? (Bytes)
+  (and (cons? Bytes)
+       (let B (hd Bytes) (or (shen.digit? B) (or (= B 45) (or (= B 43) (= B 46)))))))
+
+(defun shen-jit.vector-element (X)
+  (if (= X shen.fail!)
+      (simple-error "vector element not found
+")
+      X))
+
+"read-file, behind load and script, skips a first line that starts with #!,
+so that a script can run directly. The rest
+is the kernel's definition."
+
+(defun read-file (File)
+  (let Bytes (shen-jit.skip-shebang (read-file-as-bytelist File))
+    (let Sexprs (trap-error (compile (lambda X (shen.<s-exprs> X)) Bytes)
+                            (lambda E (shen.reader-error (value shen.*residue*))))
+      (shen.process-sexprs Sexprs))))
+
+"read-file-as-bytelist and read-file-as-string read the whole file in C, as
+Shen/Scheme's do; the kernel's read one read-byte at a time, and
+read-file-as-string joins the bytes with one cn each. Paths are relative to
+*home-directory*, as for open."
+
+(defun read-file-as-bytelist (File) (shen-jit.read-file File true))
+
+(defun read-file-as-string (File) (shen-jit.read-file File false))
+
+"shen.record-kl, behind every definition, adds the name to shen.*userdefs*
+with adjoin, which looks through the whole list, so loading n new
+definitions took time growing with n squared. A name without a shen.source
+property has never been recorded, so it goes on the list directly; any other
+still goes through adjoin."
+
+(defun shen.record-kl (F Kl)
+  (do (set shen.*userdefs* (if (shen-jit.recorded? F)
+                               (adjoin F (value shen.*userdefs*))
+                               (cons F (value shen.*userdefs*))))
+      (put F shen.source Kl (value *property-vector*))))
+
+(defun shen-jit.recorded? (F)
+  (let Entry (shen-jit.dict-find (value *property-vector*) F)
+    (and (cons? Entry) (cons? (assoc shen.source (tl Entry))))))
+
+(defun shen-jit.skip-shebang (Bytes)
+  (if (and (cons? Bytes) (and (= (hd Bytes) 35) (and (cons? (tl Bytes)) (= (hd (tl Bytes)) 33))))
+      (shen-jit.skip-line Bytes)
+      Bytes))
+
+(defun shen-jit.skip-line (Bytes)
+  (cond ((= () Bytes) ())
+        ((= (hd Bytes) 10) Bytes)
+        (true (shen-jit.skip-line (tl Bytes)))))
+
+"symbol? and variable? by the kernel's rules for names, in C. The kernel
+tests the characters of (str X), which builds a string and scans it, and
+expects str to fail on values other than atoms; shen-jit's str describes
+them instead, and # < > are symbol characters, so #<procedure> would pass."
+
+(defun symbol? (X) (> (shen-jit.symbol-kind X) 0))
+
+(defun variable? (X) (= (shen-jit.symbol-kind X) 2))
+
+"The reader's number overrides (docs/semantics.md, section 3). In Shen/Scheme a
+zero digit adds an exact 0 to a fraction, so 8.0 reads as the integer 8;
+skipping zero digits gives the same values here. Literals beyond the fixnum
+range become reals instead of overflowing. 0.0 would read as the integer 0,
+like 8.0, so (- 0.5 0.5) makes a real zero."
+
+(defun shen.compute-fraction-h (Digits Expt)
+  (cond ((= () Digits) 0)
+        ((= 0 (hd Digits)) (shen.compute-fraction-h (tl Digits) (- Expt 1)))
+        (true (+ (* (shen.expt 10 Expt) (hd Digits))
+                 (shen.compute-fraction-h (tl Digits) (- Expt 1))))))
+
+(defun shen.compute-integer (Digits)
+  (trap-error (shen-jit.horner Digits 0) (lambda E (shen-jit.horner Digits (- 0.5 0.5)))))
+
+(defun shen-jit.horner (Digits N)
+  (if (= () Digits) N (shen-jit.horner (tl Digits) (+ (* N 10) (hd Digits)))))
+
+(defun shen.compute-E (N Log10)
+  (trap-error (* N (shen.expt 10 Log10)) (lambda E (* N (shen.expt (+ 10 (- 0.5 0.5)) Log10)))))

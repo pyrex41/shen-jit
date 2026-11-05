@@ -1,0 +1,370 @@
+CC ?= cc
+# Functions start on 32 bytes, so that a hot one's loops keep their alignment
+# whatever else in the C code changes: on a Ryzen 5 5600X, an unrelated edit made
+# 32-item vector equality take 1.32 times as long.
+CFLAGS ?= -std=c11 -O2 -g -Wall -Wextra -Wno-unused-parameter -falign-functions=32
+# The maths library, for floor and the like, libdl, for dladdr in the profiler,
+# and libpthread, for threads: glibc keeps them apart from libc (libdl and
+# libpthread until 2.34).
+ifeq ($(OS),Windows_NT)
+# Static, so that the executable needs nothing but Windows, with the C stack of Linux's default.
+LDLIBS ?= -static -lm -lpthread -Wl,--stack,8388608
+# Windows runs only what is named .exe, so executables are written under both names.
+AS_EXE = cp $(1) $(1).exe
+EXE := .exe
+else
+LDLIBS ?= -lm -ldl -lpthread
+AS_EXE = :
+EXE :=
+endif
+# SLJIT without its debug checks and verbose output, which made the runtime a
+# quarter larger at the same speed. Its compiler struct changes with them, so
+# everything that includes its header gets the same flags. test-san and
+# test-x86 compile everything with SLJIT's defaults, so its assertions still
+# run there.
+SLJIT_FLAGS := -DSLJIT_DEBUG=0 -DSLJIT_VERBOSE=0
+# MAP_ANON, which glibc hides under -std=c11: without it SLJIT maps /dev/zero
+# for its code, which fails where /dev is mounted noexec, as on Ubuntu. Empty,
+# as the runtime sources define it, so test-san and test-x86, which compile
+# them in one command, see no redefinition.
+SLJIT_SRC_FLAGS := -D_DEFAULT_SOURCE=
+BUILD := build
+# The library that C written for Shen is tested with, for test-ffi and test-kernel.
+FFI_TEST_LIB := $(BUILD)/ffi_test$(if $(EXE),.dll,.so)
+# Your own paths and targets, which git ignores: see the variables below.
+-include local.mk
+.DEFAULT_GOAL := all
+# STATIC=1 links statically, for a Linux executable that runs anywhere. It gives up loading
+# libraries (docs/ffi.md): glibc's static dlopen loads a second libc.
+ifdef STATIC
+LDLIBS := -static -lm -ldl -lpthread
+$(BUILD)/ffi.o: CFLAGS += -DSHEN_JIT_STATIC
+endif
+# The release number: *release* and *port* in the image, and the tarball's
+# name.
+VERSION := $(shell cat VERSION)
+
+RUNTIME_SRC := src/runtime/heap.c src/runtime/objects.c src/runtime/image.c src/runtime/prims.c \
+               src/runtime/reader.c src/runtime/loader.c src/runtime/jit.c src/runtime/dict.c \
+               src/runtime/profile.c src/runtime/thread.c src/runtime/ffi.c src/runtime/win32.c
+RUNTIME_HDR := src/runtime/value.h src/runtime/vm.h src/runtime/ops.h src/runtime/reader.h src/runtime/jit.h src/runtime/win32.h include/shen.h
+SLJIT_OBJ := $(BUILD)/sljitLir.o
+RUNTIME_OBJ := $(patsubst src/runtime/%.c,$(BUILD)/%.o,$(RUNTIME_SRC))
+
+# shasum comes with perl, which a system with only a C compiler may not have.
+SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
+# An image loads only into the build that wrote it.
+BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
+
+.PHONY: all release install stlib test-stlib test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-linux bench bench-independent stage0 check-lowerer measure load-kernel clean
+
+all: $(BUILD)/shen-jit
+
+# The runtime alone, and the image stage 1 writes with it from the stage 0
+# output.
+$(BUILD)/runtime: src/runtime/main.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR) VERSION
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -DSJ_VERSION='"$(VERSION)"' -o $@ src/runtime/main.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
+
+$(BUILD)/shen-jit.img: $(BUILD)/runtime $(BUILD)/stage0/.done
+	$(BUILD)/runtime --stage1 $(BUILD)/stage0 $@
+
+# The executable: the runtime with the image appended, which it reads from the
+# end of its own file. On macOS the
+# linker's ad-hoc signature still runs, though strict verification
+# (codesign --verify) rejects the appended data.
+$(BUILD)/shen-jit: $(BUILD)/runtime $(BUILD)/shen-jit.img
+	cat $^ > $@
+	chmod +x $@
+	$(call AS_EXE,$@)
+
+# The release build: the same executable, with the runtime stripped of its
+# symbols and debug information before the image is appended, as strip would
+# drop the image. The code is the same; on Linux, gcc's debug information made
+# the runtime 1.3 MB instead of 0.2.
+release: $(BUILD)/runtime $(BUILD)/shen-jit.img
+	cp $(BUILD)/runtime$(EXE) $(BUILD)/runtime-stripped$(EXE)
+	strip $(BUILD)/runtime-stripped$(EXE)
+	cat $(BUILD)/runtime-stripped$(EXE) $(BUILD)/shen-jit.img > $(BUILD)/shen-jit
+	chmod +x $(BUILD)/shen-jit
+	$(call AS_EXE,$(BUILD)/shen-jit)
+	rm $(BUILD)/runtime-stripped$(EXE)
+
+# The executable is all there is to install: it carries its image. Not with
+# install -s, which would drop the image.
+PREFIX ?= /usr/local
+install: $(BUILD)/shen-jit
+	install -d $(DESTDIR)$(PREFIX)/bin
+	install -m 755 $(BUILD)/shen-jit $(DESTDIR)$(PREFIX)/bin/shen-jit
+
+$(BUILD)/%.o: src/runtime/%.c $(RUNTIME_HDR) | $(BUILD)
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -c $< -o $@
+
+# The build identifier covers every runtime source.
+$(BUILD)/image.o: $(RUNTIME_SRC)
+$(BUILD)/objects.o: vendor/xxhash/xxhash.h
+
+$(SLJIT_OBJ): vendor/sljit/sljit_src/sljitLir.c | $(BUILD)
+	$(CC) -std=c11 -O2 -g -w $(SLJIT_FLAGS) $(SLJIT_SRC_FLAGS) -c $< -o $@
+
+$(BUILD)/test_runtime: tests/test_runtime.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_runtime.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
+
+# Generated inputs: what only Shen/Scheme can make, the stage 0 output, the
+# lowerer as KLambda and the lowered test programs. A release tarball carries
+# them in generated/ (make dist) and builds from there with a C compiler alone,
+# whatever the files' times; a checkout makes them with Shen/Scheme, from the
+# kernel. make deps fetches both into .deps, checked by hash (tools/ci-deps.sh), and
+# generated.sha256 holds the hashes of what they make, which check-generated compares.
+SHEN_SCHEME ?= .deps/shen-scheme/bin/shen-scheme
+KERNEL_KL ?= .deps/kernel/klambda
+GENERATED := stage0/*.sbc stage0/*.forms port/lower.kl bench/programs.sbc kl/ops.sbc stlib/stlib.kl
+
+ifneq ($(wildcard generated/stage0),)
+$(BUILD)/generated.done:
+	mkdir -p $(BUILD)
+	cp -R generated/. $(BUILD)/
+	touch $(BUILD)/stage0/.done $@
+
+$(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl: $(BUILD)/generated.done
+	@:
+else
+# The kernel's precompiled standard library, for make stlib.
+$(BUILD)/stlib/stlib.kl: $(KERNEL_KL)/stlib.kl | host
+	mkdir -p $(BUILD)/stlib
+	cp $< $@
+
+# The benchmark programs and the opcode tests, lowered by the lowerer.
+$(BUILD)/bench/programs.sbc: tests/bench/programs.kl src/lowerer/lower.shen src/lowerer/stage0.shen | host
+	mkdir -p $(BUILD)/bench
+	$(SHEN_SCHEME) script src/lowerer/stage0.shen tests/bench/ $(BUILD)/bench/ programs > /dev/null
+
+$(BUILD)/kl/ops.sbc: tests/kl/ops.kl src/lowerer/lower.shen src/lowerer/stage0.shen | host
+	mkdir -p $(BUILD)/kl
+	$(SHEN_SCHEME) script src/lowerer/stage0.shen tests/kl/ $(BUILD)/kl/ ops > /dev/null
+
+# Stage 0: the lowerer compiled to KLambda, then the kernel, the port and the
+# lowerer lowered under Shen/Scheme.
+$(BUILD)/port/lower.kl: src/lowerer/lower.shen src/lowerer/host.shen src/lowerer/tokl.shen | host
+	mkdir -p $(BUILD)/port
+	$(SHEN_SCHEME) script src/lowerer/tokl.shen $@ > /dev/null
+
+$(BUILD)/stage0/.done: $(BUILD)/port/lower.kl src/port/shen-jit.kl src/lowerer/lower.shen src/lowerer/host.shen src/lowerer/stage0.shen
+	mkdir -p $(BUILD)/stage0
+	$(SHEN_SCHEME) script src/lowerer/stage0.shen $(KERNEL_KL)/ $(BUILD)/stage0/ > /dev/null
+	touch $@
+endif
+
+# What a checkout needs to make the generated files.
+deps:
+	sh tools/ci-deps.sh kernel .deps/kernel > /dev/null
+	sh tools/ci-deps.sh shen-scheme .deps/shen-scheme > /dev/null
+
+# With a clearer message than the first command would give.
+host:
+	@command -v $(SHEN_SCHEME) > /dev/null || { echo "no Shen/Scheme at $(SHEN_SCHEME): run make deps, or set SHEN_SCHEME"; exit 1; }
+	@test -d $(KERNEL_KL) || { echo "no kernel at $(KERNEL_KL): run make deps, or set KERNEL_KL"; exit 1; }
+
+generated: $(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl
+
+# A change to the lowerer, the port or the test programs updates the manifest
+# in the same commit; any other difference is drift.
+update-generated: generated
+	export LC_ALL=C; cd $(BUILD) && $(SHA256) $(GENERATED) > ../generated.sha256
+
+# In C order: where /bin/sh is bash, a glob's order follows the locale.
+check-generated: generated
+	@export LC_ALL=C; cd $(BUILD) && $(SHA256) $(GENERATED) | sed 's/ \*/  /' > generated.sha256 && \
+	  if diff -u ../generated.sha256 generated.sha256; then echo "generated files match generated.sha256"; \
+	  else echo "generated files differ from generated.sha256 (make update-generated with the change that made them)"; exit 1; fi
+
+# The guide, docs/guide.md, as GitHub Pages serves it and release archives carry it.
+guide:
+	rm -rf $(BUILD)/guide && mkdir -p $(BUILD)/guide/assets
+	pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --shift-heading-level-by=-1 --wrap=none \
+	  --template=site/template.html --lua-filter=site/guide.lua -o $(BUILD)/guide/index.html docs/guide.md
+	cp assets/*.png $(BUILD)/guide/assets/
+
+# A release tarball: the tracked files, generated/, which builds without Shen/Scheme,
+# and guide/, the rendered guide, which saves each platform from needing pandoc. The
+# generated files must match the manifest first.
+DIST := shen-jit-$(VERSION)
+dist: check-generated guide
+	rm -rf $(BUILD)/$(DIST) && mkdir -p $(BUILD)/$(DIST)/generated
+	git ls-files -z | tar --null -T - -cf - | tar -C $(BUILD)/$(DIST) -xf -
+	cd $(BUILD) && tar -cf - $(GENERATED) | tar -C $(DIST)/generated -xf -
+	cp -R $(BUILD)/guide $(BUILD)/$(DIST)/guide
+	COPYFILE_DISABLE=1 tar -C $(BUILD) --no-xattrs -czf $(BUILD)/$(DIST).tar.gz $(DIST) # no macOS metadata
+	rm -rf $(BUILD)/$(DIST)
+	@echo "wrote $(BUILD)/$(DIST).tar.gz"
+
+$(BUILD)/test_jit: tests/test_jit.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_jit.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
+
+test-jit: $(BUILD)/test_jit $(BUILD)/bench/programs.sbc
+	cd $(BUILD) && ./test_jit bench/programs.sbc
+
+$(BUILD)/test_ops: tests/test_ops.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_ops.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
+
+test-ops: $(BUILD)/test_ops $(BUILD)/kl/ops.sbc
+	cd $(BUILD) && ./test_ops kl/ops.sbc
+
+stage0: $(BUILD)/stage0/.done
+
+check-lowerer: $(BUILD)/stage0/.done
+	$(SHEN_SCHEME) script src/lowerer/check.shen $(KERNEL_KL)/ $(BUILD)/stage0/ | tail -1 | awk '{ print } END { exit !/^0 failures/ }'
+
+$(BUILD)/test_kl: tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
+
+test-kl: $(BUILD)/test_kl $(BUILD)/stage0/.done
+	cd $(BUILD) && ./test_kl stage0 ../tests/kl/eval-cases.kl
+
+# The eval-kl cases with a collection before every allocation (slow).
+test-kl-stress: $(BUILD)/test_kl $(BUILD)/stage0/.done
+	cd $(BUILD) && ./test_kl stage0 ../tests/kl/eval-cases.kl --stress
+
+# The kernel's test suite, the extension tests and the contract
+# examples, run by the executable. The kernel harness asks whether to continue
+# after a failure, so the answers are scripted; each run ends with its counts,
+# which awk shows and checks (tee /dev/stderr would reopen a redirected log on
+# Linux, truncating it).
+KERNEL_DIR ?= .deps/kernel
+SHEN_JIT := $(abspath $(BUILD)/shen-jit)
+RESULTS := grep -A1 '^passed \.\.\.' | tail -2 | awk '{ print } END { exit !/failed \.\.\. 0$$/ }'
+
+test-kernel: all $(FFI_TEST_LIB)
+	cd $(KERNEL_DIR)/tests && yes y | head -200 | \
+	  SHEN_JIT_GC_STRESS=$(GC_STRESS) $(SHEN_JIT) script runme.shen | $(RESULTS)
+	cd $(KERNEL_DIR) && SHEN_JIT_GC_STRESS=$(GC_STRESS) \
+	  $(SHEN_JIT) script tests/extensions/runme.shen < /dev/null | $(RESULTS)
+	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(SHEN_JIT) script contract/examples.shen | \
+	  tail -1 | awk '{ print } END { exit !/ 0 failed/ }'
+	SHEN_JIT_GC_STRESS=$(GC_STRESS) sh tests/cli.sh $(SHEN_JIT)
+
+# The same with a collection after every 1000 words allocated (about 2 minutes).
+test-kernel-stress:
+	$(MAKE) test-kernel GC_STRESS=1000
+	$(MAKE) test-stlib GC_STRESS=1000
+	$(MAKE) test-native GC_STRESS=1000
+	$(MAKE) test-ffi GC_STRESS=1000
+	cd $(BUILD) && SHEN_JIT_GC_STRESS=1 ./shen-jit eval -l ../lib/ffi.shen -l ../tests/ffi_c.shen | $(FFI_RESULT)
+
+# The optional standard library: an executable of its own, with the kernel's
+# precompiled stlib in its image (docs/guide.md, "The standard library").
+stlib: $(BUILD)/shen-jit-stlib
+
+$(BUILD)/shen-jit-stlib: $(BUILD)/shen-jit $(BUILD)/stlib/stlib.kl tools/stlib.shen
+	$(BUILD)/shen-jit script tools/stlib.shen $(BUILD)/stlib/stlib.kl $@ > /dev/null
+	$(call AS_EXE,$@)
+
+test-stlib: $(BUILD)/shen-jit-stlib
+	cd $(BUILD) && SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit-stlib script ../tests/stlib.shen | \
+	  tail -1 | awk '{ print } END { exit !/ 0 failed/ }'
+
+# Native code written by hand (docs/bytecode.md, "Native code written by hand"). A macro
+# applies only to files read after it, so the tests load as a file of their own.
+test-native: $(BUILD)/shen-jit
+	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l tests/native.shen | \
+	  grep '^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
+
+fuzz-native: $(BUILD)/shen-jit
+	python3 tests/native_fuzz.py
+
+# C functions called from Shen (lib/ffi.shen), against a library made for it, then from
+# typed code, which needs (tc +) before the file is read, and C written for Shen, and the
+# libraries over them.
+FFI_RESULT := grep '^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
+# The tests that any kind of build runs, given how to run the executable.
+FFI_SUITES = $(1) eval -l ../lib/ffi.shen -l ../tests/ffi.shen | $(FFI_RESULT) && \
+	  $(1) eval -l ../lib/ffi.shen -l ../tests/ffi_c.shen | $(FFI_RESULT) && \
+	  $(1) eval -l ../lib/ffi.shen -l ../lib/sqlite.shen -l ../tests/sqlite.shen | $(FFI_RESULT) && \
+	  $(1) eval -l ../lib/ffi.shen -l ../lib/socket.shen -l ../tests/socket.shen | $(FFI_RESULT)
+
+$(FFI_TEST_LIB): tests/ffi_lib.c include/shen.h | $(BUILD)
+	$(CC) -std=c11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Iinclude -shared -fPIC -pthread -o $@ $<
+
+test-ffi: $(BUILD)/shen-jit $(FFI_TEST_LIB)
+	cd $(BUILD) && SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit eval -l ../lib/ffi.shen -e '(tc +)' -l ../tests/ffi_typed.shen | $(FFI_RESULT)
+	cd $(BUILD) && $(call FFI_SUITES,SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit)
+
+# The suites on Linux arm64 and x86-64, in Docker (tests/linux.sh).
+test-linux:
+	sh tests/linux.sh
+
+# The kernel's benchmarks and Shen/Scheme's realistic ones, run by shen-jit
+# and Shen/Scheme and compared (best of BENCH_SAMPLES; run counts divided by
+# 10^BENCH_OFFSET). Shen/Scheme's results are kept, since they do not change.
+# SEAL=1 runs shen-jit with user definitions sealed (shen-jit --seal).
+BENCH_DIR ?= .deps/shen-scheme-src
+BENCH_OFFSET ?= 1
+BENCH_SAMPLES ?= 3
+BENCH_ARGS = eval -e '(set bench-offset $(BENCH_OFFSET))' -e '(set bench-samples $(BENCH_SAMPLES))' \
+             -e '(load "$(abspath tests/bench/suite.shen)")'
+BENCH_REF := $(BUILD)/bench/shen-scheme-$(BENCH_OFFSET)-$(BENCH_SAMPLES).txt
+
+$(BENCH_REF): tests/bench/suite.shen
+	mkdir -p $(BUILD)/bench
+	cd $(BENCH_DIR) && $(abspath $(SHEN_SCHEME)) $(BENCH_ARGS) > $(abspath $@)
+
+BENCH_OUT := $(BUILD)/bench/shen-jit$(if $(SEAL),-sealed).txt
+
+bench: all $(BENCH_REF)
+	cd $(BENCH_DIR) && $(SHEN_JIT) $(if $(SEAL),--seal) $(BENCH_ARGS) > $(abspath $(BENCH_OUT))
+	python3 tests/bench/compare.py $(BENCH_OUT) $(BENCH_REF)
+
+# Workloads never used for tuning (tests/bench/independent.py): the kernel's
+# test suite and extension tests, installing the standard library, the
+# contract examples and startup, against Shen/Scheme.
+STLIB_DIR ?=
+INDEPENDENT_ROUNDS ?= 7
+
+bench-independent: all
+	python3 tests/bench/independent.py --rounds $(INDEPENDENT_ROUNDS) --kernel $(KERNEL_DIR) \
+	  $(if $(STLIB_DIR),--stlib $(STLIB_DIR)) --scheme $(SHEN_SCHEME) $(SHEN_JIT)
+
+measure: $(BUILD)/test_jit $(BUILD)/bench/programs.sbc
+	cd $(BUILD) && ./test_jit bench/programs.sbc --measure
+
+$(BUILD):
+	mkdir -p $(BUILD)
+
+test: $(BUILD)/test_runtime
+	cd $(BUILD) && ./test_runtime
+
+# The same tests under AddressSanitizer and UndefinedBehaviorSanitizer, and as
+# x86-64 code (under Rosetta on Apple silicon).
+SAN_FLAGS := -std=c11 -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer
+TESTS := test_runtime test_jit test_ops test_kl
+TEST_ARGS_test_runtime :=
+TEST_ARGS_test_jit := bench/programs.sbc
+TEST_ARGS_test_ops := kl/ops.sbc
+TEST_ARGS_test_kl := stage0 ../tests/kl/eval-cases.kl
+
+test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done $(FFI_TEST_LIB) | $(BUILD)
+	for t in $(TESTS); do \
+	  $(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -o $(BUILD)/$$t-san tests/$$t.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS) || exit 1; done
+	cd $(BUILD) && ./test_runtime-san && ./test_jit-san $(TEST_ARGS_test_jit) && ./test_ops-san $(TEST_ARGS_test_ops) && ./test_kl-san $(TEST_ARGS_test_kl)
+	$(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -DSJ_VERSION='"$(VERSION)"' -o $(BUILD)/shen-jit-san src/runtime/main.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
+	cd $(BUILD) && ./shen-jit-san --stage1 stage0 shen-jit-san.img && \
+	  $(call FFI_SUITES,ASAN_OPTIONS=detect_leaks=0 SHEN_JIT_IMAGE=shen-jit-san.img ./shen-jit-san)
+
+test-x86: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done | $(BUILD)
+	for t in $(TESTS); do \
+	  $(CC) -arch x86_64 -std=c11 -O2 -w $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -o $(BUILD)/$$t-x86 tests/$$t.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS) || exit 1; done
+	cd $(BUILD) && ./test_runtime-x86 && ./test_jit-x86 $(TEST_ARGS_test_jit) && ./test_ops-x86 $(TEST_ARGS_test_ops) && ./test_kl-x86 $(TEST_ARGS_test_kl)
+	$(CC) -arch x86_64 -std=c11 -O2 -w $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -DSJ_VERSION='"$(VERSION)"' -o $(BUILD)/shen-jit-x86 src/runtime/main.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
+	$(CC) -arch x86_64 -arch arm64 -std=c11 -O1 -w -Iinclude -shared -o $(FFI_TEST_LIB) tests/ffi_lib.c
+	cd $(BUILD) && ./shen-jit-x86 --stage1 stage0 shen-jit-x86.img && \
+	  $(call FFI_SUITES,SHEN_JIT_IMAGE=shen-jit-x86.img ./shen-jit-x86)
+
+clean:
+	rm -f $(BUILD)/*.o $(BUILD)/test_* $(BUILD)/load_kernel $(BUILD)/*.img $(BUILD)/runtime $(BUILD)/shen-jit
+
+$(BUILD)/load_kernel: tests/load_kernel.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
+	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/load_kernel.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
+
+# Loads the lowerer's stage 0 output and checks an image round trip.
+load-kernel: $(BUILD)/load_kernel $(BUILD)/shen-jit.img
+	cd $(BUILD) && ./load_kernel stage0/*.sbc && cmp kernel-code.img kernel-code2.img && echo "image round trip identical"
+	cd $(BUILD) && ./load_kernel --image shen-jit.img && cmp shen-jit.img image2.img && echo "kernel-scale image round trip identical"

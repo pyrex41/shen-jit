@@ -1,0 +1,113 @@
+# Working on Shen/JIT
+
+Notes for contributors and agents. [The guide](docs/guide.md) covers how to install, use and build Shen/JIT, and
+[docs/design.md](docs/design.md) how it works. If `AGENTS.local.md` exists, read it too: it holds a
+checkout's own workflow, and git ignores it.
+
+## Names
+
+- This project is Shen/JIT: `shen-jit` in code, commands and file names.
+- Bare "JIT" means this project's compiler, `src/runtime/jit.c`.
+
+## Layout
+
+| Path | Contents |
+| --- | --- |
+| `src/runtime/` | The C runtime: values and objects, collector, image, primitives, reader, loader, JIT, profiler, and the executable (`main.c`) |
+| `src/lowerer/` | The lowerer (`lower.shen`) and the stage 0 tools; see [src/lowerer/README.md](src/lowerer/README.md) |
+| `src/port/shen-jit.kl` | Port code: overrides and the `shen-jit.*` functions |
+| `docs/` | The guide's source, and how it works |
+| `site/` | What renders the guide: pandoc's template and a filter |
+| `include/` | `shen.h`, for C written for Shen |
+| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `sqlite.shen` and `socket.shen` over it |
+| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel and Shen/Scheme, and `package.sh` makes a release archive |
+| `assets/` | The logos and icons |
+| `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
+| `contract/` | The contract examples, and Shen/Scheme's results for them |
+| `vendor/` | SLJIT and xxHash, each with its license and an `UPSTREAM.md` naming the imported revision |
+
+## Priorities
+
+- Shen/JIT must perform well, but stay small and simple. A speed-up that needs a lot of new machinery for
+  little gain is not worth it: say so, and record it in the development log instead.
+- Libraries outside the default image go in `lib/`, and scripts in `tools/`.
+- The standard library (stlib) stays out of the default image: `make stlib` builds an executable with it,
+  from the kernel's `klambda/stlib.kl`.
+
+## Git
+
+History stays linear: no merge commits. A commit message says what changed and what it measured.
+
+## Building
+
+- `make deps` fetches the kernel and Shen/Scheme into `.deps/`. A file `local.mk`, which git ignores, can
+  set other paths: the guide lists the variables.
+- `make guide` needs pandoc, and so do `make dist` and `make test-linux`, as a source tarball carries the guide rendered.
+- `make` misses an edit made in the same second as the last build, since their times tie: any source file, not only
+  `src/lowerer/lower.shen`. After scripted edits, `sleep 1; touch FILE` before rebuilding.
+
+## Testing
+
+Run the fast tier after every change; it takes about 20 s and catches nearly everything:
+
+```bash
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-native test-ffi
+```
+
+A change that alters the generated files (the lowerer, the port, or the lowered test programs
+`tests/bench/programs.kl` and `tests/kl/ops.kl`) updates `generated.sha256` in the same commit, with `make
+update-generated`; `check-generated` fails until it does. Any other difference in them is drift: a different kernel or Shen/Scheme.
+
+Run a heavier suite only when a change touches what it guards, one at a time, and all of them before a release:
+
+- `make test-kernel-stress test-kl-stress` (GC stress, about 2 minutes): changes to allocation, the collector or the heap pointer.
+  Under stress every allocation collects, so keep allocation loops in eval cases short. The old space is overwritten after each collection, so a stale pointer fails at once.
+- `make test-san` (sanitizers): changes to C code that handles memory.
+- `make test-x86` (x86-64 under Rosetta): new kinds of SLJIT instructions or calls in the JIT, and changes to how `src/runtime/ffi.c` calls C.
+- `make fuzz-native` (mutated code objects, a few minutes): changes to what the JIT assumes about bytecode, which the checker in `lib/native.shen` must then enforce for code written by hand.
+- `make test-linux` (every suite on Linux arm64 and x86-64, in Docker, built with gcc from a release tarball, without Shen/Scheme): before a release, and for changes that may differ by
+  platform or compiler. gcc evaluates a call's arguments in another order than clang, which shows a value read before an allocation that moves it, and Linux's AddressSanitizer also reports leaks.
+
+On macOS, Guard Malloc finds a write past a block or into a freed one at once:
+`DYLD_INSERT_LIBRARIES=/usr/lib/libgmalloc.dylib build/shen-jit ...`, under `lldb` to see the writer.
+
+New behaviour gets cases in `tests/kl/eval-cases.kl` (KL) or `tests/cli.sh` (the executable). Note that the readers turn `8.0` into the integer 8, as Shen's reader does.
+
+CI (`.github/workflows/ci.yml`) follows `tests/linux.sh`: one job makes the tarball, with pandoc and the kernel and Shen/Scheme releases that `tools/ci-deps.sh` checks by hash, and each platform builds and
+tests it with a C compiler alone. Moving the kernel or Shen/Scheme updates the hashes there.
+
+## Releasing
+
+Move what is under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) to a heading with the version and the date, then push a tag `vM.N` that matches `VERSION`. CI builds and tests Linux x86-64 and arm64 (dynamic, in a container with an old glibc, and static, which cannot load libraries), macOS arm64 and Windows
+x86-64, then publishes those archives (`tools/package.sh`), each with the rendered guide, the source tarball and `SHA256SUMS`. A tag with a hyphen is a prerelease.
+
+## Measuring performance
+
+- Time the rows a change aims at directly: a small Shen file that loops over the case and reports `get-time unix`, run on the old and new binaries in alternation, several times.
+- Run `make bench` when a change can affect code beyond its target, such as branch shapes on common paths.
+- Check that a gain holds outside the benchmarks: `make bench-independent` times workloads never used for tuning, which mostly load, compile and typecheck code. A benchmark gain that does not
+  show there, or a loss there, is fitting the benchmarks or a cost in compile time.
+- Some rows move with where code and data lie, not with what they run: `vector create (big)` with the heap pointer's parity, and `list traversal`, `match vector`, `symbol? (true)`, `shen.sysfunc?` and
+  `captured-unary-ordinary` with what else the process compiled. Before acting on a slower row, time it alone; if a change alters branch shapes, also time it with the code shifted by a few unrelated definitions compiled first.
+- To profile on macOS, run with `SHEN_JIT_PERF_MAP=1`, sample the process with `sample PID SECONDS`, and resolve JIT addresses against `/tmp/perf-PID.map`. `SHEN_JIT_PROFILE` uses SIGPROF, whose samples land where system calls
+  return, so it over-counts C and under-counts native code.
+- Measure on a quiet machine.
+
+## Documentation
+
+Keep these current with each change:
+
+- [docs/development-log.md](docs/development-log.md): every significant change or rejected experiment gets an entry in the same commit, under its topic: what was done or rejected, why, and the numbers,
+  with the date, the machine and what it was compared against, so that none reads as a current claim. It must answer "did anyone try X?" quickly. Rejected ideas are the most valuable part.
+- [docs/design.md](docs/design.md): how it works now.
+- [docs/bytecode.md](docs/bytecode.md): the lowerer's rules and the instructions.
+- [docs/semantics.md](docs/semantics.md): the behaviour, with the contract examples.
+- [docs/overrides.md](docs/overrides.md): overrides in the port.
+- [docs/ffi.md](docs/ffi.md) and `include/shen.h`: calling C.
+- [docs/guide.md](docs/guide.md): what a user sees. `make guide` renders it with pandoc, `site/template.html` and `site/guide.lua`; `.github/workflows/pages.yml` publishes it when any of those change, and release archives carry it. Run its examples when you change them.
+- The README stays minimal and points to the guide, so that they don't say the same things twice. What a user should know goes in the guide.
+- [CHANGELOG.md](CHANGELOG.md), in the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format: what a user would notice, under "Unreleased" until a release.
+
+If something tells people what to do now or how things work now, it belongs in those, and not in the log.
+
+Don't say which version of Shen this implements, since that keeps changing: `tools/ci-deps.sh` holds it, and only the log's dated entries name one.

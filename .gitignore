@@ -1,0 +1,10 @@
+build/
+.DS_Store
+contract-tmp.bin
+
+# Kept out of the repository: notes and tools that need unreleased data, your own paths and
+# workflow, and what make deps fetches.
+local/
+AGENTS.local.md
+local.mk
+.deps/

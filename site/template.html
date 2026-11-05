@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>$pagetitle$</title>
+<meta name="description" content="How to install and use Shen/JIT, a JIT implementation of the Shen language: running programs, saving executables, threads, calling C, SQLite and sockets.">
+<link rel="icon" type="image/png" href="assets/shen-jit-icon-light.png" media="(prefers-color-scheme: light)">
+<link rel="icon" type="image/png" href="assets/shen-jit-icon-dark.png" media="(prefers-color-scheme: dark)">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,600;1,400&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* A reading column beside a contents rail, in the logo's two colours: monospaced ink and an amber slash. */
+:root {
+  --bg: #f7f9fb;
+  --ink: #1f2328;
+  --muted: #56616d;
+  --rule: #dbe2e9;
+  --code: #edf1f5;
+  --slash: #e8a33d;
+  --link: #8a5400;
+  --mark: #fbf0db;
+  --sans: "IBM Plex Sans", -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, "DejaVu Sans Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14181d; --ink: #e6ecf2; --muted: #9aa6b2; --rule: #2c343d; --code: #1c2229;
+    --slash: #e8a33d; --link: #eeb65c; --mark: #33291a; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14181d; --ink: #e6ecf2; --muted: #9aa6b2; --rule: #2c343d; --code: #1c2229;
+  --slash: #e8a33d; --link: #eeb65c; --mark: #33291a; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-behavior: smooth; scroll-padding-top: 1.25rem; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+body {
+  margin: 0; background: var(--bg); color: var(--ink);
+  font: 400 1.0625rem/1.65 var(--sans);
+  display: grid; grid-template-columns: 17rem minmax(0, 1fr);
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+}
+img { max-width: 100%; height: auto; display: block; }
+a { color: var(--link); text-underline-offset: 0.15em; }
+a:focus-visible, summary:focus-visible { outline: 2px solid var(--slash); outline-offset: 2px; border-radius: 2px; }
+
+/* The contents rail: the guide's groups, and the sections in each. */
+.rail { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; padding-block: 1.75rem; padding-right: 1.25rem; }
+.rail .brand { display: block; width: 10.5rem; margin-left: -0.6rem; }
+.logo-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .logo-dark { display: block; }
+  :root:not([data-theme="light"]) .logo-light { display: none; }
+}
+:root[data-theme="dark"] .logo-dark { display: block; }
+:root[data-theme="dark"] .logo-light { display: none; }
+.rail summary { display: none; font: 600 0.875rem var(--mono); cursor: pointer; padding-block: 0.5rem; }
+.rail ul { list-style: none; margin: 0; padding: 0; }
+.rail nav > ul > li > a, section.level1 > h1 { font: 400 0.8125rem var(--mono); color: var(--muted); text-transform: lowercase; }
+.rail nav > ul > li > a { display: block; margin: 1.5rem 0 0.35rem; text-decoration: none; }
+.rail nav > ul > li > a::before, section.level1 > h1::before { content: "["; }
+.rail nav > ul > li > a::after, section.level1 > h1::after { content: "]"; }
+.rail ul ul a { display: block; padding: 0.16rem 0 0.16rem 0.75rem; border-left: 2px solid var(--rule); color: var(--ink); text-decoration: none; font-size: 0.9375rem; line-height: 1.4; }
+.rail ul ul a:hover { color: var(--link); }
+.rail ul ul a.here { border-left-color: var(--slash); font-weight: 600; }
+
+/* The reading column */
+main { min-width: 0; max-width: 47rem; padding-block: 2.5rem 5rem; padding-left: 2.5rem; }
+main > p:first-of-type { font-size: 1.25rem; line-height: 1.5; margin: 0 0 1rem; text-wrap: balance; }
+main > h1 { font: 600 2.125rem/1.2 var(--mono); margin: 0 0 1rem; letter-spacing: -0.02em; }
+main > h1 i { color: var(--slash); font-style: normal; }
+section.level1 > h1 { margin: 3.5rem 0 -1.25rem; }
+section.level2 { padding-top: 2.5rem; }
+section.level2 > h2 { font: 600 1.4375rem/1.3 var(--mono); margin: 0 0 0.85rem; letter-spacing: -0.01em; text-wrap: balance; }
+section.level2 > h2::before { content: "/ "; color: var(--slash); }
+h3 { font: 600 1rem/1.4 var(--mono); margin: 1.75rem 0 0.5rem; }
+p { margin: 0 0 1rem; }
+main ul { margin: 0 0 1rem; padding-left: 1.25rem; }
+main li { margin-bottom: 0.4rem; }
+code { font: 400 0.875em var(--mono); background: var(--code); padding: 0.1em 0.3em; border-radius: 3px; overflow-wrap: anywhere; }
+pre { margin: 0 0 1.1rem; background: var(--code); padding: 0.85rem 1rem; overflow-x: auto; border-radius: 4px; font: 400 0.84375rem/1.55 var(--mono); }
+pre code { background: none; padding: 0; font: inherit; overflow-wrap: normal; }
+code, pre, pre code { font-variant-ligatures: none; }   /* -> stays as it is typed */
+pre .p { color: var(--muted); }      /* the REPL's prompt */
+pre .o { color: var(--link); }       /* what it printed */
+pre .c { color: var(--muted); font-style: italic; }
+.wide { overflow-x: auto; margin: 0 0 1.1rem; }
+table { border-collapse: collapse; width: 100%; font-size: 0.9375rem; line-height: 1.5; }
+th { text-align: left; font: 600 0.8125rem var(--mono); color: var(--muted); }
+th, td { padding: 0.45rem 0.9rem 0.45rem 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+td code { white-space: nowrap; }
+blockquote { background: var(--mark); padding: 0.7rem 1rem; border-radius: 4px; margin: 0 0 1.1rem; font-size: 0.96875rem; }
+blockquote p:last-child { margin-bottom: 0; }
+footer { margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--rule); color: var(--muted); font-size: 0.9375rem; }
+
+@media (max-width: 56rem) {
+  body { display: block; }
+  .rail { position: static; max-height: none; padding-block: 1rem 0; padding-right: 0; }
+  .rail summary { display: block; }
+  main { padding-left: 0; padding-block: 1rem 3rem; }
+  main > h1 { font-size: 1.75rem; }
+  main > p:first-of-type { font-size: 1.125rem; }
+}
+</style>
+</head>
+<body>
+
+<aside class="rail">
+  <a class="brand" href="#top" aria-label="Shen/JIT, top of the guide">
+    <img class="logo-light" src="assets/shen-jit-logo-light.png" alt="Shen/JIT" width="1600" height="400">
+    <img class="logo-dark" src="assets/shen-jit-logo-dark.png" alt="Shen/JIT" width="1600" height="400">
+  </a>
+  <details id="toc" open>
+    <summary>Contents</summary>
+    <nav aria-label="Contents">
+$table-of-contents$
+    </nav>
+  </details>
+</aside>
+
+<main id="top">
+<h1>Shen<i>/</i>JIT guide</h1>
+$body$
+<footer>
+  Shen/JIT is under the <a href="https://github.com/tizoc/shen-jit/blob/main/LICENSE">BSD 3-clause license</a>. It carries the Shen kernel, under <a href="https://github.com/tizoc/shen-jit/blob/main/LICENSE-shen-kernel.txt">its own license</a>, and SLJIT and xxHash. <a href="https://github.com/tizoc/shen-jit">Source on GitHub</a>.
+</footer>
+</main>
+
+<script>
+/* The rail: marks the section being read, and folds away on a phone. */
+(function () {
+  var toc = document.getElementById('toc');
+  var narrow = window.matchMedia('(max-width: 56rem)');
+  function fit() { toc.open = !narrow.matches; }
+  fit();
+  narrow.addEventListener('change', fit);
+  var links = {};
+  document.querySelectorAll('.rail ul ul a').forEach(function (a) {
+    links[a.getAttribute('href').slice(1)] = a;
+    a.addEventListener('click', function () { if (narrow.matches) toc.open = false; });
+  });
+  if (!('IntersectionObserver' in window)) return;
+  var current = null;
+  var seen = new IntersectionObserver(function (entries) {
+    entries.forEach(function (e) {
+      if (!e.isIntersecting || !links[e.target.id]) return;
+      if (current) current.classList.remove('here');
+      current = links[e.target.id];
+      current.classList.add('here');
+    });
+  }, { rootMargin: '-10% 0px -80% 0px' });
+  document.querySelectorAll('section.level2').forEach(function (s) { seen.observe(s); });
+})();
+</script>
+</body>
+</html>

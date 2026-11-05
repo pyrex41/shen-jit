@@ -1,0 +1,129 @@
+# Every platform builds and tests the same release tarball, with a C compiler
+# alone, as tests/linux.sh does. One job makes the tarball, since only it runs
+# Shen/Scheme and pandoc. A tag vM.N publishes what those jobs built and tested.
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  tarball:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Make the generated files, the guide and the tarball
+        run: |
+          sudo apt-get update && sudo apt-get install -y pandoc
+          kernel=$(sh tools/ci-deps.sh kernel "$RUNNER_TEMP/kernel")
+          scheme=$(sh tools/ci-deps.sh shen-scheme "$RUNNER_TEMP/scheme")
+          make SHEN_SCHEME="$scheme" KERNEL_KL="$kernel/klambda" check-lowerer dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tarball
+          path: build/shen-jit-*.tar.gz
+          if-no-files-found: error
+
+  build:
+    needs: tarball
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Dynamic, so that they can load libraries, and built on an old glibc, so that they
+          # run on newer ones. Static ones run anywhere, but cannot load libraries.
+          - {platform: linux-x86_64, os: ubuntu-24.04, container: 'debian:bullseye', shell: bash}
+          - {platform: linux-arm64, os: ubuntu-24.04-arm, container: 'debian:bullseye', shell: bash}
+          - {platform: linux-x86_64-static, os: ubuntu-24.04, shell: bash, static: true, heavy: true}
+          - {platform: linux-arm64-static, os: ubuntu-24.04-arm, shell: bash, static: true}
+          - {platform: macos-arm64, os: macos-15, shell: bash, heavy: true}
+          - {platform: windows-x86_64, os: windows-2025, shell: 'msys2 {0}'}
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      # Whatever tries to run Shen/Scheme fails: a tarball must not need it.
+      MAKEFLAGS: SHEN_SCHEME=false
+    steps:
+      - if: runner.os == 'Windows'
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: make diffutils zip mingw-w64-ucrt-x86_64-gcc
+      # Debian keeps bullseye in its archive now. A newer release would raise the glibc that the
+      # executables need: from 2.34, dlopen and pthreads moved into libc under new versions.
+      - if: matrix.container
+        run: |
+          sed -i 's|deb\.debian\.org|archive.debian.org|' /etc/apt/sources.list
+          apt-get update && apt-get install -y gcc make curl ca-certificates libsqlite3-0
+      - uses: actions/download-artifact@v8
+        with:
+          name: tarball
+      - name: Unpack
+        run: |
+          tar -xzf shen-jit-*.tar.gz --strip-components=1
+          rm shen-jit-*.tar.gz
+          echo "KERNEL_DIR=$(sh tools/ci-deps.sh kernel "$PWD/.kernel")" >> "$GITHUB_ENV"
+      - name: Release build
+        run: make ${{ matrix.static && 'STATIC=1' || '' }} release stlib
+      - name: Tests
+        run: |
+          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-native test-ffi; do
+            echo "::group::$suite"
+            make "KERNEL_DIR=$KERNEL_DIR" "$suite"
+            echo "::endgroup::"
+          done
+      - name: GC stress
+        run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress
+      # Ubuntu's address space layout has more random bits than AddressSanitizer accepts.
+      - name: Sanitizers
+        if: matrix.heavy
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then sudo sysctl -q vm.mmap_rnd_bits=28; fi
+          make test-san
+      - name: Mutated code objects
+        if: matrix.platform == 'linux-x86_64-static'
+        run: make fuzz-native
+      - name: Package
+        run: sh tools/package.sh ${{ matrix.platform }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.platform }}
+          path: |
+            build/shen-jit-*-${{ matrix.platform }}.tar.gz
+            build/shen-jit-*-${{ matrix.platform }}.zip
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          # The tag must name the version the executables report.
+          test -f "assets/shen-jit-${TAG#v}.tar.gz"
+          cd assets
+          sha256sum -- * > SHA256SUMS
+          prerelease=
+          case "$TAG" in *-*) prerelease=--prerelease ;; esac
+          gh release create "$TAG" --verify-tag --generate-notes $prerelease -- *

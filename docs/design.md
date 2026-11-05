@@ -1,0 +1,234 @@
+# How Shen/JIT works
+
+Shen/JIT is a small implementation of Shen in C. KLambda is lowered to a register bytecode by a
+lowerer written in Shen, every function is compiled to native code by a whole-function baseline JIT built on
+SLJIT, memory is managed by a copying collector, and the system starts from a heap image.
+
+Small and simple come first, and it must still perform well. A mechanism that makes it noticeably
+larger or harder to follow needs clear evidence that it is worth the cost, and
+[development-log.md](development-log.md) records what was measured, and what was tried and rejected.
+
+| Area | Decision |
+| --- | --- |
+| Execution format | Register bytecode, with resolved lexical slots and explicit control flow |
+| Execution engine | A baseline JIT that compiles each function at its first call. There is no interpreter |
+| Frontend | A lowerer written in Shen, run by another Shen at stage 0 and as guest code afterwards |
+| Boot artifact | A heap image written at build time, holding no native code |
+| Collector | A Cheney semispace copying collector with inline bump allocation and no write barriers |
+| Native emitters | Handwritten C. Only what dominates execution is inline; the rest calls C helpers |
+| Runtime organisation | One contiguous guest stack per thread, and a handler stack |
+
+[bytecode.md](bytecode.md) defines the instructions and the lowering rules, and [semantics.md](semantics.md)
+the behaviour the system implements.
+
+## Build stages and startup
+
+Loading Shen source does more than install definitions: it sets globals, registers packages, installs macros
+and types, and records arities and lambda forms. Shen/JIT avoids recording those effects by running them in
+itself and saving the result.
+
+**Stage 0,** under Shen/Scheme, lowers the kernel's KLambda, leaving out what the port overrides, then the port
+(`src/port/shen-jit.kl`) and the lowerer itself, which `tokl.shen` compiles to KLambda first. The output is
+files of definitions as text, in `build/stage0`, so no state of the host reaches the target. Release tarballs carry this
+output, so they build with a C compiler alone, and `generated.sha256` holds its hashes.
+
+**Stage 1,** under the runtime alone:
+
+1. Install every definition from stage 0. No guest code runs in this step.
+2. Set the host's globals: `*os*`, `*language*`, `*release*` and so on.
+3. Call `shen.initialise`, which sets the kernel's globals, then the selected extensions' initialisers.
+4. Close every stream but the standard ones, and write the image.
+
+The build appends the image to the runtime to make `build/shen-jit`, a single file. The standard library
+stays out: `make stlib` loads the kernel's precompiled `stlib.kl` into a running image and writes a binary with
+`shen-jit.save-executable`.
+
+**Startup** reads the image from the end of the executable's file, relocates its pointers and applies these rules:
+
+- **Procedures:** a closure's native entry is a cache, set on load to the compile-on-first-call stub. A foreign
+  function's is set to its stub, and its address is cleared, so it is found again at its first call.
+- **Code objects** load with no native code: no emitted code is saved.
+- **Root cells** are referred to from the heap by index, so nothing in the heap needs rebinding. Only emitted
+  code holds their addresses.
+- **Streams:** the standard stream objects are kept and rebound to the process's handles, so every reference stays
+  good. File streams load closed.
+- **Pointers from C** load with address 0, which is dead.
+
+An image is tied to the exact build that wrote it, by an identifier and a checksum of the primitive names.
+
+## The lowerer and code objects
+
+The lowerer does normalisation, tail positions, closure conversion, slot and call-window assignment, and
+emission, and works on plain Shen lists. At runtime `eval-kl` is ordinary guest code: it runs the lowerer, calls the
+`install` primitive, which publishes the definition only once it is built, and then runs the result. So the
+executable has no KLambda reader or lowerer in C, and the installer and the JIT translate instructions
+mechanically.
+
+A code object owns its bytecode, constants, frame size and compiled code. Closures and active frames hold their
+code independently of named bindings, so replacing a binding does not disturb an old closure or a running
+frame.
+
+## Guest frames and calling convention
+
+### Frames and call windows
+
+A frame's physical header is one raw word, its return address, at `[FP]`. Slot 1 holds the callee's procedure,
+which is also its closure environment, and the arguments follow in slots 2 to n+1. Everything else is static or
+derivable: the slot span is fixed per function, the caller's frame is recovered by subtracting the window
+offset known at the return label, and no frame stores a pointer into the stack, so moving the stack only
+requires rebasing the frame pointer.
+
+Calls use overlapping windows, as in Lua. For each call, the lowerer chooses a window offset `A` above every
+slot live across the call, and evaluates the arguments directly into the window, so an ordinary call copies no
+arguments. A function's frame covers its largest outgoing window, so a caller only ever writes inside its own
+frame. Two invariants follow:
+
+- At a call, every caller slot at or above `A` is dead, except the window itself, which becomes the callee's.
+- Every slot live across a call lies below `A`.
+
+A tail call moves the new procedure and arguments into slots 1 to n+1, keeps the frame pointer and return
+address, and transfers with no host frames accumulating. The protected expression of `trap-error` is compiled
+out of tail position, so a tail call never replaces a frame whose handler is active.
+
+Language arity is apart from the physical entry. A named call with the wrong argument count raises an error, and
+applying a closure to extra arguments is lowered as nested application, so there is no partial-application
+object.
+
+### Native calling convention
+
+One SLJIT context is shared by every compiled function and the C entry adapter. Compiled functions have no host
+frames: a return is an indirect jump through the frame's return address, and C is called only through
+`sljit_emit_icall`. SLJIT's own guest calls would put every non-tail call on the C stack, which rules out moving
+the stack and unwinding many frames without `longjmp`.
+
+The callee checks the argument count, passed in a register. So uncompiled functions and foreign functions are just
+other entry addresses, and call sites need no checks of that kind.
+
+```text
+call f (arguments already in slots A+2..A+n+1):
+  load P from f's global cell
+  check that P is a procedure, else jump to the not-a-procedure path
+  store P at [FP+A+1] and the return label at [FP+A]
+  FP += A; COUNT = n
+  jump to P's entry
+return label:  FP -= A; store the result in its destination slot
+entry:         if COUNT != n, jump to the arity stub
+               if FP + frame size > limit, jump to the stack-growth stub
+return:        result to the return register; jump through [FP]
+tail call:     load and check P; move P and the arguments into
+               slots 1..n+1; COUNT = n; jump to P's entry
+```
+
+Some refinements are built on that:
+
+- **The first argument also travels in a register,** CACHE, which holds the last result. A callee that reads slot 2 before
+  its first branch starts with it cached. The slot, not the register, is the root, so whatever may collect
+  reloads CACHE from the slot.
+- **A result read only from CACHE is not stored,** when nothing between it and its one reader could collect.
+- **Leaves skip the stack check:** code that makes no call, with a frame of at most 64 words. Every check
+  reserves 64 words beyond its own frame, and `jit_call` reserves as much, so a leaf's frame is always in checked space.
+  Tail calls do not count against a leaf, except in code compiled once something needs interrupts seen, since
+  functions that call each other in tail position loop, and only their entry checks see an interrupt.
+- **Loops keep their slots in registers.** Code that loops through a self tail call, makes no call but tail calls and has no
+  handlers keeps slots 2 and up in saved registers when they fit: six on arm64, two on x86-64. It stores them back before any call
+  into C that may collect or raise, and loads them again after a collection, so the frame's words are always
+  valid and the collector never sees a stale pointer.
+- **Loops exit out of line.** A test that ends a loop, an `=` with a constant whose true branch only returns, jumps
+  to a return placed with the slow paths, so a turn of the loop takes one jump, back, instead of two.
+- **Small functions are inlined,** by the lowerer, sealed or open. An open one sits behind a test of the callee's
+  identity, which on arm64 is a nop that a redefinition patches into a branch to the ordinary call. Bodies are
+  marked in the bytecode, so a backtrace names them as if they were not inlined.
+- **Open self tail calls are patched too:** they jump straight back to the body, and a `defun` of the name rewrites
+  that branch, so the next turn reaches the new definition.
+
+### Stubs
+
+Several shared stubs run before a callee's frame exists: compile-on-first-call, arity mismatch, stack growth and
+foreign functions' entry. Any of them may collect. At each one, the frame pointer is already the callee's, and the
+published scanned extent ends after the window, so the procedure and arguments are rooted in the window, and nothing
+managed is held only in a register.
+
+### Exceptions
+
+There is a handler stack with direct resumption. A handler record holds a frame offset and a catch address, and no
+managed values: the handler closure is evaluated into a frame slot. Raising goes through one shared stub: C
+makes the exception, pops the record, sets the frame pointer and returns the catch address, and the stub
+jumps there. Helpers that may raise return `V_CLEARED`, checked only at their call sites. Guest calls are never followed
+by a status check, and `setjmp` and `longjmp` are not used.
+
+The kernel raises in ordinary control flow, so this stays cheap. A handler that never reads its exception is quiet, and
+an error raised while it is innermost builds no exception at all.
+
+### Re-entry and stack growth
+
+No helper calls guest code: `eval-kl` is guest code, and dictionary folds iterate in guest code over snapshots
+that C produces. C written for Shen does call in, through `jit_call_nested`, which pushes a handler with no catch address, so an
+error stops at the boundary and comes back to C by value, and which checks a bound on the native stack.
+
+On overflow the guest stack doubles: the used part is copied, the rest filled with the cleared value, and the
+frame pointer rebased. Handler records hold offsets and frames hold no stack pointers, so nothing else needs
+rebasing. It never shrinks while guest code runs.
+
+## Values
+
+Values are 64-bit words, with the low bits as tags ([semantics.md](semantics.md), section 2): 62-bit fixnums with a zero
+tag, header-free pairs, and tags for symbols, procedures and other objects.
+
+Pairs stay at two words, so the collector's linear scan and the image's relocation need another way to tell a pair
+from an object: every other object starts with a header word whose low bits no value has. A word at the start of an object is then
+either a header, which gives its size and which fields hold values, or the head of a pair.
+
+Symbols are ordinary heap objects, so the image is a single heap. Each stores a hash computed from its name, so
+hashing never depends on an address that moves. A symbol refers to its global cell by index. Cells and constant slots
+live outside the heap, in root arrays that grow by adding chunks, so none ever moves, and emitted code embeds their addresses and never a
+heap address. Native code lives in SLJIT's executable memory, and a collection frees that of code objects it did not reach.
+
+## Collection
+
+Allocation bumps a cursor that emitted code checks against a limit, and the slow path collects, after which the
+instruction runs again. There are no write barriers or remembered sets. The semispaces lie in one reserved block of
+address space and double in place when live data passes 40% of them.
+
+- **Lists stay contiguous.** Cheney's breadth-first order scatters a list's pairs among everything else live, so when a pair is
+  copied, the pairs of its tail are copied right after it.
+- **Large objects:** vectors and strings of 32K words or more are allocated apart and never copied. Collections mark
+  them, scan them in place and free the dead ones.
+- **Weak things:** the intern table holds symbols weakly, and symbols nothing needs are dropped; streams nothing reaches are closed; and the
+  constant slots of dead code are reused.
+- **Repeated pointers** are skipped while scanning, which matters for the Prolog engine's big vectors.
+
+The roots are the scanned extent of each thread's guest stack, the global cells and constants, what C holds, and a few VM
+fields. C holds values in explicitly registered locals, per thread, and in the roots that outlive a call (`shen_root_new`), which a
+thread with no lock may delete, so a collection first drains the list of those deleted.
+
+The stack is scanned linearly, from its base to the published top, which three rules make sound:
+
+- **Clear above the top.** Each collection clears the slots above the published top, up to a mark of how far the stack has been
+  dirtied. Those slots are dead by the call-window invariants, and would hold stale pointers when a larger caller resumes. So every slot always holds
+  a current value or the cleared value, and functions need not initialise their slots.
+- **The stack never shrinks during guest execution, and new stack starts cleared.**
+- **Return addresses scan as fixnums.** Return labels are aligned to 4 bytes, so their low bits match the zero tag.
+
+Under `SHEN_JIT_GC_STRESS` the collector also overwrites the old space, so that a stale pointer fails at once.
+
+## Threads
+
+`thread` makes real threads, of which one runs at a time, holding a global lock. A timer asks for a switch every 10 ms if another
+thread is waiting, by the same mechanism as an interrupt: it clears the limit that frames check, so the next function entry or loop check comes to
+the runtime. Each thread has its own guest stack, handlers, C roots, native stack bound and saved error codes, swapped as the lock changes hands.
+A thread about to wait gives the lock up, and a foreign call can too.
+
+The first thread has everything compile again on its next call, since loops must then test for a switch, and code compiled before need not have.
+The same goes for the REPL, when it starts catching Ctrl-C.
+
+## Calling C
+
+Foreign functions are procedures entered through one shared stub, so a call needs no new instruction and no code per signature. See
+[ffi.md](ffi.md).
+
+## Left out on purpose
+
+- **An interpreter.** A target without an SLJIT backend could add one: the slot layout and instructions do not depend on the JIT. It would be
+  selected for the whole VM, never mixed with native code.
+- **A generational collector.** The C API is written so that one stays possible: see [ffi.md](ffi.md).
+- **Bignums.** An integer result outside the 62-bit range raises an error.

@@ -1,0 +1,142 @@
+"Independent tests for each instruction and each primitive path. Each t-
+function returns a fixnum or a Boolean computed without =, or raises."
+
+(defun t-move (A B) (let X A (let Y B (- (* X 10) Y))))
+
+(defun t-consts () (let L (cons "s" (cons 1.5 (cons sym (cons () (cons true (cons -7 ())))))) (t-len L 0)))
+
+(defun t-const-values () (if (string? "s") (if (= (hd (tl (cons 0 (cons sym ())))) sym) (+ -7 (hd (cons 10 ()))) 0) 0))
+
+(defun t-len (L N) (if (cons? L) (t-len (tl L) (+ N 1)) N))
+
+(defun t-captures (A B C D E F G H) ((lambda X (+ X (+ A (+ B (+ C (+ D (+ E (+ F (+ G H))))))))) 100))
+
+(defun t-nested-captures (A) (let B 20 (((lambda X (lambda Y (+ A (+ B (+ X Y))))) 300) 4000)))
+
+(defun t-thunk (A) (thaw (freeze (+ A 1))))
+
+(defun t-curried () ((lambda X (lambda Y (- X Y))) 50 8))
+
+(defun t-tail-value (F) (F 41))
+
+(defun t-call-tail-value () (t-tail-value (lambda X (+ X 1))))
+
+(defun t-apply-non-procedure () (let F 1 (F 2)))
+
+(defun t-apply-symbol () (let F t-len (F () 0)))
+
+(defun t-undefined () (no-such-function 1))
+
+(defun t-thunk-with-arg () ((freeze 1) 2))
+
+(defun t-lambda-no-arg () ((lambda X X)))
+
+(defun t-cond (X) (cond ((= X 1) 10) ((= X 2) 20)))
+
+(defun t-cond-1 () (t-cond 1))
+
+(defun t-cond-2 () (t-cond 2))
+
+(defun t-cond-none () (t-cond 3))
+
+(defun t-handler-literal () (trap-error (+ 1 (hd ())) (lambda E 7)))
+
+(defun t-handler-value (H) (trap-error (simple-error "x") H))
+
+(defun t-handler-closure () (t-handler-value (lambda E 8)))
+
+(defun t-handler-nested () (trap-error (+ 1 (trap-error (simple-error "inner") (lambda E (simple-error "outer")))) (lambda E 9)))
+
+(defun t-handler-message () (trap-error (simple-error "abc") (lambda E (t-strlen (error-to-string E)))))
+
+(defun t-strlen (S) (t-strlen-h S 0))
+
+(defun t-strlen-h (S N) (if (= S "") N (if (= S "a") (+ N 1) (if (= S "ab") (+ N 2) (if (= S "abc") (+ N 3) -1)))))
+
+(defun t-handler-escapes () (trap-error (simple-error "x") (lambda E (hd ()))))
+
+(defun t-handler-not-procedure () (trap-error (simple-error "x") 7))
+
+(defun t-handler-unused () (trap-error 5 (lambda E 6)))
+
+(defun t-handler-depth (N) (if (= N 0) (simple-error "d") (trap-error (t-handler-depth (- N 1)) (lambda E (+ N 0)))))
+
+(defun t-and (A B) (and A B))
+
+(defun t-or (A B) (or A B))
+
+(defun t-and-bad () (and true 1))
+
+(defun t-or-bad () (or false 1))
+
+(defun t-if-bad () (if 1 a b))
+
+(defun t-add-real () (+ 1.5 2))
+
+(defun t-add-real-check () (let R (+ 1.5 2) (if (< R 3.6) (if (> R 3.4) 1 0) 0)))
+
+(defun t-sub-overflow () (- -2305843009213693952 1))
+
+(defun t-add-overflow () (+ 2305843009213693951 1))
+
+(defun t-mul () (* 123 -45))
+
+(defun t-mul-overflow () (* 2305843009213693951 2))
+
+(defun t-div-exact () (/ 84 2))
+
+(defun t-div-real () (let R (/ 1 4) (if (< R 0.26) (if (> R 0.24) 1 0) 0)))
+
+(defun t-div-zero () (/ 1 0))
+
+(defun t-add-non-number () (+ 1 a))
+
+(defun t-less-non-number () (< a 1))
+
+(defun t-compare (A B) (+ (if (< A B) 1 0) (+ (if (> A B) 10 0) (+ (if (<= A B) 100 0) (if (>= A B) 1000 0)))))
+
+(defun t-compare-real () (t-compare 1.5 2))
+
+(defun t-eq-fixnums () (if (= 3 3) (if (= 3 4) 0 1) 0))
+
+(defun t-eq-int-real () (= 8 (+ 0.5 7.5)))
+
+(defun t-eq-strings () (= "abc" "abc"))
+
+(defun t-eq-lists () (= (cons 1 (cons 2 ())) (cons 1 (cons 2 ()))))
+
+(defun t-eq-lists-differ () (= (cons 1 (cons 2 ())) (cons 1 (cons 3 ()))))
+
+(defun t-eq-vectors () (= (absvector 2) (absvector 2)))
+
+(defun t-eq-symbols () (= abc abc))
+
+(defun t-eq-mixed () (= 1 "1"))
+
+(defun t-hd-bad () (hd 5))
+
+(defun t-tl-bad () (tl "x"))
+
+(defun t-consp () (+ (if (cons? (cons 1 2)) 1 0) (+ (if (cons? ()) 10 0) (if (cons? 7) 100 0))))
+
+(defun t-vector () (let V (absvector 3) (let W (address-> V 1 42) (<-address W 1))))
+
+(defun t-vector-fresh () (= (<-address (absvector 1) 0) shen.fail!))
+
+(defun t-vector-bad-index () (<-address (absvector 1) 1))
+
+(defun t-vector-bad-length () (absvector -1))
+
+(defun t-globals () (let X (set t-global 5) (+ X (value t-global))))
+
+(defun t-unbound () (value t-never-set))
+
+(defun t-number? () (+ (if (number? 1) 1 0) (+ (if (number? 1.5) 10 0) (if (number? a) 100 0))))
+
+(defun t-error-to-string-bad () (error-to-string 1))
+
+(defun t-tail-loop (N) (if (= N 0) done (t-tail-loop (- N 1))))
+
+(defun t-tail-value-loop (F N) (if (= N 0) done (F F (- N 1))))
+
+(defun t-call-tail-value-loop () (t-tail-value-loop (lambda F (lambda N (if (= N 0) done ((F F) (- N 1))))) 100000))

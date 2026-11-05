@@ -1,0 +1,36 @@
+# Renders the guide, docs/guide.md, and publishes it to GitHub Pages whenever it or what renders
+# it changes. Pages must have "GitHub Actions" as its source in the repository's settings.
+name: Guide
+
+on:
+  push:
+    branches: [main]
+    paths: ['docs/guide.md', 'site/**', 'assets/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Render the guide
+        run: |
+          sudo apt-get update && sudo apt-get install -y pandoc
+          make guide
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/guide
+      - id: deploy
+        uses: actions/deploy-pages@v5

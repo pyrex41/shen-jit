@@ -1,0 +1,139 @@
+PASS call-defun
+PASS call-saturated
+PASS call-too-few
+PASS call-too-many
+PASS call-zero-args
+PASS call-undefined
+PASS call-closure-overapply
+PASS call-closure-too-few
+PASS call-thunk
+PASS call-thunk-with-arg
+PASS call-symbol-value
+PASS call-non-procedure
+PASS call-self-evaluating
+PASS call-lexical-scope
+PASS call-defun-loop
+PASS call-tail-loop
+PASS call-defun-even
+PASS call-defun-odd
+PASS call-mutual-tail
+PASS call-defun-len
+PASS call-deep-non-tail
+PASS call-defun-doloop
+PASS call-do-tail
+PASS call-eval-kl-expr
+PASS call-eval-kl-defun
+PASS call-eval-kl-defined
+PASS handler-message
+PASS handler-no-error
+PASS handler-primitive-error
+PASS handler-nested
+PASS handler-defun-deep
+PASS handler-unwinds-frames
+PASS handler-argument-error
+PASS handler-not-procedure
+PASS handler-defun-loop
+PASS handler-in-tail-loop
+PASS handler-returns-closure
+PASS error-non-string
+PASS error-to-string-non-exception (deviation)
+PASS eq-int-real-literal (deviation)
+PASS eq-int-real-variables
+PASS eq-signed-zero
+PASS hash-int-real (deviation)
+PASS hash-bound
+PASS eq-strings
+PASS eq-lists
+PASS eq-lists-differ
+PASS eq-fresh-absvectors
+PASS eq-absvectors-differ
+PASS eq-closures-distinct
+PASS eq-closure-identity
+PASS eq-boolean-symbol
+PASS eq-symbol
+PASS eq-number-string
+PASS num-divide-exact
+PASS num-divide-exact-integer
+PASS num-divide-inexact
+PASS num-divide-zero
+PASS num-divide-real-zero
+PASS num-overflow-add (deviation)
+PASS num-overflow-multiply (deviation)
+PASS num-non-number
+PASS num-compare-non-number
+PASS num-str-integer
+PASS num-str-integral-real
+PASS str-pos
+PASS str-pos-past-end
+PASS str-pos-negative
+PASS str-tlstr
+PASS str-tlstr-empty
+PASS str-string-n
+PASS str-string-n-empty
+PASS str-n-string
+PASS str-n-string-byte
+PASS str-n-string-above-byte (deviation)
+PASS str-cn-non-string
+PASS str-of-string
+PASS str-of-symbol
+PASS str-of-boolean
+PASS str-of-empty-list
+PASS sym-intern-digits
+PASS sym-intern-non-string
+PASS ctl-if-non-boolean
+PASS ctl-and-short-circuit
+PASS ctl-and-second-non-boolean
+PASS ctl-or-short-circuit
+PASS ctl-or-second-non-boolean
+PASS ctl-cond
+PASS ctl-cond-no-match (deviation)
+PASS ctl-type
+PASS mut-address
+PASS mut-closure-sees-store
+PASS mut-fresh-element
+PASS mut-address-returns-vector
+PASS mut-index-past-end
+PASS mut-index-empty
+PASS mut-negative-length
+PASS glob-set
+PASS glob-reset
+PASS glob-unbound
+PASS glob-set-non-symbol
+PASS io-write
+PASS io-read
+PASS io-close-twice
+PASS io-read-closed
+PASS io-write-to-input
+PASS io-write-non-byte
+PASS io-open-missing
+PASS io-open-bad-direction
+PASS io-char-stream
+PASS io-read-unit-string
+PASS io-home-directory
+PASS time-run
+PASS time-unix
+PASS time-bad-option
+PASS time-real (deviation)
+PASS redef-g1
+PASS redef-g2
+PASS redef-before
+PASS redef-g1-again
+PASS redef-open-call
+PASS redef-arity-1
+PASS redef-arity-2
+PASS redef-arity-new
+PASS redef-arity-old-call
+PASS redef-mk
+PASS redef-save
+PASS redef-mk-again
+PASS redef-saved-closure
+PASS redef-new-closure
+PASS redef-g4
+PASS redef-malformed (deviation)
+PASS redef-after-malformed (deviation)
+PASS redef-fixed-name (deviation)
+PASS seal-redefine-kernel
+PASS seal-open-call
+PASS seal-kernel-call
+
+137 passed, 0 failed (shen-scheme)
