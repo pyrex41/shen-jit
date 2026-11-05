@@ -1210,12 +1210,12 @@ static void spill(Emit *e)
         sljit_emit_op1(e->c, SLJIT_MOV, SLOT(2 + k), SLJIT_S(4 + k), 0);
 }
 
-/* C keeps no float register, nor these integer registers. */
+/* C keeps no float register, nor these integer registers, memory kept for a loop among them. */
 static void save_raw(Emit *e)
 {
     for (uint32_t k = 0; k < e->reals && k < REAL_FLOATS; k++)
         sljit_emit_fop1(e->c, SLJIT_MOV_F64, REAL_SAVED(k), REAL(k));
-    for (uint32_t k = 0; k < e->word_regs && (sljit_s32)k < WORD_GPRS; k++)
+    for (uint32_t k = 0; k < e->word_regs + 3 * e->nmemory && (sljit_s32)k < WORD_GPRS; k++)
         sljit_emit_op1(e->c, SLJIT_MOV, RAW_SAVED(k), RAW(k));
 }
 
@@ -1223,7 +1223,7 @@ static void load_raw(Emit *e)
 {
     for (uint32_t k = 0; k < e->reals && k < REAL_FLOATS; k++)
         sljit_emit_fop1(e->c, SLJIT_MOV_F64, REAL(k), REAL_SAVED(k));
-    for (uint32_t k = 0; k < e->word_regs && (sljit_s32)k < WORD_GPRS; k++)
+    for (uint32_t k = 0; k < e->word_regs + 3 * e->nmemory && (sljit_s32)k < WORD_GPRS; k++)
         sljit_emit_op1(e->c, SLJIT_MOV, RAW(k), RAW_SAVED(k));
 }
 

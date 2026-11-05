@@ -1062,6 +1062,64 @@
                      (+ Acc (shen-jit.u32 M 0) (shen-jit.u16 M 4) (shen-jit.u8 M 6) (shen-jit.s32 M 0) (shen-jit.f64 M 8)))))
 (native-test.check "every width, round a loop" 16.5 (freeze (native-test.widths-loop (shen-jit.bytes 16) 0 3 0)))
 
+\\ C that does not collect needs nothing worked out again, but keeps no register, and = on long
+\\ lists or vectors and cn on long strings all use plenty of them.
+(define native-test.kept-text
+  0 Acc -> Acc
+  N Acc -> (native-test.kept-text (- N 1) (cn Acc "x")))
+
+(define native-test.kept-list
+  0 End -> [End]
+  N End -> [(* 1.5 N) "text" (native-test.kept-text 40 "") | (native-test.kept-list (- N 1) End)])
+
+(define native-test.kept-vector
+  V 0 End -> (address-> V 1 End)
+  V I End -> (native-test.kept-vector (address-> V I (* 0.5 I)) (- I 1) End))
+
+(define native-test.kept-equal
+  B1 B2 B3 B4 I N X Y Acc -> Acc where (>= I N)
+  B1 B2 B3 B4 I N X Y Acc
+  -> (native-test.kept-equal B1 B2 B3 B4 (+ I 1) N X Y
+       (if (= X Y)
+           -1000000
+           (+ Acc (+ (shen-jit.u8 B1 I) (+ (shen-jit.u8 B2 I) (+ (shen-jit.u8 B3 I) (shen-jit.u8 B4 I))))))))
+
+(define native-test.kept-four
+  F -> (F (native-test.counting-bytes 64) (native-test.counting-bytes 64)
+          (native-test.counting-bytes 64) (native-test.counting-bytes 64)))
+
+(native-test.check "kept across = on lists" 8064
+  (freeze (native-test.kept-four
+            (/. A B C D (native-test.kept-equal A B C D 0 64 (native-test.kept-list 200 1) (native-test.kept-list 200 2) 0)))))
+(native-test.check "kept across = on vectors" 8064
+  (freeze (native-test.kept-four
+            (/. A B C D (native-test.kept-equal A B C D 0 64 (native-test.kept-vector (vector 200) 200 1.25)
+                                                (native-test.kept-vector (vector 200) 200 1.75) 0)))))
+
+(define native-test.kept-cn
+  B1 B2 B3 B4 I N X Acc -> Acc where (>= I N)
+  B1 B2 B3 B4 I N X Acc
+  -> (let Joined (cn X X)
+       (native-test.kept-cn B1 B2 B3 B4 (+ I 1) N X
+         (+ Acc (+ (shen-jit.u8 B1 I) (+ (shen-jit.u8 B2 I) (+ (shen-jit.u8 B3 I) (shen-jit.u8 B4 I))))))))
+(native-test.check "kept across cn" 8064
+  (freeze (native-test.kept-four (/. A B C D (native-test.kept-cn A B C D 0 64 (native-test.kept-text 2000 "") 0)))))
+
+(define-native native-test.kept-equal-registers (B1 B2 B3 B4 X Y N)
+  (word I 0)
+  (word Acc 0)
+  (loop top)
+  (jump-unless-word (< I N) done)
+  (prim T = X Y)
+  (word Acc (+ Acc (+ (u8 B1 I) (+ (u8 B2 I) (+ (u8 B3 I) (u8 B4 I))))))
+  (word I (+ I 1))
+  (again top)
+  (label done)
+  (return-word Acc))
+(native-test.check "and in registers" 8064
+  (freeze (native-test.kept-four
+            (/. A B C D (native-test.kept-equal-registers A B C D (native-test.kept-list 200 1) (native-test.kept-list 200 2) 64)))))
+
 \\ What must be refused.
 (native-test.refused "a word unset" (freeze (define-native native-test.bad (A) (word X (+ Y 1)) (word Y 1) (return-word X))))
 (native-test.refused "a word as a slot" (freeze (define-native native-test.bad (A) (word X A) (prim Y + X 1) (return Y))))
