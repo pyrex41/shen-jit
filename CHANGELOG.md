@@ -19,13 +19,16 @@ All notable changes to this project are documented in this file. The format is b
 - `shen-jit.pointer-read-only` makes a pointer that raises when stored to, which is what `mmap.read` gives.
 - Real registers in native code written by hand: `real`, `f64!`, `jump-unless`, `return-real` and `loop` keep
   doubles unboxed in loops that call nothing.
-- `make bench-numeric` runs numeric programs in C and in Shen.
+- Word registers there too: `word`, `jump-unless-word`, `return-word`, `word-box`, and `u8!` to `u64!` keep 64-bit
+  integers that wrap, for hashes and random numbers, and as indices with no tag to check.
+- `make bench-numeric` runs numeric programs and a path tracer in C and in Shen.
 - The rendered guide now has how Shen/JIT works, its semantics, its instructions and calling C as pages of
   their own.
 
 ### Changed
 
 - Arithmetic and comparisons on reals, and division, compile inline.
+- A loop that calls nothing works out the memory it reads and stores through once, on the way in.
 
 ### Fixed
 

@@ -675,7 +675,22 @@ For numeric work, `real` keeps doubles unboxed in registers, in code that calls 
 ```
 
 Every read and store is still checked against its memory's length, and nothing in these loops allocates until
-`return-real` boxes the result.
+`return-real` boxes the result. `word` does the same for 64-bit integers, which wrap, for hashes and random numbers, and as an
+index, which then has no tag to check:
+
+```shen
+(define-native fnv (Bytes End)
+  (word Prime 1099511628211)
+  (word Hash (+ (* 3421674724 4294967296) 2216829733))
+  (word I 0)
+  (loop)
+  (jump-unless-word (< I End) done)
+  (word Hash (* (bit-xor Hash (u8 Bytes I)) Prime))
+  (word I (+ I 1))
+  (tail-call fnv Bytes End)
+  (label done)
+  (return-word (shift-right Hash 8)))
+```
 
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Native code written by hand", has
 the instructions.
@@ -800,7 +815,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-linux` | Every suite on Linux arm64 and x86-64, in Docker, from a source tarball. Needs pandoc, as `make dist` does |
 | `make deps` | Fetches the kernel and the earlier release of Shen/JIT that makes the generated files |
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
-| `make bench-numeric` | Numeric programs in C, in Shen with boxed reals, and in Shen with real registers |
+| `make bench-numeric` | Numeric programs and a path tracer, in C and in Shen with raw registers, and those programs with boxed reals too |
 | `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library), to check that gains are not fitted to the benchmarks |
 | `make guide` | Renders this guide and its documents' pages to `build/guide/`, with [pandoc](https://pandoc.org) |
 | `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |

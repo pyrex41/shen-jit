@@ -177,6 +177,40 @@
 (memory-test.raises "as a dead pointer does" "bytes: 0" (freeze (memory-test.real-double (value fixed) (value doubled) 0 8)))
 (memory.free (value fixed))
 
+\\ A loop works out its memory on the way in, so it must see what C did since.
+(define memory-test.kill-then-read
+  M 0 Acc -> Acc
+  M 1 Acc -> (let K (shen-jit.pointer-kill M) (memory-test.kill-then-read M 0 (+ Acc (shen-jit.u8 M 0))))
+  M N Acc -> (memory-test.kill-then-read M (- N 1) (+ Acc (shen-jit.u8 M 0))))
+
+(set killable (memory.alloc 8))
+(memory-test.check "read round a loop" 0 (freeze (memory-test.kill-then-read (value killable) 0 0)))
+(memory-test.raises "killed during a loop" "bytes: 0"
+                    (freeze (memory-test.kill-then-read (shen-jit.pointer-sized (value killable) 8) 3 0)))
+
+(define memory-test.store-round
+  M I N -> M where (>= I N)
+  M I N -> (memory-test.store-round (shen-jit.u8! M I 1) (+ I 1) N))
+(memory-test.check "stores round a loop" 1 (freeze (shen-jit.u8 (memory-test.store-round (value killable) 0 8) 7)))
+(memory-test.raises "and refused on one read only" "bytes: "
+                    (freeze (memory-test.store-round (shen-jit.pointer-read-only (value killable)) 0 8)))
+
+(define-native memory-test.word-store-round (M N)
+  (word I 0)
+  (loop)
+  (jump-unless-word (< I N) done)
+  (u8! M I 9)
+  (word I (+ I 1))
+  (tail-call memory-test.word-store-round M N)
+  (label done)
+  (return M))
+(memory-test.check "in word registers" 9 (freeze (shen-jit.u8 (memory-test.word-store-round (value killable) 8) 7)))
+(memory-test.raises "read only, in word registers" "bytes: "
+                    (freeze (memory-test.word-store-round (shen-jit.pointer-read-only (value killable)) 8)))
+(memory-test.raises "and past its end" "bytes: 8" (freeze (memory-test.word-store-round (value killable) 9)))
+(memory.free (value killable))
+(memory-test.raises "and on one freed" "bytes: 0" (freeze (memory-test.word-store-round (value killable) 8)))
+
 \\ Native code written by hand reads it as it reads a buffer.
 (define-native memory-test.sum-u32 (M I N Acc)
   (prim Done >= I N)

@@ -88,7 +88,7 @@ x86-64, and runs the fast suites on them. GC stress, the sanitizers and the muta
 - Run `make bench` when a change can affect code beyond its target, such as branch shapes on common paths.
 - Check that a gain holds outside the benchmarks: `make bench-independent` times workloads never used for tuning, which mostly load, compile and typecheck code. A benchmark gain that does not
   show there, or a loss there, is fitting the benchmarks or a cost in compile time.
-- For real arithmetic and real registers, `make bench-numeric` runs five programs in C, in boxed Shen and with registers. All three print a check, which must agree to the last digit.
+- For real arithmetic and raw registers, `make bench-numeric` runs five programs in C, in boxed Shen and with registers, and a path tracer in C and with registers. Each prints a check, which must agree to the last digit.
 - Some rows move with where code and data lie, not with what they run: `vector create (big)` with the heap pointer's parity, and `list traversal`, `match vector`, `symbol? (true)`, `shen.sysfunc?` and
   `captured-unary-ordinary` with what else the process compiled. Before acting on a slower row, time it alone; if a change alters branch shapes, also time it with the code shifted by a few unrelated definitions compiled first.
 - To profile on macOS, run with `SHEN_JIT_PERF_MAP=1`, sample the process with `sample PID SECONDS`, and resolve JIT addresses against `/tmp/perf-PID.map`. `SHEN_JIT_PROFILE` uses SIGPROF, whose samples land where system calls

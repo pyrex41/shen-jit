@@ -205,6 +205,9 @@ inline for both; the others call C for both. `f64` allocates where it reads, and
 is in memory, so it takes no floating point. `f64!` takes a real inline, and leaves an integer to C. A read-only
 pointer differs in its header, which a store tests whole, so no other access pays for it.
 
+A loop that calls nothing and has no handlers, and reads or stores through a parameter it never changes, works out that memory's base and lengths once, on the way in, for any code,
+written by hand or not. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer gets 0 for stores.
+
 | Form | Result |
 | --- | --- |
 | `(shen-jit.bytes N)` | A new buffer of N zero bytes. |
@@ -487,9 +490,12 @@ accepted something the JIT cannot compile.
 
 What is in a slot stays tagged, also with byte buffers and bit operations.
 
-### Real registers
+### Real and word registers
 
-Doubles can live unboxed in 12 real registers, a namespace of their own. The collector does not look at them, and C
+Doubles can live unboxed in 48 real registers, and 64-bit integers, which wrap, in 16 word registers, each a namespace of
+its own. The first 12 real registers are float registers, and the first word registers are integer registers, as many as a target has
+to spare: 11 on arm64, 2 on x86-64, none on Windows. The rest are places in the native frame. The builder gives machine registers
+to the most used names. The collector does not look at any of them, and C
 does not keep them, so the JIT saves them to the native frame around any call to C that returns: a collection, a
 primitive, an interrupt check. Nothing saves them across a call of a function, so **code using them calls nothing and
 has no handlers**, though it may tail call. That is what makes raw values safe here, where a raw frame slot could not
@@ -502,12 +508,22 @@ be: the collector reads every slot as a value.
 | `(jump-unless (Op E1 E2) L)` | Jump to L unless E1 Op E2, with Op one of `<`, `>`, `<=`, `>=` and `=`. NaN compares false. |
 | `(real-box D E)` | Slot D := a new real holding E. |
 | `(return-real E)` | Return a new real holding E. |
+| `(word X W)` | Word register X := the value of W. |
+| `(u8! M I W)`, `u16!`, `u32!`, `u64!` | Store the low bits of W at byte offset I of M. |
+| `(jump-unless-word (Op W1 W2) L)` | Jump to L unless W1 Op W2, with Op one of `<`, `>`, `<=`, `>=`, `=`, and unsigned `u<`, `u>`, `u<=`, `u>=`. |
+| `(word-box D W)`, `(return-word W)` | Slot D := W as an integer, or return that. What does not fit a fixnum raises. |
 | `(loop)` | Self tail calls come back here. Only straight-line code may come before it, and at most one in a function. |
 
-An expression E is a register; a number, a slot or `(const K)`, whose number is read with a check, an integer
-converted, and anything else raising; `(+ E1 E2)`, `(- E1 E2)`, `(* E1 E2)`, `(/ E1 E2)`; `(neg E)`, `(abs E)`, `(sqrt E)`; or
-`(f64 M I)`, read and checked as `shen-jit.f64` is. `(+ A B C)` is `(+ A (+ B C))`, as Shen's macro makes it. An index I may be
-integer arithmetic through `prim`, as `(+ I 8)`. Intermediate values take registers too, and more than 12 in a function is refused.
+A real expression E is a real register; a word register, converted; a number, a slot or `(const K)`, whose number is read with a check, an integer
+converted, and anything else raising; `(+ E1 E2)`, `(- E1 E2)`, `(* E1 E2)`, `(/ E1 E2)`; `(neg E)`, `(abs E)`, `(sqrt E)`;
+`(f64 M I)`, read and checked as `shen-jit.f64` is; or any word expression below that only words can be, converted. `(+ A B C)` is `(+ A (+ B C))`, as Shen's macro makes it.
+
+A word expression W is a word register; an integer, or `(const K)`; a slot, which must hold an integer; `(+ W1 W2)`, `(- W1 W2)`, `(* W1 W2)`, `(neg W)`;
+`(bit-and W1 W2)`, `(bit-or W1 W2)`, `(bit-xor W1 W2)`, `(bit-not W)`; `(shift-left W N)`, `(shift-right W N)`, which fills with zeroes, `(shift-right-signed W N)`, `(rotate-left W N)`,
+`(rotate-right W N)`, whose counts are taken modulo 64; `(u8 M I)`, `(u16 M I)`, `(u32 M I)`, `(s32 M I)`, `(u64 M I)`; or `(truncate E)`, toward zero, of a real expression, which is the machine's own beyond 64 bits.
+Arithmetic wraps and raises nothing. A literal has to fit a fixnum, so a wider constant is built, once, before `(loop)`.
+
+An index I that mentions a word register is a word expression, with no tag to check and only the bound; one that does not is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, and more than the registers there are is refused.
 
 - **Division is IEEE's:** dividing by zero gives an infinity or a NaN, where `/` raises.
 - **A register keeps its value round the loop,** so it is how a loop carries a real. What comes before `(loop)` runs
@@ -517,4 +533,5 @@ integer arithmetic through `prim`, as `(+ I 8)`. Intermediate values take regist
 - **Every access is checked,** and those checks are what is left between these loops and C.
 
 The builder turns these into instructions that `shen-jit.install-code` takes too, with registers numbered from 0: `(real-number F O)`, `(real-box D F)`, `(real-move D F)`, `(real-neg D F)`, `(real-abs D F)`,
-`(real-sqrt D F)`, `(real+ D A B)`, `(real- D A B)`, `(real* D A B)`, `(real/ D A B)`, `(real-unless< A B L)`, with `>`, `<=`, `>=` and `=`, `(real-load F M I)`, `(real-store M I F)` and `(loop)`.
+`(real-sqrt D F)`, `(real+ D A B)`, `(real- D A B)`, `(real* D A B)`, `(real/ D A B)`, `(real-unless< A B L)`, with `>`, `<=`, `>=` and `=`, `(real-load F M I)`, `(real-store M I F)`, `(real-load-at F M W)`, `(real-store-at M W F)`, `(real-from-word F W)`, `(word-from-real W F)`,
+`(word-number W O)`, `(word-box D W)`, `(word-move W V)`, `(word+ D A B)`, with `-`, `*`, `word-and`, `word-or`, `word-xor`, `word-shl`, `word-shr`, `word-sar`, `word-rotl` and `word-rotr`, `(word-unless< A B L)`, with `>`, `<=`, `>=`, `=`, `-u<`, `-u>`, `-u<=` and `-u>=`, `(word-load8 D M W)`, with `16`, `32`, `-s32` and `64`, `(word-store8 M W V)`, with `16`, `32` and `64`, and `(loop)`. An operand of a word instruction that it only reads may be `(const K)`.

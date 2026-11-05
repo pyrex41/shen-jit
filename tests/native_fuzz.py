@@ -46,6 +46,15 @@ BASES = [
     "(code fuzz.f 2 8 (8 1.5 16) ((prim 4 shen-jit.bytes (const 2)) (real-number 0 (const 1)) (real-store 4 (const 0) 0)"
     " (real-load 1 4 (const 0)) (real-unless< 0 1 0) (real-box 5 1) (return 5) (label 0) (real-neg 2 0) (real-box 5 2)"
     " (return 5)) ())",
+    # Word registers: a hash over memory in a loop, every kind of access, and what comes back.
+    "(code fuzz.f 2 8 (0 8 1099511628211) ((prim 4 shen-jit.bytes (const 1)) (word-number 0 (const 0))"
+    " (word-number 1 (const 2)) (word-move 2 (const 0)) (loop) (word-unless-u< 2 (const 1) 0) (word-load8 3 4 2)"
+    " (word-xor 0 0 3) (word* 0 0 1) (word-store8 4 2 0) (word+ 2 2 (const 1)) (tail-call 0 fuzz.f 2)"
+    " (label 0) (word-shr 0 0 (const 8)) (word-box 5 0) (return 5)) ())",
+    # Words as indices of reals, and each way between the two kinds.
+    "(code fuzz.f 2 8 (16 1.5 8) ((prim 4 shen-jit.bytes (const 0)) (real-number 0 (const 1)) (word-number 0 (const 2))"
+    " (real-store-at 4 0 0) (real-load-at 1 4 0) (word-from-real 1 1) (real-from-word 2 1) (word-box 5 1) (real-box 6 2)"
+    " (prim 7 cons 5 6) (return 7)) ())",
 ]
 ATOMS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, -1] + ['foo', 'fuzz.g', 'fuzz.f', 'reverse', 'hd', 'tl', 'cons', 'cons?', '+', '=', 'str']
 INSNS = ["(move 4 2)", "(const 4 0)", "(prim 4 cons? 2)", "(jump-if-false 4 0)", "(jump 0)", "(label 9)",
@@ -53,7 +62,11 @@ INSNS = ["(move 4 2)", "(const 4 0)", "(prim 4 cons? 2)", "(jump-if-false 4 0)",
          "(call 4 4 fuzz.g 1)", "(call-value 4 4 0)", "(tail-call 0 fuzz.f 2)", "(tail-call 4 fuzz.g 1)", "(closure 4 0 2)",
          "(prim 4 hd 2)", "(prim 2 tl 2)", "(move 2 4)", "(prim 4 cons (const 0) 2)", "(jump-unless-entry 2 2 0)",
          "(real-number 0 2)", "(real-number 1 (const 0))", "(real+ 0 0 1)", "(real-move 1 0)", "(real-box 4 0)",
-         "(real-load 0 2 3)", "(real-store 2 3 0)", "(real-unless< 0 1 0)", "(loop)"]
+         "(real-load 0 2 3)", "(real-store 2 3 0)", "(real-unless< 0 1 0)", "(loop)", "(word-number 0 2)",
+         "(word-move 1 (const 0))", "(word+ 0 0 1)", "(word-shl 0 0 1)", "(word-box 4 0)", "(word-load8 0 2 1)",
+         "(word-load64 0 2 1)", "(word-store8 2 1 0)", "(word-store64 2 1 0)", "(real-load-at 0 2 1)",
+         "(real-store-at 2 1 0)", "(word-unless< 0 1 0)", "(word-unless-u>= 0 (const 0) 0)", "(word-from-real 0 0)",
+         "(real-from-word 0 0)"]
 
 
 def parse(text):

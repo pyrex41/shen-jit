@@ -355,6 +355,9 @@ bench-numeric: $(BUILD)/shen-jit
 	$(BUILD)/numeric-c
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l tests/bench/numeric.shen | $(NUMERIC_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/native.shen -l lib/memory.shen -l tests/bench/numeric-raw.shen | $(NUMERIC_RESULT)
+	$(CC) -O2 -ffp-contract=off -o $(BUILD)/trace-c tests/bench/trace.c -lm
+	$(BUILD)/trace-c
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/native.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.shen -l tests/bench/trace.shen | $(NUMERIC_RESULT)
 
 measure: $(BUILD)/test_jit $(BUILD)/bench/programs.sbc
 	cd $(BUILD) && ./test_jit bench/programs.sbc --measure

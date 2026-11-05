@@ -142,7 +142,7 @@ static void heat(long w, long h, long sweeps)
             for (long j = 1; j < h - 1; j++) {
                 long odd = (j + colour) & 1;
                 for (long i = 1 + odd; i < w - 1; i += 2)
-                    g[j * w + i] = 0.25 * (g[j * w + i - 1] + g[j * w + i + 1] + g[(j - 1) * w + i] + g[(j + 1) * w + i]);
+                    g[j * w + i] = 0.25 * ((g[j * w + i - 1] + g[j * w + i + 1]) + (g[(j - 1) * w + i] + g[(j + 1) * w + i]));
             }
     report("heat", g[(h / 2) * w + w / 2], t0);
 }

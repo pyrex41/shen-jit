@@ -46,7 +46,43 @@
     X(OP_REAL_UNLESS_GE, "real-unless>=", 3)  \
     X(OP_REAL_UNLESS_EQ, "real-unless=", 3)   \
     X(OP_REAL_LOAD, "real-load", 3)           \
-    X(OP_REAL_STORE, "real-store", 3)
+    X(OP_REAL_STORE, "real-store", 3)         \
+    X(OP_REAL_LOAD_AT, "real-load-at", 3)     \
+    X(OP_REAL_STORE_AT, "real-store-at", 3)   \
+    X(OP_REAL_FROM_WORD, "real-from-word", 2) \
+    X(OP_WORD_FROM_REAL, "word-from-real", 2) \
+    X(OP_WORD_NUMBER, "word-number", 2)       \
+    X(OP_WORD_BOX, "word-box", 2)             \
+    X(OP_WORD_MOVE, "word-move", 2)           \
+    X(OP_WORD_ADD, "word+", 3)                \
+    X(OP_WORD_SUB, "word-", 3)                \
+    X(OP_WORD_MUL, "word*", 3)                \
+    X(OP_WORD_AND, "word-and", 3)             \
+    X(OP_WORD_OR, "word-or", 3)               \
+    X(OP_WORD_XOR, "word-xor", 3)             \
+    X(OP_WORD_SHL, "word-shl", 3)             \
+    X(OP_WORD_SHR, "word-shr", 3)             \
+    X(OP_WORD_SAR, "word-sar", 3)             \
+    X(OP_WORD_ROTL, "word-rotl", 3)           \
+    X(OP_WORD_ROTR, "word-rotr", 3)           \
+    X(OP_WORD_UNLESS_LT, "word-unless<", 3)   \
+    X(OP_WORD_UNLESS_GT, "word-unless>", 3)   \
+    X(OP_WORD_UNLESS_LE, "word-unless<=", 3)  \
+    X(OP_WORD_UNLESS_GE, "word-unless>=", 3)  \
+    X(OP_WORD_UNLESS_EQ, "word-unless=", 3)   \
+    X(OP_WORD_UNLESS_ULT, "word-unless-u<", 3) \
+    X(OP_WORD_UNLESS_UGT, "word-unless-u>", 3) \
+    X(OP_WORD_UNLESS_ULE, "word-unless-u<=", 3) \
+    X(OP_WORD_UNLESS_UGE, "word-unless-u>=", 3) \
+    X(OP_WORD_LOAD8, "word-load8", 3)         \
+    X(OP_WORD_LOAD16, "word-load16", 3)       \
+    X(OP_WORD_LOAD32, "word-load32", 3)       \
+    X(OP_WORD_LOAD_S32, "word-load-s32", 3)   \
+    X(OP_WORD_LOAD64, "word-load64", 3)       \
+    X(OP_WORD_STORE8, "word-store8", 3)       \
+    X(OP_WORD_STORE16, "word-store16", 3)     \
+    X(OP_WORD_STORE32, "word-store32", 3)     \
+    X(OP_WORD_STORE64, "word-store64", 3)
 
 enum {
 #define SJ_OP_ENUM(op, name, n) op,
@@ -68,8 +104,42 @@ static inline size_t insn_length(const uint32_t *p)
     return 1 + fixed[p[0]];
 }
 
-/* How many real registers code written by hand has (docs/bytecode.md). */
-#define REAL_REGISTERS 12
+/* The registers of code written by hand (docs/bytecode.md). */
+#define REAL_REGISTERS 48
+#define WORD_REGISTERS 16
+
+/* What each operand of the instructions on them is: s a slot written, o a slot or constant read,
+   r a real register, w a word register written, W a word register or constant read, l a label.
+   real-load and real-store are laid out as prim is, with the real register first. */
+static inline const char *raw_kinds(unsigned op)
+{
+    switch (op) {
+    case OP_LOOP: return "";
+    case OP_REAL_NUMBER: return "ro";
+    case OP_REAL_BOX: return "sr";
+    case OP_REAL_MOVE: case OP_REAL_NEG: case OP_REAL_ABS: case OP_REAL_SQRT: return "rr";
+    case OP_REAL_ADD: case OP_REAL_SUB: case OP_REAL_MUL: case OP_REAL_DIV: return "rrr";
+    case OP_REAL_UNLESS_LT: case OP_REAL_UNLESS_GT: case OP_REAL_UNLESS_LE: case OP_REAL_UNLESS_GE:
+    case OP_REAL_UNLESS_EQ: return "rrl";
+    case OP_REAL_LOAD: case OP_REAL_STORE: return "r";
+    case OP_REAL_LOAD_AT: return "roW";
+    case OP_REAL_STORE_AT: return "oWr";
+    case OP_REAL_FROM_WORD: return "rW";
+    case OP_WORD_FROM_REAL: return "wr";
+    case OP_WORD_NUMBER: return "wo";
+    case OP_WORD_BOX: return "sW";
+    case OP_WORD_MOVE: return "wW";
+    case OP_WORD_ADD: case OP_WORD_SUB: case OP_WORD_MUL: case OP_WORD_AND: case OP_WORD_OR: case OP_WORD_XOR:
+    case OP_WORD_SHL: case OP_WORD_SHR: case OP_WORD_SAR: case OP_WORD_ROTL: case OP_WORD_ROTR: return "wWW";
+    case OP_WORD_UNLESS_LT: case OP_WORD_UNLESS_GT: case OP_WORD_UNLESS_LE: case OP_WORD_UNLESS_GE:
+    case OP_WORD_UNLESS_EQ: case OP_WORD_UNLESS_ULT: case OP_WORD_UNLESS_UGT: case OP_WORD_UNLESS_ULE:
+    case OP_WORD_UNLESS_UGE: return "WWl";
+    case OP_WORD_LOAD8: case OP_WORD_LOAD16: case OP_WORD_LOAD32: case OP_WORD_LOAD_S32: case OP_WORD_LOAD64:
+        return "woW";
+    case OP_WORD_STORE8: case OP_WORD_STORE16: case OP_WORD_STORE32: case OP_WORD_STORE64: return "oWW";
+    default: return NULL;
+    }
+}
 
 /* An operand of prim, jump-if-false or return is a slot, or a constant of
    the code object with this bit set (docs/bytecode.md). */

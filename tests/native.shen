@@ -567,15 +567,350 @@
 (native-test.refused "not a comparison" (freeze (define-native native-test.bad (A) (jump-unless (foo A A) l) (label l) (return A))))
 (native-test.refused "more registers than there are"
   (freeze (define-native native-test.bad (A)
-            (real R0 A) (real R1 A) (real R2 A) (real R3 A) (real R4 A) (real R5 A) (real R6 A)
-            (real R7 A) (real R8 A) (real R9 A) (real R10 A) (real R11 A) (real R12 A)
-            (return-real R12))))
-(native-test.raw "a register out of range" [code native-test.bad 0 3 [0] [[real-number 12 [const 0]] [return [const 0]]] []])
+            (real R0 A) (real R1 A) (real R2 A) (real R3 A) (real R4 A) (real R5 A) (real R6 A) (real R7 A)
+            (real R8 A) (real R9 A) (real R10 A) (real R11 A) (real R12 A) (real R13 A) (real R14 A) (real R15 A)
+            (real R16 A) (real R17 A) (real R18 A) (real R19 A) (real R20 A) (real R21 A) (real R22 A) (real R23 A)
+            (real R24 A) (real R25 A) (real R26 A) (real R27 A) (real R28 A) (real R29 A) (real R30 A) (real R31 A)
+            (real R32 A) (real R33 A) (real R34 A) (real R35 A) (real R36 A) (real R37 A) (real R38 A) (real R39 A)
+            (real R40 A) (real R41 A) (real R42 A) (real R43 A) (real R44 A) (real R45 A) (real R46 A) (real R47 A)
+            (real R48 A) (return-real R48))))
+(native-test.raw "a register out of range" [code native-test.bad 0 3 [0] [[real-number 48 [const 0]] [return [const 0]]] []])
 (native-test.raw "a negative register" [code native-test.bad 0 3 [0] [[real-number -1 [const 0]] [return [const 0]]] []])
 (native-test.raw "a slot for a register" [code native-test.bad 0 3 [0] [[real-box 2 2] [return 2]] []])
 (native-test.raw "a label that is not there" [code native-test.bad 0 3 [0] [[real-number 0 [const 0]] [real-unless< 0 0 9] [return [const 0]]] []])
-(native-test.raw "a load into nothing" [code native-test.bad 1 4 [0] [[real-load 12 2 [const 0]] [return 2]] []])
+(native-test.raw "a load into nothing" [code native-test.bad 1 4 [0] [[real-load 48 2 [const 0]] [return 2]] []])
 (native-test.raw "a store of nothing" [code native-test.bad 1 4 [0] [[real-store 2 [const 0] 0] [return 2]] []])
 (native-test.refused "none of those was installed, again" (freeze ((fn native-test.bad))))
+
+\\ More real registers than the machine gives: those live in the native frame, and work the same.
+(define-native native-test.real-many-more (A)
+  (real R0 A) (real R1 (+ R0 1)) (real R2 (+ R1 1)) (real R3 (+ R2 1)) (real R4 (+ R3 1))
+  (real R5 (+ R4 1)) (real R6 (+ R5 1)) (real R7 (+ R6 1)) (real R8 (+ R7 1)) (real R9 (+ R8 1))
+  (real R10 (+ R9 1)) (real R11 (+ R10 1)) (real R12 (+ R11 1)) (real R13 (+ R12 1)) (real R14 (+ R13 1))
+  (real R15 (sqrt (* R14 R14)))
+  (real R16 (/ (neg R15) 2))
+  (jump-unless (< R16 R0) wrong)
+  (real-box A1 R15)
+  (prim S str A1)
+  (return-real (+ R0 R1 R2 R3 R4 R5 R6 R7 R8 R9 R10 R11 R12 R13 R14 R15 R16))
+  (label wrong)
+  (return wrong))
+(native-test.check "more registers than the machine's" 127.5 (freeze (native-test.real-many-more 1)))
+
+\\ ---------------------------------------------------------------------------
+\\ Word registers.
+
+\\ Each operation, on what fits a fixnum so that it can come back.
+(define-native native-test.word-ops (A B)
+  (word X A)
+  (word Y B)
+  (word S (+ X Y))
+  (word D (- X Y))
+  (word M (* X Y))
+  (word N (neg X))
+  (return-word (+ (* S 1000000) (* D 10000) (* M 100) N)))
+(native-test.check "arithmetic" 15093588 (freeze (native-test.word-ops 12 3)))
+
+(define-native native-test.word-bits (A B)
+  (word X A)
+  (word Y B)
+  (word Result (bit-xor (bit-or (bit-and X Y) (shift-left Y 8)) (shift-right X 2)))
+  (return-word Result))
+(native-test.check "and, or, xor, shifts" 3843 (freeze (native-test.word-bits 60 15)))
+
+(define-native native-test.word-not (A)
+  (word X A)
+  (return-word (bit-not X)))
+(native-test.check "not" -1 (freeze (native-test.word-not 0)))
+(native-test.check "not of one" -2 (freeze (native-test.word-not 1)))
+
+(define-native native-test.word-rotate (A N)
+  (word X A)
+  (word R (rotate-right (rotate-left X N) N))
+  (return-word R))
+(native-test.check "rotate there and back" 1234 (freeze (native-test.word-rotate 1234 13)))
+
+(define-native native-test.word-signed (A N)
+  (word X A)
+  (return-word (shift-right-signed X N)))
+(native-test.check "a signed shift" -2 (freeze (native-test.word-signed -8 2)))
+
+\\ Wraparound: past 64 bits nothing raises. 2^63 + 2^63 is 0.
+(define-native native-test.word-wrap (A)
+  (word X (shift-left 1 63))
+  (word Y (+ X X A))
+  (return-word Y))
+(native-test.check "addition wraps" 5 (freeze (native-test.word-wrap 5)))
+
+\\ What does not fit a fixnum raises when it comes back, and only then.
+(define-native native-test.word-big (N)
+  (word X (shift-left 1 N))
+  (return-word X))
+(native-test.check "2^60 fits" 1152921504606846976 (freeze (native-test.word-big 60)))
+(native-test.check "2^61 does not" error (freeze (hd (native-test.result (freeze (native-test.word-big 61))))))
+(native-test.check "nor does 2^63" error (freeze (hd (native-test.result (freeze (native-test.word-big 63))))))
+(native-test.check "and it says what" [error "the word 2305843009213693952 does not fit in an integer"]
+  (freeze (native-test.result (freeze (native-test.word-big 61)))))
+(define-native native-test.word-small (N)
+  (word X (neg (shift-left 1 N)))
+  (return-word X))
+(native-test.check "-2^61 fits" -2305843009213693952 (freeze (native-test.word-small 61)))
+(native-test.check "-2^62 does not" error (freeze (hd (native-test.result (freeze (native-test.word-small 62))))))
+
+\\ A slot read as a word must be an integer.
+(define-native native-test.word-of (A)
+  (word X A)
+  (return-word X))
+(native-test.check "from a slot" -7 (freeze (native-test.word-of -7)))
+(native-test.check "not an integer" [error "1.5 is not an integer"] (freeze (native-test.result (freeze (native-test.word-of 1.5)))))
+(native-test.check "nor is a symbol" [error "a is not an integer"] (freeze (native-test.result (freeze (native-test.word-of a)))))
+
+\\ Between words and reals.
+(define-native native-test.word-real (A)
+  (word X A)
+  (real R (* X 0.5))
+  (return-real R))
+(native-test.check "a word in a real expression" 1.5 (freeze (native-test.word-real 3)))
+
+(define-native native-test.real-word (A)
+  (real R A)
+  (word X (truncate (* R 2)))
+  (return-word X))
+(native-test.check "truncate" 3 (freeze (native-test.real-word 1.75)))
+(native-test.check "truncate, toward zero" -3 (freeze (native-test.real-word -1.75)))
+
+\\ Each comparison, and that unsigned sees -1 as the largest.
+(define-native native-test.word-lt (A B) (word X A) (word Y B) (jump-unless-word (< X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-gt (A B) (word X A) (word Y B) (jump-unless-word (> X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-le (A B) (word X A) (word Y B) (jump-unless-word (<= X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-ge (A B) (word X A) (word Y B) (jump-unless-word (>= X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-eq (A B) (word X A) (word Y B) (jump-unless-word (= X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-ult (A B) (word X A) (word Y B) (jump-unless-word (u< X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-ugt (A B) (word X A) (word Y B) (jump-unless-word (u> X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-ule (A B) (word X A) (word Y B) (jump-unless-word (u<= X Y) no) (return yes) (label no) (return no))
+(define-native native-test.word-uge (A B) (word X A) (word Y B) (jump-unless-word (u>= X Y) no) (return yes) (label no) (return no))
+
+(define native-test.word-compare
+  A B -> [(native-test.word-lt A B) (native-test.word-gt A B) (native-test.word-le A B) (native-test.word-ge A B)
+          (native-test.word-eq A B)])
+(define native-test.word-unsigned
+  A B -> [(native-test.word-ult A B) (native-test.word-ugt A B) (native-test.word-ule A B) (native-test.word-uge A B)])
+(native-test.check "below" [yes no yes no no] (freeze (native-test.word-compare -1 2)))
+(native-test.check "above" [no yes no yes no] (freeze (native-test.word-compare 2 -1)))
+(native-test.check "equal" [no no yes yes yes] (freeze (native-test.word-compare 2 2)))
+(native-test.check "unsigned, -1 is the largest" [no yes no yes] (freeze (native-test.word-unsigned -1 2)))
+(native-test.check "unsigned, equal" [no no yes yes] (freeze (native-test.word-unsigned 2 2)))
+
+\\ A constant on either side, and in a loop, whose register keeps its value round it.
+(define-native native-test.word-loop (N Start)
+  (word Acc Start)
+  (word I 0)
+  (loop)
+  (jump-unless-word (< I N) done)
+  (word Acc (+ Acc (* I 2)))
+  (word I (+ I 1))
+  (tail-call native-test.word-loop N Start)
+  (label done)
+  (return-word Acc))
+(native-test.check "a loop" 90 (freeze (native-test.word-loop 10 0)))
+(native-test.check "from a start" 95 (freeze (native-test.word-loop 10 5)))
+(native-test.check "no times round" 5 (freeze (native-test.word-loop 0 5)))
+
+\\ FNV-1a on bytes, whose value is known: 64 bits that wrap on each multiplication. Neither the
+\\ offset basis nor the result is a fixnum, so the result goes to memory, read back in halves.
+(define-native native-test.word-fnv (B Out End)
+  (word Prime 1099511628211)
+  (word Hash (+ (* 3421674724 4294967296) 2216829733))
+  (word I 0)
+  (loop)
+  (jump-unless-word (u< I End) done)
+  (word Hash (* (bit-xor Hash (u8 B I)) Prime))
+  (word I (+ I 1))
+  (tail-call native-test.word-fnv B Out End)
+  (label done)
+  (u64! Out 0 Hash)
+  (return Out))
+
+(define native-test.word-fnv-of
+  S -> (let B (shen-jit.string->bytes S)
+            Out (native-test.word-fnv B (shen-jit.bytes 8) (shen-jit.bytes-length B))
+         [(shen-jit.u32 Out 4) (shen-jit.u32 Out 0)]))
+(native-test.check "FNV-1a of nothing" [3421674724 2216829733] (freeze (native-test.word-fnv-of "")))
+(native-test.check "FNV-1a of a" [2942557260 2248273036] (freeze (native-test.word-fnv-of "a")))
+(native-test.check "FNV-1a of foobar" [2241085809 4147734504] (freeze (native-test.word-fnv-of "foobar")))
+
+\\ Every width, at a word index, each checked against the length.
+(define-native native-test.word-widths (M)
+  (word I 8)
+  (u64! M I 513)
+  (word A (u8 M I))
+  (word B (u16 M I))
+  (word C (u32 M I))
+  (word D (u64 M I))
+  (u8! M 0 255)
+  (u16! M 2 65535)
+  (u32! M 4 -1)
+  (word E (s32 M 4))
+  (word F (u32 M 4))
+  (word G (u16 M 2))
+  (word H (u8 M 0))
+  (return-word (+ A (* B 1000) (* C 10000000) (* D 100000000000) E (* F 10) (* G 100) (* H 3))))
+(native-test.check "each width" 51348086740215 (freeze (native-test.word-widths (shen-jit.bytes 16))))
+
+\\ Bounds: a word index has no tag to fail on, so each way round must be caught here.
+(define-native native-test.word-at (M I)
+  (word X I)
+  (return-word (u64 M X)))
+(define-native native-test.byte-at (M I)
+  (word X I)
+  (return-word (u8 M X)))
+(define-native native-test.store-at (M I)
+  (word X I)
+  (u64! M X 1)
+  (return M))
+(define-native native-test.real-at (M I)
+  (word X I)
+  (return-real (f64 M X)))
+(define-native native-test.real-store-at (M I)
+  (word X I)
+  (f64! M X 1.5)
+  (return M))
+
+(define native-test.bytes8
+  -> (shen-jit.u32! (shen-jit.bytes 16) 8 7))
+(native-test.check "the last place for 8 bytes" 7 (freeze (native-test.word-at (native-test.bytes8) 8)))
+(native-test.check "past it" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.word-at (native-test.bytes8) 9)))))
+(native-test.check "the last byte" 0 (freeze (native-test.byte-at (native-test.bytes8) 15)))
+(native-test.check "past it, by bytes" [error "bytes: 16 is not a valid index"] (freeze (native-test.result (freeze (native-test.byte-at (native-test.bytes8) 16)))))
+(native-test.check "a negative index" [error "bytes: -1 is not a valid index"] (freeze (native-test.result (freeze (native-test.word-at (native-test.bytes8) -1)))))
+(native-test.check "one that adds up small" [error "bytes: -7 is not a valid index"] (freeze (native-test.result (freeze (native-test.word-at (native-test.bytes8) -7)))))
+(native-test.check "a negative index, by bytes" [error "bytes: -1 is not a valid index"] (freeze (native-test.result (freeze (native-test.byte-at (native-test.bytes8) -1)))))
+(native-test.check "a store past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.store-at (native-test.bytes8) 9)))))
+(native-test.check "a store before the start" [error "bytes: -8 is not a valid index"] (freeze (native-test.result (freeze (native-test.store-at (native-test.bytes8) -8)))))
+(native-test.check "a real past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.real-at (native-test.bytes8) 9)))))
+(native-test.check "a real before the start" [error "bytes: -1 is not a valid index"] (freeze (native-test.result (freeze (native-test.real-at (native-test.bytes8) -1)))))
+(native-test.check "a real store past the end" [error "bytes: 9 is not a valid index"] (freeze (native-test.result (freeze (native-test.real-store-at (native-test.bytes8) 9)))))
+(native-test.check "a real read" 1.5 (freeze (native-test.real-at (native-test.real-store-at (shen-jit.bytes 16) 8) 8)))
+(native-test.check "not memory" error (freeze (hd (native-test.result (freeze (native-test.word-at "abc" 0))))))
+(native-test.check "not a pointer with a length" error (freeze (hd (native-test.result (freeze (native-test.word-at a 0))))))
+
+\\ What the word index works out in words, when it mentions one, and in prim otherwise.
+(define-native native-test.index-kinds (M I)
+  (word X I)
+  (real A (f64 M (+ X 8)))
+  (real B (f64 M (+ I 8)))
+  (return-real (+ A B)))
+(native-test.check "either way of working out an index" 3 (freeze (native-test.index-kinds (shen-jit.f64! (shen-jit.bytes 16) 8 1.5) 0)))
+
+\\ What calls C or collects keeps word registers, in the registers and out of them.
+(define-native native-test.word-keep (N Acc)
+  (word A 1) (word B 2) (word C 3) (word D 4) (word E 5) (word F 6) (word G 7) (word H 8)
+  (word I 9) (word J 10) (word K 11) (word L 12) (word M 13)
+  (loop)
+  (prim T = N 0)
+  (jump-if-false T more)
+  (return-word (+ A B C D E F G H I J K L M))
+  (label more)
+  (word A (+ A 1))
+  (word M (+ M 1))
+  (word-box S A)
+  (real-box R A)
+  (prim Text str N)
+  (prim N - N 1)
+  (tail-call native-test.word-keep N Acc))
+(native-test.check "kept across C and collections" 491 (freeze (native-test.word-keep 200 0)))
+
+\\ ---------------------------------------------------------------------------
+\\ Memory in a loop, whose base and length are worked out on the way in: ordinary code gets this
+\\ as code with registers does, and it must never read what has gone stale.
+
+\\ A buffer moves when the loop's own allocation collects, which GC stress makes often.
+(define native-test.cached-sum
+  B I N Acc Junk -> [Acc | (length Junk)] where (>= I N)
+  B I N Acc Junk -> (native-test.cached-sum B (+ I 1) N (+ Acc (shen-jit.u8 B I)) [I | Junk]))
+
+(define native-test.counting-bytes
+  N -> (native-test.fill-counting (shen-jit.bytes N) 0 N))
+
+(define native-test.fill-counting
+  B I N -> B where (>= I N)
+  B I N -> (native-test.fill-counting (shen-jit.u8! B I (shen-jit.bit-and I 255)) (+ I 1) N))
+
+(native-test.check "a buffer read as it moves" [31872 | 256]
+  (freeze (native-test.cached-sum (native-test.counting-bytes 256) 0 256 -768 [])))
+
+(define-native native-test.cached-registers (B N Junk)
+  (word I 0)
+  (word Acc 0)
+  (loop)
+  (jump-unless-word (< I N) done)
+  (word Acc (+ Acc (u8 B I)))
+  (word-box Boxed I)
+  (prim Junk cons Boxed Junk)
+  (word I (+ I 1))
+  (tail-call native-test.cached-registers B N Junk)
+  (label done)
+  (return-word Acc))
+(native-test.check "and in registers" 32640 (freeze (native-test.cached-registers (native-test.counting-bytes 256) 256 [])))
+
+\\ Stores to a buffer that moves land in it.
+(define native-test.cached-store
+  B I N Junk -> B where (>= I N)
+  B I N Junk -> (native-test.cached-store (shen-jit.u8! B I 7) (+ I 1) N [I | Junk]))
+(native-test.check "a store as it moves" 7 (freeze (shen-jit.u8 (native-test.cached-store (shen-jit.bytes 64) 0 64 []) 63)))
+
+\\ A parameter the loop changes is not the same memory each time round.
+(define native-test.swapping
+  A B 0 Acc -> Acc
+  A B N Acc -> (native-test.swapping B A (- N 1) (+ (* Acc 10) (shen-jit.u8 A 0))))
+(native-test.check "parameters that swap"
+  1212
+  (freeze (native-test.swapping (shen-jit.u8! (shen-jit.bytes 1) 0 1) (shen-jit.u8! (shen-jit.bytes 1) 0 2) 4 0)))
+
+(define native-test.replacing
+  M 0 Acc -> Acc
+  M N Acc -> (native-test.replacing (shen-jit.u8! (shen-jit.bytes 1) 0 N) (- N 1) (+ Acc (shen-jit.u8 M 0))))
+(native-test.check "a parameter replaced" 14 (freeze (native-test.replacing (shen-jit.u8! (shen-jit.bytes 1) 0 9) 3 0)))
+
+\\ What is no memory is no error until it is used, and then says so.
+(define native-test.maybe-read
+  M I N Acc -> Acc where (>= I N)
+  M I N Acc -> (native-test.maybe-read M (+ I 1) N (+ Acc (shen-jit.u8 M I))))
+(native-test.check "not memory, and not read" 0 (freeze (native-test.maybe-read a 0 0 0)))
+(native-test.check "not memory, and read" error (freeze (hd (native-test.result (freeze (native-test.maybe-read a 0 1 0))))))
+(native-test.check "a string, and read" error (freeze (hd (native-test.result (freeze (native-test.maybe-read "abc" 0 1 0))))))
+(native-test.check "past the end, in a loop" [error "bytes: 2 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.maybe-read (shen-jit.bytes 2) 0 3 0)))))
+
+\\ Each width and store through the same memory.
+(define native-test.widths-loop
+  M I N Acc -> Acc where (>= I N)
+  M I N Acc -> (do (shen-jit.u32! M 0 I)
+                   (shen-jit.u16! M 4 I)
+                   (shen-jit.u8! M 6 I)
+                   (shen-jit.f64! M 8 1.5)
+                   (native-test.widths-loop M (+ I 1) N
+                     (+ Acc (shen-jit.u32 M 0) (shen-jit.u16 M 4) (shen-jit.u8 M 6) (shen-jit.s32 M 0) (shen-jit.f64 M 8)))))
+(native-test.check "every width, round a loop" 16.5 (freeze (native-test.widths-loop (shen-jit.bytes 16) 0 3 0)))
+
+\\ What must be refused.
+(native-test.refused "a word unset" (freeze (define-native native-test.bad (A) (word X (+ Y 1)) (word Y 1) (return-word X))))
+(native-test.refused "a word as a slot" (freeze (define-native native-test.bad (A) (word X A) (prim Y + X 1) (return Y))))
+(native-test.refused "a real in a word expression" (freeze (define-native native-test.bad (A) (real R A) (word X (+ R 1)) (return-word X))))
+(native-test.refused "both kinds under one name" (freeze (define-native native-test.bad (A) (real X A) (word X A) (return-word X))))
+(native-test.refused "a fraction as a word" (freeze (define-native native-test.bad (A) (word X 1.5) (return-word X))))
+(native-test.refused "not a word expression" (freeze (define-native native-test.bad (A) (word X (foo A)) (return-word X))))
+(native-test.refused "not a comparison of words" (freeze (define-native native-test.bad (A) (word X A) (jump-unless-word (foo X X) l) (label l) (return A))))
+(native-test.refused "a word with a call" (freeze (define-native native-test.bad (A) (word X A) (call R reverse A) (return-word X))))
+(native-test.refused "more word registers than there are"
+  (freeze (define-native native-test.bad (A)
+            (word R0 A) (word R1 A) (word R2 A) (word R3 A) (word R4 A) (word R5 A) (word R6 A) (word R7 A)
+            (word R8 A) (word R9 A) (word R10 A) (word R11 A) (word R12 A) (word R13 A) (word R14 A) (word R15 A)
+            (word R16 A) (return-word R16))))
+(native-test.raw "a word out of range" [code native-test.bad 0 3 [0] [[word-number 16 [const 0]] [return [const 0]]] []])
+(native-test.raw "a word unset, by number" [code native-test.bad 0 3 [0] [[word-box 2 0] [return 2]] []])
+(native-test.raw "a word store past the registers" [code native-test.bad 1 4 [0] [[word-store8 2 [const 0] 16] [return 2]] []])
+(native-test.raw "a word test to nowhere" [code native-test.bad 0 3 [0] [[word-number 0 [const 0]] [word-unless< 0 0 9] [return [const 0]]] []])
+(native-test.refused "none of those was installed, a third time" (freeze ((fn native-test.bad))))
 
 (output "~A passed, ~A failed~%" (value native-test.*passed*) (value native-test.*failed*))

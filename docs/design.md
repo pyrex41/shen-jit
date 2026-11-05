@@ -203,7 +203,7 @@ address space and double in place when live data passes 40% of them.
 
 Reals are boxed, each a 16-byte object, and native code does their arithmetic and comparisons on its slow path, after the
 test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
-in real registers, which the collector never sees ([bytecode.md](bytecode.md), "Real registers").
+in real registers, and 64-bit integers in word registers, which the collector never sees ([bytecode.md](bytecode.md), "Real and word registers").
 
 The roots are the scanned extent of each thread's guest stack, the global cells and constants, what C holds, and a few VM
 fields. C holds values in explicitly registered locals, per thread, and in the roots that outlive a call (`shen_root_new`), which a

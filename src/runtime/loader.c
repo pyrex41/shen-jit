@@ -147,8 +147,8 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         return false;
     uint64_t x;
     /* Each operand position has a kind: s slot, o slot or constant (an
-       operand), k constant, c code, l label, f function symbol, n count, r real
-       register. */
+       operand), k constant, c code, l label, f function symbol, n count, r a real
+       register, w a word register, W a word register or a constant. */
     static const char *const kinds[OP_COUNT] = {
         [OP_MOVE] = "ss", [OP_CONST] = "sk", [OP_CAPTURE] = "sn",
         [OP_CLOSURE] = "sc", [OP_PRIM] = "s", [OP_LABEL] = "l", [OP_JUMP] = "l",
@@ -156,12 +156,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         [OP_CALL_VALUE] = "ssn", [OP_TAIL_CALL] = "sfn", [OP_TAIL_CALL_SEALED] = "sfn",
         [OP_TAIL_CALL_VALUE] = "sn", [OP_RETURN] = "o", [OP_PUSH_HANDLER] = "l",
         [OP_POP_HANDLER] = "", [OP_EXCEPTION] = "s", [OP_ENTRY] = "nl",
-        [OP_JUMP_UNLESS_ENTRY] = "snl", [OP_INLINE] = "fl", [OP_LOOP] = "",
-        [OP_REAL_NUMBER] = "ro", [OP_REAL_BOX] = "sr", [OP_REAL_MOVE] = "rr", [OP_REAL_NEG] = "rr",
-        [OP_REAL_ABS] = "rr", [OP_REAL_SQRT] = "rr", [OP_REAL_ADD] = "rrr", [OP_REAL_SUB] = "rrr",
-        [OP_REAL_MUL] = "rrr", [OP_REAL_DIV] = "rrr", [OP_REAL_UNLESS_LT] = "rrl",
-        [OP_REAL_UNLESS_GT] = "rrl", [OP_REAL_UNLESS_LE] = "rrl", [OP_REAL_UNLESS_GE] = "rrl",
-        [OP_REAL_UNLESS_EQ] = "rrl", [OP_REAL_LOAD] = "roo", [OP_REAL_STORE] = "oor"};
+        [OP_JUMP_UNLESS_ENTRY] = "snl", [OP_INLINE] = "fl"};
     /* What reads or writes memory is laid out as prim is, in the words the JIT reads: the
        register, the primitive that raises what is wrong with it, a count and the operands. */
     if (op == OP_REAL_LOAD || op == OP_REAL_STORE) {
@@ -177,16 +172,17 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         l->stats->instructions++;
         return true;
     }
-    size_t fixed = strlen(kinds[op]);
+    const char *kind = raw_kinds(op) ? raw_kinds(op) : kinds[op];
+    size_t fixed = strlen(kind);
     if (op == OP_PRIM)
         fixed = 2;
     if (n < 1 + fixed || ((op != OP_CLOSURE && op != OP_PRIM) && n != 1 + op_fixed[op]))
         return fail(l, "wrong operand count");
 
-    for (size_t i = 0; i < strlen(kinds[op]); i++) {
+    for (size_t i = 0; i < strlen(kind); i++) {
         V v = nth(insn, 1 + i);
         bool ok;
-        switch (kinds[op][i]) {
+        switch (kind[i]) {
         case 's': ok = small_int(v, frame, &x); break;
         case 'o': ok = operand(v, frame, nconst, &x); break;
         case 'k': ok = small_int(v, nconst, &x); break;
@@ -194,6 +190,8 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         case 'l': ok = small_int(v, UINT32_MAX, &x); break;
         case 'n': ok = small_int(v, 256, &x); break;
         case 'r': ok = small_int(v, REAL_REGISTERS, &x); break;
+        case 'w': ok = small_int(v, WORD_REGISTERS, &x); break;
+        case 'W': ok = operand(v, WORD_REGISTERS, nconst, &x); break;
         default: /* 'f' */
             ok = is_symbol(v);
             if (ok && (op == OP_CALL_SEALED || op == OP_TAIL_CALL_SEALED)) {
@@ -263,7 +261,7 @@ static bool check_control(Loader *l)
     for (size_t i = 0; ok && i < len; i += insn_length(buf + i)) {
         uint32_t target = buf[i] == OP_JUMP || buf[i] == OP_PUSH_HANDLER ? buf[i + 1]
                         : buf[i] == OP_JUMP_IF_FALSE || buf[i] == OP_ENTRY ? buf[i + 2]
-                        : buf[i] == OP_JUMP_UNLESS_ENTRY || (buf[i] >= OP_REAL_UNLESS_LT && buf[i] <= OP_REAL_UNLESS_EQ)
+                        : buf[i] == OP_JUMP_UNLESS_ENTRY || (raw_kinds(buf[i]) && strchr(raw_kinds(buf[i]), 'l'))
                             ? buf[i + 3] : UINT32_MAX;
         if (target != UINT32_MAX)
             ok = target < nlabels && defined[target];
