@@ -175,10 +175,11 @@ for seal in "" --seal; do
     pid=$!
     n=0
     while ! grep -q "(fn spin)" "$dir/int.out" && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+    sleep 0.25
     n=0
     while kill -0 $pid 2>/dev/null && ! grep -q interrupted "$dir/int.out" && [ $n -lt 40 ]; do
-        sleep 0.25
         kill -INT $pid 2>/dev/null
+        sleep 0.25
         n=$((n + 1))
     done
     n=0
@@ -199,10 +200,11 @@ for seal in "" --seal; do
     pid=$!
     n=0
     while ! grep -q "loaded" "$dir/int2.out" && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
+    sleep 0.25
     n=0
     while kill -0 $pid 2>/dev/null && ! grep -q interrupted "$dir/int2.out" && [ $n -lt 40 ]; do
-        sleep 0.25
         kill -INT $pid 2>/dev/null
+        sleep 0.25
         n=$((n + 1))
     done
     n=0
@@ -568,35 +570,6 @@ check thread-saved-image "$dir/thr6.out" "kept"
 printf '(define forever N -> (forever (+ N 1)))\n(thread (freeze (forever 0)))\n(output "~A~%%" (trap-error (shen-jit.save-executable "%s/thr7" (fn hd)) (/. E (error-to-string E))))\n' "$dir" > "$dir/thr7.shen"
 "$SHEN" script "$dir/thr7.shen" > "$dir/thr7.out" 2>&1 < /dev/null
 check thread-save-executable "$dir/thr7.out" "save-executable: other threads are running"
-if [ "$posix" = yes ]; then
-# Ctrl-C is for the REPL's own work: a thread running beside it goes on, and its
-# progress after the interrupt shows it was not the one stopped.
-cat > "$dir/thr8.in" <<'EOF'
-(define spin N -> (spin (+ N 1)))
-(define pause 0 -> done N -> (pause (- N 1)))
-(set beats 0)
-(define beat N -> (do (set beats (+ (value beats) 1)) (beat N)))
-(thread (freeze (beat 0)))
-(spin 0)
-(let A (value beats) W (pause 300000000) (> (value beats) A))
-EOF
-"$SHEN" < "$dir/thr8.in" > "$dir/thr8.out" 2>&1 &
-pid=$!
-n=0
-while ! grep -q "(fn beat)" "$dir/thr8.out" && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
-n=0
-while kill -0 $pid 2>/dev/null && ! grep -q interrupted "$dir/thr8.out" && [ $n -lt 40 ]; do
-    sleep 0.25
-    kill -INT $pid 2>/dev/null
-    n=$((n + 1))
-done
-n=0
-while kill -0 $pid 2>/dev/null && [ $n -lt 100 ]; do sleep 0.1; n=$((n + 1)); done
-kill -9 $pid 2>/dev/null
-wait $pid 2>/dev/null
-contains thread-interrupt "$dir/thr8.out" "interrupted"
-contains thread-survives-interrupt "$dir/thr8.out" "(6-) true"
-fi
 
 wait_for() { # text, file
     n=0
@@ -621,6 +594,33 @@ ends() { # how long to give $pid to end; its status is in $status
 }
 
 if [ "$posix" = yes ]; then
+# Ctrl-C is for the REPL's own work: a thread running beside it goes on, and its
+# progress after the interrupt shows it was not the one stopped. A FIFO holds back
+# what comes after the interrupt until it has been seen: on a busy machine the
+# signal can take longer than the wait between tries, and a second one must not
+# reach that expression.
+mkfifo "$dir/thr8"
+"$SHEN" < "$dir/thr8" > "$dir/thr8.out" 2>&1 &
+pid=$!
+exec 3> "$dir/thr8"
+cat >&3 <<'EOF'
+(define spin N -> (spin (+ N 1)))
+(define pause 0 -> done N -> (pause (- N 1)))
+(set beats 0)
+(define beat N -> (do (set beats (+ (value beats) 1)) (beat N)))
+(thread (freeze (beat 0)))
+EOF
+wait_for "(4-) true" "$dir/thr8.out"
+printf '(spin 0)\n' >&3
+sleep 0.2
+interrupts_to 1 "$dir/thr8.out"
+sleep 0.2
+printf '(let A (value beats) W (pause 300000000) (if (> (value beats) A) beats-went-on stuck))\n' >&3
+exec 3>&-
+ends
+contains thread-interrupt "$dir/thr8.out" "interrupted"
+contains thread-survives-interrupt "$dir/thr8.out" "beats-went-on"
+
 # Ctrl-C while the REPL waits for input, which a FIFO holds open: a half-typed
 # expression is dropped, and a program waiting for input stops, even inside its own
 # trap-error. With a thread running beside it the signal still has to reach the main

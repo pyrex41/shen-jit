@@ -742,6 +742,9 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
   `save-executable` bug below, and stray `\r` in five extensions' strings in the KLambda in use, unlike the 43.2 release and a
   fresh build of its tag.
 - **Found later (2026-11-05):** release archives left out `lib/` and `include/`, so a binary could not have loaded `lib/ffi.shen`.
+- **A flaky test, not a lost Ctrl-C (2026-11-05).** `thread-survives-interrupt` failed under GC stress on two runners of one CI run, with one `interrupted` in `spin` and another in the expression after it, which could have been the runtime delivering one signal twice. It
+  was not: on Linux arm64 in a container of 1 to 3 CPUs, with up to 32 copies at once, all 287 rounds that sent more than one signal failed, and 472 of the 481 that sent one passed. The test's loop sent a second signal when the first had not shown in the output yet, and it reached the next expression. The
+  failures with one signal whose output was kept had it land early, once, as the wait for the REPL ran out under that load. The next expression now waits in a FIFO until the interrupt has been seen.
 - **Release notes come from the changelog, and releases start as drafts (2026-11-05).** `v0.1` went out at once, with GitHub's generated
   notes, which with one commit are only a link to the tag. A release is now a draft that someone makes public by hand, and carries its
   section of `CHANGELOG.md`, as Shen/Scheme's and the kernel's do. A tag with an empty section makes no release: those two fall back to
