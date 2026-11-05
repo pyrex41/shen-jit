@@ -27,10 +27,14 @@ Loading Shen source does more than install definitions: it sets globals, registe
 and types, and records arities and lambda forms. Shen/JIT avoids recording those effects by running them in
 itself and saving the result.
 
-**Stage 0,** under Shen/Scheme, lowers the kernel's KLambda, leaving out what the port overrides, then the port
+**Stage 0,** under a host, lowers the kernel's KLambda, leaving out what the port overrides, then the port
 (`src/port/shen-jit.kl`) and the lowerer itself, which `tokl.shen` compiles to KLambda first. The output is
 files of definitions as text, in `build/stage0`, so no state of the host reaches the target. Release tarballs carry this
 output, so they build with a C compiler alone, and `generated.sha256` holds its hashes.
+
+The host is the earlier release of Shen/JIT that `tools/ci-deps.sh` names, or Shen/Scheme, which makes the same files byte for byte. A host that is
+Shen/JIT has its own lowerer sealed in its image, so the tools load the one being built under other names: `build/tools/lower.shen`, which the Makefile makes
+with `shen-jit.lower.` changed to `stage0.lower.`. `tokl.shen` starts the compiler's variable numbering from zero in each definition, so that it does not depend on the host.
 
 **Stage 1,** under the runtime alone:
 

@@ -1,8 +1,9 @@
 \\ Checks for the shen-jit lowerer (test code).
 \\
-\\ Run from the shen-jit directory, after src/lowerer/stage0.shen:
+\\ Run from the shen-jit directory, after src/lowerer/stage0.shen, under the
+\\ same host, once make has written build/tools/lower.shen and native.shen:
 \\
-\\   shen-scheme script src/lowerer/check.shen [KLAMBDA-DIR [SBC-DIR]]
+\\   HOST script src/lowerer/check.shen [KLAMBDA-DIR [SBC-DIR]]
 \\
 \\ 1. Reads every build/stage0/*.sbc file back with a small reader for the
 \\    stage 0 syntax and compares it with a fresh in-memory lowering.
@@ -20,8 +21,8 @@
 
 (set *hush* true)
 (load "src/lowerer/host.shen")
-(load "src/lowerer/lower.shen")
-(load "lib/native.shen")
+(load "build/tools/lower.shen")
+(load "build/tools/native.shen")
 (set *hush* false)
 (set *maximum-print-sequence-size* 100000)
 
@@ -138,7 +139,7 @@
 (define shen-jit.check.literal?
   [shen-jit.check.real _] -> true
   [X | Xs] -> (and (shen-jit.check.literal? X) (shen-jit.check.literal? Xs))
-  X -> (shen-jit.lower.literal? X))
+  X -> (stage0.lower.literal? X))
 
 (define shen-jit.check.arity
   F -> (trap-error (get F shen-jit.check.arity) (/. E -1)))
@@ -147,7 +148,7 @@
   F N -> (= (shen-jit.check.arity F) N))
 
 (define shen-jit.check.open?
-  F -> (and (symbol? F) (= (shen-jit.check.arity F) -1) (not (shen-jit.lower.fixed? F))))
+  F -> (and (symbol? F) (= (shen-jit.check.arity F) -1) (not (stage0.lower.fixed? F))))
 
 \\ On entry with N arguments: slot 1 and the parameters are set.
 (define shen-jit.check.entry-state
@@ -311,7 +312,7 @@
 (define shen-jit.check.unit
   [Form Sealed Expected]
   -> (let Arities (map (/. P (put (hd P) shen-jit.check.arity (tl P))) Sealed)
-          Got (shen-jit.lower.toplevel (shen-jit.check.form Form) (map (function hd) Sealed))
+          Got (stage0.lower.toplevel (shen-jit.check.form Form) (map (function hd) Sealed))
           Code (if (= (hd Got) defun) (shen-jit.check.without-inline (hd (tl (tl Got)))) Got)
        (do (shen-jit.check.assert (shen-jit.check.same? Code (shen-jit.check.form Expected))
                                     "unit" "unexpected lowering" [Form Got])
@@ -331,10 +332,10 @@
                                  "(code f 1 4 () ((prim 3 cons 2 2) (return 3)) ())"])
          (shen-jit.host.set-tables [])
          (shen-jit.check.assert (= [[] [[y] [lambda z y]] [] [[y] [cons y 2]]]
-                                     [(shen-jit.lower.inline-form g [y] [g y])
-                                      (shen-jit.lower.inline-form g [y] [lambda z y])
-                                      (shen-jit.lower.inline-form g [y] [cons y 1.5])
-                                      (shen-jit.lower.inline-form g [y] [cons y 2])])
+                                     [(stage0.lower.inline-form g [y] [g y])
+                                      (stage0.lower.inline-form g [y] [lambda z y])
+                                      (stage0.lower.inline-form g [y] [cons y 1.5])
+                                      (stage0.lower.inline-form g [y] [cons y 2])])
                                   "unit" "inline bodies" g)))
 
 \\ A defun's code ends with its inline body; the units compare the rest.
@@ -342,7 +343,7 @@
   [code N A F K I Codes | _] -> [code N A F K I Codes])
 
 (define shen-jit.check.must-fail
-  Form -> (trap-error (do (shen-jit.lower.toplevel (shen-jit.check.form Form) [])
+  Form -> (trap-error (do (stage0.lower.toplevel (shen-jit.check.form Form) [])
                           (shen-jit.check.fail "malformed" "no error for" Form))
                       (/. E (output "  rejected: ~A~%" (error-to-string E)))))
 
@@ -381,12 +382,12 @@
                  Names (map (/. D (hd (tl D))) Port)
               (map (/. I (if (= (hd I) "shen-jit")
                              I
-                             [(hd I) | (filter (/. D (not (element? (hd (tl D)) Names))) (tl I))]))
+                             [(hd I) | (stage0.filter (/. D (not (element? (hd (tl D)) Names))) (tl I))]))
                    Inputs)))
 
 (define shen-jit.check.compare-file
   [File | Defuns] Out Sealed
-  -> (let Expected (map (/. D (shen-jit.lower.defun D Sealed)) Defuns)
+  -> (let Expected (map (/. D (stage0.lower.defun D Sealed)) Defuns)
           Read (shen-jit.check.read-sbc (cn Out (cn File ".sbc")))
        (do (shen-jit.check.assert (shen-jit.check.same? Read Expected) File
                                     "sbc file differs from the lowering" File)

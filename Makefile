@@ -109,13 +109,15 @@ $(SLJIT_OBJ): vendor/sljit/sljit_src/sljitLir.c | $(BUILD)
 $(BUILD)/test_runtime: tests/test_runtime.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
 	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_runtime.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
 
-# Generated inputs: what only Shen/Scheme can make, the stage 0 output, the
-# lowerer as KLambda and the lowered test programs. A release tarball carries
-# them in generated/ (make dist) and builds from there with a C compiler alone,
-# whatever the files' times; a checkout makes them with Shen/Scheme, from the
-# kernel. make deps fetches both into .deps, checked by hash (tools/ci-deps.sh), and
-# generated.sha256 holds the hashes of what they make, which check-generated compares.
-SHEN_SCHEME ?= .deps/shen-scheme/bin/shen-scheme
+# Generated inputs: what takes a Shen to make, the stage 0 output, the lowerer as
+# KLambda and the lowered test programs. A release tarball carries them in
+# generated/ (make dist) and builds from there with a C compiler alone, whatever
+# the files' times; a checkout makes them from the kernel under BOOTSTRAP, the
+# earlier release of Shen/JIT that tools/ci-deps.sh names. Shen/Scheme can take its
+# place, and makes the same files. make deps fetches the kernel and that release
+# into .deps, checked by hash, and generated.sha256 holds the hashes of what they
+# make, which check-generated compares.
+BOOTSTRAP ?= .deps/shen-jit/shen-jit$(EXE)
 KERNEL_KL ?= .deps/kernel/klambda
 GENERATED := stage0/*.sbc stage0/*.forms port/lower.kl bench/programs.sbc kl/ops.sbc stlib/stlib.kl
 
@@ -133,35 +135,46 @@ $(BUILD)/stlib/stlib.kl: $(KERNEL_KL)/stlib.kl | host
 	mkdir -p $(BUILD)/stlib
 	cp $< $@
 
-# The benchmark programs and the opcode tests, lowered by the lowerer.
-$(BUILD)/bench/programs.sbc: tests/bench/programs.kl src/lowerer/lower.shen src/lowerer/stage0.shen | host
-	mkdir -p $(BUILD)/bench
-	$(SHEN_SCHEME) script src/lowerer/stage0.shen tests/bench/ $(BUILD)/bench/ programs > /dev/null
+# What the tools run under the host, with the lowerer's names changed, as a host
+# that is Shen/JIT has its own lowerer sealed under them (src/lowerer/host.shen).
+STAGE0_TOOLS := src/lowerer/host.shen src/lowerer/stage0.shen $(BUILD)/tools/lower.shen
+$(BUILD)/tools/%.shen: src/lowerer/%.shen
+	mkdir -p $(BUILD)/tools
+	sed -e 's/shen-jit\.lower\./stage0.lower./g' -e 's/(shen-jit\.sealed? /(stage0.sealed? /g' \
+	  -e 's/(shen-jit\.inline-body /(stage0.inline-body /g' $< > $@
+$(BUILD)/tools/%.shen: lib/%.shen
+	mkdir -p $(BUILD)/tools
+	sed -e 's/shen-jit\.lower\./stage0.lower./g' $< > $@
 
-$(BUILD)/kl/ops.sbc: tests/kl/ops.kl src/lowerer/lower.shen src/lowerer/stage0.shen | host
+# The benchmark programs and the opcode tests, lowered by the lowerer.
+$(BUILD)/bench/programs.sbc: tests/bench/programs.kl $(STAGE0_TOOLS) | host
+	mkdir -p $(BUILD)/bench
+	$(BOOTSTRAP) script src/lowerer/stage0.shen tests/bench/ $(BUILD)/bench/ programs > /dev/null
+
+$(BUILD)/kl/ops.sbc: tests/kl/ops.kl $(STAGE0_TOOLS) | host
 	mkdir -p $(BUILD)/kl
-	$(SHEN_SCHEME) script src/lowerer/stage0.shen tests/kl/ $(BUILD)/kl/ ops > /dev/null
+	$(BOOTSTRAP) script src/lowerer/stage0.shen tests/kl/ $(BUILD)/kl/ ops > /dev/null
 
 # Stage 0: the lowerer compiled to KLambda, then the kernel, the port and the
-# lowerer lowered under Shen/Scheme.
-$(BUILD)/port/lower.kl: src/lowerer/lower.shen src/lowerer/host.shen src/lowerer/tokl.shen | host
+# lowerer lowered under the host.
+$(BUILD)/port/lower.kl: src/lowerer/lower.shen src/lowerer/tokl.shen | host
 	mkdir -p $(BUILD)/port
-	$(SHEN_SCHEME) script src/lowerer/tokl.shen $@ > /dev/null
+	$(BOOTSTRAP) script src/lowerer/tokl.shen $@ > /dev/null
 
-$(BUILD)/stage0/.done: $(BUILD)/port/lower.kl src/port/shen-jit.kl src/lowerer/lower.shen src/lowerer/host.shen src/lowerer/stage0.shen
+$(BUILD)/stage0/.done: $(BUILD)/port/lower.kl src/port/shen-jit.kl $(STAGE0_TOOLS) | host
 	mkdir -p $(BUILD)/stage0
-	$(SHEN_SCHEME) script src/lowerer/stage0.shen $(KERNEL_KL)/ $(BUILD)/stage0/ > /dev/null
+	$(BOOTSTRAP) script src/lowerer/stage0.shen $(KERNEL_KL)/ $(BUILD)/stage0/ > /dev/null
 	touch $@
 endif
 
 # What a checkout needs to make the generated files.
 deps:
 	sh tools/ci-deps.sh kernel .deps/kernel > /dev/null
-	sh tools/ci-deps.sh shen-scheme .deps/shen-scheme > /dev/null
+	sh tools/ci-deps.sh shen-jit .deps/shen-jit > /dev/null
 
 # With a clearer message than the first command would give.
 host:
-	@command -v $(SHEN_SCHEME) > /dev/null || { echo "no Shen/Scheme at $(SHEN_SCHEME): run make deps, or set SHEN_SCHEME"; exit 1; }
+	@command -v $(BOOTSTRAP) > /dev/null || { echo "no host at $(BOOTSTRAP): run make deps, or set BOOTSTRAP"; exit 1; }
 	@test -d $(KERNEL_KL) || { echo "no kernel at $(KERNEL_KL): run make deps, or set KERNEL_KL"; exit 1; }
 
 generated: $(BUILD)/stage0/.done $(BUILD)/port/lower.kl $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stlib/stlib.kl
@@ -184,7 +197,7 @@ guide:
 	  --template=site/template.html --lua-filter=site/guide.lua -o $(BUILD)/guide/index.html docs/guide.md
 	cp assets/*.png $(BUILD)/guide/assets/
 
-# A release tarball: the tracked files, generated/, which builds without Shen/Scheme,
+# A release tarball: the tracked files, generated/, which builds without a host,
 # and guide/, the rendered guide, which saves each platform from needing pandoc. The
 # generated files must match the manifest first.
 DIST := shen-jit-$(VERSION)
@@ -211,8 +224,8 @@ test-ops: $(BUILD)/test_ops $(BUILD)/kl/ops.sbc
 
 stage0: $(BUILD)/stage0/.done
 
-check-lowerer: $(BUILD)/stage0/.done
-	$(SHEN_SCHEME) script src/lowerer/check.shen $(KERNEL_KL)/ $(BUILD)/stage0/ | tail -1 | awk '{ print } END { exit !/^0 failures/ }'
+check-lowerer: $(BUILD)/stage0/.done $(BUILD)/tools/native.shen
+	$(BOOTSTRAP) script src/lowerer/check.shen $(KERNEL_KL)/ $(BUILD)/stage0/ | tail -1 | awk '{ print } END { exit !/^0 failures/ }'
 
 $(BUILD)/test_kl: tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(RUNTIME_HDR)
 	$(CC) $(CFLAGS) $(SLJIT_FLAGS) -o $@ tests/test_kl.c $(RUNTIME_OBJ) $(SLJIT_OBJ) $(LDLIBS)
@@ -296,6 +309,7 @@ test-linux:
 # and Shen/Scheme and compared (best of BENCH_SAMPLES; run counts divided by
 # 10^BENCH_OFFSET). Shen/Scheme's results are kept, since they do not change.
 # SEAL=1 runs shen-jit with user definitions sealed (shen-jit --seal).
+SHEN_SCHEME ?= .deps/shen-scheme/bin/shen-scheme
 BENCH_DIR ?= .deps/shen-scheme-src
 BENCH_OFFSET ?= 1
 BENCH_SAMPLES ?= 3

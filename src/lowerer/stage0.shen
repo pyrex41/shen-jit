@@ -3,9 +3,10 @@
 \\ Lowers every defun in the kernel KLambda files and writes one file of
 \\ (defun Name Code) forms, one per line, per input: OUT-DIR/<file>.sbc.
 \\ Every defun name in the input is sealed. Run from the shen-jit
-\\ directory under Shen/Scheme:
+\\ directory, under a previous release of shen-jit or Shen/Scheme, once make
+\\ has written build/tools/lower.shen:
 \\
-\\   shen-scheme script src/lowerer/stage0.shen [KLAMBDA-DIR [OUT-DIR [FILE ...]]]
+\\   HOST script src/lowerer/stage0.shen [KLAMBDA-DIR [OUT-DIR [FILE ...]]]
 \\
 \\ The defaults are .deps/kernel/klambda/, build/stage0/ and the 23 kernel
 \\ files; OUT-DIR must exist. FILE names omit the .kl extension.
@@ -20,7 +21,7 @@
 
 (set *hush* true)
 (load "src/lowerer/host.shen")
-(load "src/lowerer/lower.shen")
+(load "build/tools/lower.shen")
 (set *hush* false)
 
 (define shen-jit.stage0.files
@@ -67,7 +68,7 @@
           \\ lowers the same data, independent of how each reader reads reals.
           Forms (map (/. I (shen-jit.stage0.write-file
                              (cn Out (cn (hd I) ".forms"))
-                             (filter (/. X (cons? X)) (tl I))))
+                             (stage0.filter (/. X (cons? X)) (tl I))))
                      Inputs)
           End (get-time unix)
        (do (shen-jit.stage0.report (mapcan (/. O (tl O)) Outputs))
@@ -108,7 +109,7 @@
 \\ Top-level strings are copyright notices; anything else is unexpected.
 (define shen-jit.stage0.lower-file
   [] _ -> []
-  [[defun | X] | Forms] Sealed -> [(shen-jit.lower.defun [defun | X] Sealed)
+  [[defun | X] | Forms] Sealed -> [(stage0.lower.defun [defun | X] Sealed)
                                    | (shen-jit.stage0.lower-file Forms Sealed)]
   [X | Forms] Sealed -> (shen-jit.stage0.lower-file Forms Sealed) where (string? X)
   [X | _] _ -> (simple-error (make-string "stage 0: unexpected top-level form ~R" X)))

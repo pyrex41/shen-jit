@@ -1,8 +1,8 @@
 # Every platform builds and tests the same release tarball, with a C compiler
 # alone, as tests/linux.sh does. One job makes the tarball, since only it runs
-# Shen/Scheme and pandoc. A tag vM.N makes a draft release of what those jobs
-# built, after the fast suites only: its commit must have passed the heavy ones
-# on main. Someone then makes the draft public, on GitHub.
+# a Shen and pandoc. A tag vM.N makes a draft release of what those jobs built,
+# after the fast suites only: its commit must have passed the heavy ones on main.
+# Someone then makes the draft public, on GitHub.
 name: CI
 
 on:
@@ -23,13 +23,25 @@ jobs:
         run: |
           sudo apt-get update && sudo apt-get install -y pandoc
           kernel=$(sh tools/ci-deps.sh kernel "$RUNNER_TEMP/kernel")
-          scheme=$(sh tools/ci-deps.sh shen-scheme "$RUNNER_TEMP/scheme")
-          make SHEN_SCHEME="$scheme" KERNEL_KL="$kernel/klambda" check-lowerer dist
+          host=$(sh tools/ci-deps.sh shen-jit "$RUNNER_TEMP/host")
+          make BOOTSTRAP="$host" KERNEL_KL="$kernel/klambda" check-lowerer dist
       - uses: actions/upload-artifact@v7
         with:
           name: tarball
           path: build/shen-jit-*.tar.gz
           if-no-files-found: error
+
+  # Shen/Scheme is the way in if no release of Shen/JIT runs: it must keep making the same files.
+  shen-scheme-host:
+    if: github.ref_type != 'tag'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Make the generated files under Shen/Scheme
+        run: |
+          kernel=$(sh tools/ci-deps.sh kernel "$RUNNER_TEMP/kernel")
+          host=$(sh tools/ci-deps.sh shen-scheme "$RUNNER_TEMP/host")
+          make BOOTSTRAP="$host" KERNEL_KL="$kernel/klambda" check-lowerer check-generated
 
   build:
     needs: tarball
@@ -52,8 +64,8 @@ jobs:
       run:
         shell: ${{ matrix.shell }}
     env:
-      # Whatever tries to run Shen/Scheme fails: a tarball must not need it.
-      MAKEFLAGS: SHEN_SCHEME=false
+      # Whatever tries to run a Shen to build this one fails: a tarball must not need one.
+      MAKEFLAGS: BOOTSTRAP=false
     steps:
       - if: runner.os == 'Windows'
         uses: msys2/setup-msys2@v2

@@ -6,7 +6,7 @@
       run as they will at runtime.
    2. The self-hosting check: shen-jit lowers every defun of the kernel,
       the port and the lowerer itself, and compares the result with the
-      stage 0 output produced by the same lowerer under Shen/Scheme. It reads
+      stage 0 output produced by the same lowerer under a host. It reads
       the defuns that stage 0 wrote exactly as Shen read them (*.forms), so
       both lowerers see the same data.
 

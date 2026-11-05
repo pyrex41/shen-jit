@@ -132,8 +132,28 @@ PASS redef-g4
 PASS redef-malformed (deviation)
 PASS redef-after-malformed (deviation)
 PASS redef-fixed-name (deviation)
-PASS seal-redefine-kernel
-PASS seal-open-call
+PASS fn-applied
+PASS fn-partial
+PASS get-present
+PASS get-no-entry
+PASS get-no-attribute
+PASS get-not-a-dict
+PASS vector-real
+PASS vector-negative
+PASS vector-empty
+PASS vector-symbol-length
+PASS plus-vector-zero
+PASS plus-vector-one
+PASS plus-vector-long-zero
+PASS tuple-parts
+PASS tlstr-1
+PASS tlstr-8
+PASS tlstr-9
+PASS tlstr-17
+PASS tlstr-18
+PASS tlstr-empty
+PASS seal-redefine-kernel (deviation)
+PASS seal-open-call (deviation)
 PASS seal-kernel-call
 
-137 passed, 0 failed (shen-scheme)
+157 passed, 0 failed (shen-scheme)

@@ -20,7 +20,7 @@ checkout's own workflow, and git ignores it.
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
 | `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `sqlite.shen` and `socket.shen` over it |
-| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel and Shen/Scheme, `package.sh` makes a release archive, and `release-notes.sh` prints a version's section of the changelog |
+| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, and `release-notes.sh` prints a version's section of the changelog |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
 | `contract/` | The contract examples, and Shen/Scheme's results for them |
@@ -40,8 +40,9 @@ History stays linear: no merge commits. A commit message says what changed and w
 
 ## Building
 
-- `make deps` fetches the kernel and Shen/Scheme into `.deps/`. A file `local.mk`, which git ignores, can
+- `make deps` fetches the kernel and the earlier release of Shen/JIT that builds this one into `.deps/`. A file `local.mk`, which git ignores, can
   set other paths: the guide lists the variables.
+- Shen/Scheme can be the host too, with `BOOTSTRAP`, and must keep making the same generated files, which CI's `shen-scheme-host` job checks. The host need not move with each release: move it in `tools/ci-deps.sh` only when the lowerer needs what a newer one has.
 - `make guide` needs pandoc, and so do `make dist` and `make test-linux`, as a source tarball carries the guide rendered.
 - `make` misses an edit made in the same second as the last build, since their times tie: any source file, not only
   `src/lowerer/lower.shen`. After scripted edits, `sleep 1; touch FILE` before rebuilding.
@@ -56,16 +57,16 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 
 A change that alters the generated files (the lowerer, the port, or the lowered test programs
 `tests/bench/programs.kl` and `tests/kl/ops.kl`) updates `generated.sha256` in the same commit, with `make
-update-generated`; `check-generated` fails until it does. Any other difference in them is drift: a different kernel or Shen/Scheme.
+update-generated`; `check-generated` fails until it does. Any other difference in them is drift: a different kernel or host.
 
-Run a heavier suite only when a change touches what it guards, one at a time, and all of them before a release:
+CI runs the heavier suites on every push, or the same thing natively, so leave them to it, before a release too. Run one here only to debug what it guards, one at a time:
 
 - `make test-kernel-stress test-kl-stress` (GC stress, about 2 minutes): changes to allocation, the collector or the heap pointer.
   Under stress every allocation collects, so keep allocation loops in eval cases short. The old space is overwritten after each collection, so a stale pointer fails at once.
 - `make test-san` (sanitizers): changes to C code that handles memory.
 - `make test-x86` (x86-64 under Rosetta): new kinds of SLJIT instructions or calls in the JIT, and changes to how `src/runtime/ffi.c` calls C.
 - `make fuzz-native` (mutated code objects, a few minutes): changes to what the JIT assumes about bytecode, which the checker in `lib/native.shen` must then enforce for code written by hand.
-- `make test-linux` (every suite on Linux arm64 and x86-64, in Docker, built with gcc from a release tarball, without Shen/Scheme): before a release, and for changes that may differ by
+- `make test-linux` (every suite on Linux arm64 and x86-64, in Docker, built with gcc from a release tarball, without a host): changes that may differ by
   platform or compiler. gcc evaluates a call's arguments in another order than clang, which shows a value read before an allocation that moves it, and Linux's AddressSanitizer also reports leaks.
 
 On macOS, Guard Malloc finds a write past a block or into a freed one at once:
@@ -73,8 +74,8 @@ On macOS, Guard Malloc finds a write past a block or into a freed one at once:
 
 New behaviour gets cases in `tests/kl/eval-cases.kl` (KL) or `tests/cli.sh` (the executable). Note that the readers turn `8.0` into the integer 8, as Shen's reader does.
 
-CI (`.github/workflows/ci.yml`) follows `tests/linux.sh`: one job makes the tarball, with pandoc and the kernel and Shen/Scheme releases that `tools/ci-deps.sh` checks by hash, and each platform builds and
-tests it with a C compiler alone. Moving the kernel or Shen/Scheme updates the hashes there.
+CI (`.github/workflows/ci.yml`) follows `tests/linux.sh`: one job makes the tarball, with pandoc and the kernel and host releases that `tools/ci-deps.sh` checks by hash, and each platform builds and
+tests it with a C compiler alone. Moving the kernel, the host or Shen/Scheme updates the hashes there.
 
 ## Releasing
 

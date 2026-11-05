@@ -638,6 +638,9 @@ that. Its readings decided nothing below.
 - **The smallest fixnum as a literal: a reader fix rejected** (2026-11-05). `-2305843009213693952` reads as a real, because `shen.compute-integer` gets only the digits, which are past the range, and the kernel's `shen.<number>` applies the sign
   afterwards. A fix would override `shen.<number>`, 1.4 KB of generated code to keep in step with the kernel, for one value in 2^62. `docs/semantics.md` records the limit, and `tests/kl/ops.kl` computes the value instead, which takes
   `kl/ops.sbc` out of the files that differ by host: lowered under `shen-jit` and under Shen/Scheme it is now the same byte for byte, where one line differed before.
+- **A previous release is the default host** (2026-11-05, Apple M3 Max). `v0.1` makes the generated files, in 1.4 s against 5.5 under Shen/Scheme 0.53, which stays as the way in that does not start from Shen/JIT. All 52 files are now the same byte for byte under both, so one manifest
+  serves them and CI's `shen-scheme-host` job checks it: `port/lower.kl`, and the two files made from it, differed only in how the compiler numbered variables, from a gensym count that depends on the host, and `tokl.shen` now starts it from zero in each definition. That also stops a change to one
+  function renaming the rest. The rename the experiment above needed is a build step, so both hosts take one path: `build/tools/lower.shen` has the lowerer under `stage0.lower.`, as its real names are sealed in a host that is Shen/JIT.
 
 ### Not tried yet
 

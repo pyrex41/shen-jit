@@ -5,7 +5,7 @@ is overridden just because another port does it: each entry was measured, and [d
 
 ## Also overridden by Shen/Scheme
 
-The functions that Shen/Scheme 0.52 replaces in its `src/overrides.shen`, with what Shen/JIT does.
+The functions that Shen/Scheme 0.53 replaces in its `src/overrides.shen`, with what Shen/JIT does.
 
 | Function | Shen/Scheme | Shen/JIT | Decision |
 | --- | --- | --- | --- |

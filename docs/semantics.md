@@ -1,7 +1,7 @@
 # Shen/JIT semantics
 
 The behaviour Shen/JIT implements. The executable [contract examples](../contract/examples.shen) check every rule below that has an observable
-result, and their output under Shen/Scheme is recorded in [contract/shen-scheme-0.52.txt](../contract/shen-scheme-0.52.txt).
+result, and their output under Shen/Scheme is recorded in [contract/shen-scheme-0.53.txt](../contract/shen-scheme-0.53.txt).
 
 Where Shen/JIT deliberately differs from Shen/Scheme, the rule says so and the example is marked as a deviation. Shen/Scheme's behaviour was observed by
 running KLambda through `eval-kl`, not inferred from its source.
@@ -11,7 +11,7 @@ running KLambda through `eval-kl`, not inferred from its source.
 | Input | Version |
 | --- | --- |
 | Kernel | The release that `tools/ci-deps.sh` names: its `klambda/`, and its tests |
-| Stage 0 host | Shen/Scheme 0.52 |
+| Stage 0 host | The release of Shen/JIT that `tools/ci-deps.sh` names, or the release of Shen/Scheme it names, which make the same files |
 | SLJIT | Upstream commit `a0020dd49a21`: see `vendor/sljit/UPSTREAM.md` |
 
 `tools/ci-deps.sh` fetches the kernel and Shen/Scheme by hash, and `generated.sha256` holds the hashes of what they make.

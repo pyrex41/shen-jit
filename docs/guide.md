@@ -42,8 +42,8 @@ directory you unpacked.
 #### From source
 
 A release's source tarball needs only a C11 compiler (clang or gcc), `make` and a POSIX system with the maths
-library: on Debian or Ubuntu, `apt install gcc make`. It carries, in `generated/`, the files that only Shen/Scheme
-can make.
+library: on Debian or Ubuntu, `apt install gcc make`. It carries, in `generated/`, the files that take an earlier
+Shen to make.
 
 ```sh
 tar xzf shen-jit-VERSION.tar.gz
@@ -59,7 +59,7 @@ links statically, for an executable that runs anywhere and cannot load libraries
 
 The JIT maps memory that is writable and executable, so a system that forbids that will not run it.
 
-A checkout also needs what makes the generated files, the Shen kernel and Shen/Scheme.
+A checkout also needs what makes the generated files, the Shen kernel and an earlier release of Shen/JIT.
 [`make deps`](#building-and-testing) fetches both.
 
 #### On Windows
@@ -69,7 +69,7 @@ environment:
 
 ```sh
 pacman -S --needed make diffutils mingw-w64-ucrt-x86_64-gcc
-make SHEN_SCHEME=false release stlib    # from a source tarball: build/shen-jit.exe, build/shen-jit-stlib.exe
+make release stlib    # from a source tarball: build/shen-jit.exe, build/shen-jit-stlib.exe
 ```
 
 The executable is statically linked and runs from PowerShell or cmd with nothing else installed.
@@ -615,10 +615,10 @@ marks each difference with *Deviation*.
 
 ### Building and testing
 
-From a checkout, `make deps` fetches the Shen kernel and Shen/Scheme into `.deps/`, checked by hash. Shen/Scheme is
-used only to generate the files a source tarball already carries. It has binaries for Linux on x86-64, macOS on arm64
-and Windows on x86-64, where `make deps` also needs `unzip`. Elsewhere, use a source tarball, or set `SHEN_SCHEME` to
-one of your own.
+From a checkout, `make deps` fetches the Shen kernel and an earlier release of Shen/JIT into `.deps/`, checked by hash.
+That release runs only to generate the files a source tarball already carries. It has executables for the platforms in
+[Install](#install), and on Windows `make deps` also needs `unzip`. Elsewhere, use a source tarball, or set `BOOTSTRAP`
+to a Shen of your own.
 
 ```sh
 git clone https://github.com/tizoc/shen-jit
@@ -629,17 +629,29 @@ make
 
 This writes `build/shen-jit`, a single file that carries its own image.
 [docs/design.md](https://github.com/tizoc/shen-jit/blob/main/docs/design.md#build-stages-and-startup) explains the
-stages. These can be set on the command line, or in a file `local.mk`, which git ignores:
+stages.
+
+[Shen/Scheme](https://github.com/tizoc/shen-scheme) can take that release's place, for a way in that does not start
+from Shen/JIT. It makes the same generated files, byte for byte, which `check-generated` shows:
+
+```sh
+sh tools/ci-deps.sh shen-scheme .deps/shen-scheme
+make BOOTSTRAP=.deps/shen-scheme/bin/shen-scheme check-generated all
+```
+
+These can be set on the command line, or in a file `local.mk`, which git ignores:
 
 | Variable | Default | What it is |
 | --- | --- | --- |
-| `SHEN_SCHEME` | `.deps/shen-scheme/bin/shen-scheme` | The Shen/Scheme executable |
+| `BOOTSTRAP` | `.deps/shen-jit/shen-jit` | The Shen that makes the generated files |
+| `SHEN_SCHEME` | `.deps/shen-scheme/bin/shen-scheme` | Shen/Scheme, for `make bench` and `make bench-independent` |
 | `KERNEL_KL` | `.deps/kernel/klambda` | The kernel's KLambda files |
 | `KERNEL_DIR` | `.deps/kernel` | The kernel, for `make test-kernel` |
 | `BENCH_DIR` | `.deps/shen-scheme-src` | Shen/Scheme's sources, for `make bench` |
 | `STLIB_DIR` | none | The standard library's sources, for `make bench-independent`, which leaves that workload out without them |
 
-`sh tools/ci-deps.sh shen-scheme-src .deps/shen-scheme-src` fetches what `make bench` needs.
+`make bench` also needs Shen/Scheme, as above, and `sh tools/ci-deps.sh shen-scheme-src .deps/shen-scheme-src` fetches
+its sources.
 
 The fast tier takes about 20 s, and catches nearly everything:
 
@@ -663,16 +675,17 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |
 | `make test-linux` | Every suite on Linux arm64 and x86-64, in Docker, from a source tarball. Needs pandoc, as `make dist` does |
+| `make deps` | Fetches the kernel and the earlier release of Shen/JIT that makes the generated files |
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
 | `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library), to check that gains are not fitted to the benchmarks |
 | `make guide` | Renders this guide to `build/guide/`, with [pandoc](https://pandoc.org) |
 | `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |
 
-To run the test suites from a source tarball, without Shen/Scheme, point `KERNEL_DIR` at a directory with the kernel's
-`tests` and `extensions`:
+To run the test suites from a source tarball, point `KERNEL_DIR` at a directory with the kernel's `tests` and
+`extensions`:
 
 ```sh
-make SHEN_SCHEME=false KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel
+make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel
 ```
 
 On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that
