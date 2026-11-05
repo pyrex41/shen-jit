@@ -1,7 +1,7 @@
 \\ A path tracer: a room of spheres, one of them a light, rendered to memory, hashed, and written to
-\\ a file if asked. Its inner work is raw loops, with real and word registers; the loops around them
-\\ are ordinary Shen. Load after lib/ffi.shen, lib/native.shen, lib/memory.shen, lib/mmap.shen and
-\\ lib/handle.shen. trace.c is the same in C, to the last bit of the image.
+\\ a file if asked. The rendering and developing are native code in real and word registers; setting
+\\ up and saving are ordinary Shen. Load after lib/ffi.shen, lib/native.shen, lib/memory.shen,
+\\ lib/mmap.shen and lib/handle.shen. trace.c is the same in C, to the last bit of the image.
 \\
 \\ (trace.render 240 180 16 "room.ppm") gives the hash as a string, and prints the time.
 
@@ -33,65 +33,54 @@
        (do (trace.put-spheres M 0 Spheres) M)))
 
 \\ ---------------------------------------------------------------------------
-\\ One path. A single loop does three things by turns: it tests the ray against the next sphere,
-\\ and past the last one takes the bounce, which may loop drawing a random direction first. Word K is
-\\ the sphere's offset, and -1 while it draws.
-\\
-\\ State holds the random numbers' state, and Out is where this pixel's light is added.
+\\ The rendering, loops within loops: each row, column and sample, each bounce of the path, each
+\\ sphere it may hit, and the drawing of a random direction. Out gets the light of each pixel.
 
-(define-native trace.path (Scene End State Out At Dx0 Dy0 Dz0 Bounces)
-  (real Ox 0) (real Oy 0) (real Oz 2)
-  (real Dx Dx0) (real Dy Dy0) (real Dz Dz0)
-  (real Tr 1) (real Tg 1) (real Tb 1)
-  (real Rr 0) (real Rg 0) (real Rb 0)
-  (real Best 1e30)
-  (real Nx 0) (real Ny 0) (real Nz 0)
+(define-native trace.light (Scene End State Out W0 H0 N0)
+  (word W W0)
+  (word H H0)
+  (word N N0)
   (word Stop End)
-  (word K 0)
-  (word Hit -1)
-  (word Left Bounces)
-  (word X (u64 State 0))
+  (word R (u64 State 0))
   (word Mult (+ (* 625341585 4294967296) 1332534557))
   (real Unit (/ 1 9007199254740992))
-  (loop)
-  (jump-unless-word (= K -1) trace)
+  (real Scale (/ 2 H))
+  (real HalfW (* W 0.5))
+  (real HalfH (* H 0.5))
+  (word Y 0)
+  (loop rows)
+  (jump-unless-word (< Y H) finished)
+  (word X 0)
+  (loop columns)
+  (jump-unless-word (< X W) next-row)
+  (word Pixel (* (+ (* Y W) X) 24))
+  (word Sample 0)
+  (loop samples)
+  (jump-unless-word (< Sample N) next-column)
 
-  \\ Drawing: three reals in -1 to 1, until they lie inside the unit sphere.
-  (word X (bit-xor X (shift-right X 12)))
-  (word X (bit-xor X (shift-left X 25)))
-  (word X (bit-xor X (shift-right X 27)))
-  (real Ux (- (* 2 (* (shift-right (* X Mult) 11) Unit)) 1))
-  (word X (bit-xor X (shift-right X 12)))
-  (word X (bit-xor X (shift-left X 25)))
-  (word X (bit-xor X (shift-right X 27)))
-  (real Uy (- (* 2 (* (shift-right (* X Mult) 11) Unit)) 1))
-  (word X (bit-xor X (shift-right X 12)))
-  (word X (bit-xor X (shift-left X 25)))
-  (word X (bit-xor X (shift-right X 27)))
-  (real Uz (- (* 2 (* (shift-right (* X Mult) 11) Unit)) 1))
-  (real Len (+ (* Ux Ux) (+ (* Uy Uy) (* Uz Uz))))
-  (jump-unless (< Len 1) again)
-  (jump-unless (> Len 0.0009765625) again)
-  (real Root (sqrt Len))
-  (real Dx (+ Nx (/ Ux Root)))
-  (real Dy (+ Ny (/ Uy Root)))
-  (real Dz (+ Nz (/ Uz Root)))
-  (real Norm (sqrt (+ (* Dx Dx) (+ (* Dy Dy) (* Dz Dz)))))
-  (real Dx (/ Dx Norm))
-  (real Dy (/ Dy Norm))
-  (real Dz (/ Dz Norm))
-  (word K 0)
-  (word Hit -1)
+  \\ The ray through this pixel, jittered.
+  (word R (bit-xor R (shift-right R 12)))
+  (word R (bit-xor R (shift-left R 25)))
+  (word R (bit-xor R (shift-right R 27)))
+  (real Px (* (- (+ X (* (shift-right (* R Mult) 11) Unit)) HalfW) Scale))
+  (word R (bit-xor R (shift-right R 12)))
+  (word R (bit-xor R (shift-left R 25)))
+  (word R (bit-xor R (shift-right R 27)))
+  (real Py (* (- (- HalfH Y) (* (shift-right (* R Mult) 11) Unit)) Scale))
+  (real Norm (sqrt (+ (* Px Px) (+ (* Py Py) 4))))
+  (real Dx (/ Px Norm))
+  (real Dy (/ Py Norm))
+  (real Dz (/ -2 Norm))
+  (real Ox 0) (real Oy 0) (real Oz 2)
+  (real Tr 1) (real Tg 1) (real Tb 1)
+  (real Rr 0) (real Rg 0) (real Rb 0)
+  (word Left 6)
+  (loop bounces)
   (real Best 1e30)
-  (word Left (- Left 1))
-  (jump-unless-word (> Left 0) done)
-  (label again)
-  (tail-call trace.path Scene End State Out At Dx0 Dy0 Dz0 Bounces)
-
-  (label trace)
-  (jump-unless-word (< K Stop) bounce)
-
-  \\ Against the sphere at K.
+  (word Hit -1)
+  (word K 0)
+  (loop spheres)
+  (jump-unless-word (< K Stop) tested)
   (real Sr (f64 Scene (+ K 24)))
   (real Cx (- Ox (f64 Scene K)))
   (real Cy (- Oy (f64 Scene (+ K 8))))
@@ -112,11 +101,11 @@
   (word Hit K)
   (label next-sphere)
   (word K (+ K 88))
-  (tail-call trace.path Scene End State Out At Dx0 Dy0 Dz0 Bounces)
+  (again spheres)
 
-  \\ Past the last sphere: it left the room, or it takes what it hit.
-  (label bounce)
-  (jump-unless-word (>= Hit 0) done)
+  \\ It left the room, or it takes what it hit, and goes on from there.
+  (label tested)
+  (jump-unless-word (>= Hit 0) path-done)
   (real Rr (+ Rr (* Tr (f64 Scene (+ Hit 56)))))
   (real Rg (+ Rg (* Tg (f64 Scene (+ Hit 64)))))
   (real Rb (+ Rb (* Tb (f64 Scene (+ Hit 72)))))
@@ -142,68 +131,59 @@
   (real Dx (- Dx (* Twice Nx)))
   (real Dy (- Dy (* Twice Ny)))
   (real Dz (- Dz (* Twice Nz)))
-  (word K 0)
-  (word Hit -1)
-  (real Best 1e30)
-  (word Left (- Left 1))
-  (jump-unless-word (> Left 0) done)
-  (tail-call trace.path Scene End State Out At Dx0 Dy0 Dz0 Bounces)
+  (jump next-bounce)
 
-  \\ A dull surface: the next turns draw a direction.
+  \\ A dull surface: three reals in -1 to 1, until they lie inside the unit sphere.
   (label dull)
-  (word K -1)
-  (tail-call trace.path Scene End State Out At Dx0 Dy0 Dz0 Bounces)
+  (loop draw)
+  (word R (bit-xor R (shift-right R 12)))
+  (word R (bit-xor R (shift-left R 25)))
+  (word R (bit-xor R (shift-right R 27)))
+  (real Ux (- (* 2 (* (shift-right (* R Mult) 11) Unit)) 1))
+  (word R (bit-xor R (shift-right R 12)))
+  (word R (bit-xor R (shift-left R 25)))
+  (word R (bit-xor R (shift-right R 27)))
+  (real Uy (- (* 2 (* (shift-right (* R Mult) 11) Unit)) 1))
+  (word R (bit-xor R (shift-right R 12)))
+  (word R (bit-xor R (shift-left R 25)))
+  (word R (bit-xor R (shift-right R 27)))
+  (real Uz (- (* 2 (* (shift-right (* R Mult) 11) Unit)) 1))
+  (real Len (+ (* Ux Ux) (+ (* Uy Uy) (* Uz Uz))))
+  (jump-unless (< Len 1) redraw)
+  (jump-unless (> Len 0.0009765625) redraw)
+  (jump drawn)
+  (label redraw)
+  (again draw)
+  (label drawn)
+  (real Root (sqrt Len))
+  (real Dx (+ Nx (/ Ux Root)))
+  (real Dy (+ Ny (/ Uy Root)))
+  (real Dz (+ Nz (/ Uz Root)))
+  (real Norm (sqrt (+ (* Dx Dx) (+ (* Dy Dy) (* Dz Dz)))))
+  (real Dx (/ Dx Norm))
+  (real Dy (/ Dy Norm))
+  (real Dz (/ Dz Norm))
 
-  (label done)
-  (u64! State 0 X)
-  (word Pixel At)
+  (label next-bounce)
+  (word Left (- Left 1))
+  (jump-unless-word (> Left 0) path-done)
+  (again bounces)
+
+  (label path-done)
   (f64! Out Pixel (+ (f64 Out Pixel) Rr))
   (f64! Out (+ Pixel 8) (+ (f64 Out (+ Pixel 8)) Rg))
   (f64! Out (+ Pixel 16) (+ (f64 Out (+ Pixel 16)) Rb))
+  (word Sample (+ Sample 1))
+  (again samples)
+  (label next-column)
+  (word X (+ X 1))
+  (again columns)
+  (label next-row)
+  (word Y (+ Y 1))
+  (again rows)
+  (label finished)
+  (u64! State 0 R)
   (return Out))
-
-\\ The next real from State, for the camera's jitter, as a path draws them.
-(define-native trace.next-real (State)
-  (word X (u64 State 0))
-  (word Mult (+ (* 625341585 4294967296) 1332534557))
-  (word X (bit-xor X (shift-right X 12)))
-  (word X (bit-xor X (shift-left X 25)))
-  (word X (bit-xor X (shift-right X 27)))
-  (u64! State 0 X)
-  (return-real (* (shift-right (* X Mult) 11) (/ 1 9007199254740992))))
-
-\\ ---------------------------------------------------------------------------
-\\ The image.
-
-(define-native trace.ray-norm (Px Py)
-  (real X Px)
-  (real Y Py)
-  (return-real (sqrt (+ (* X X) (+ (* Y Y) (* -2 -2))))))
-
-(define trace.sample
-  Scene End State Out At X Y W H
-  -> (let Px (* (- (+ X (trace.next-real State)) (* W 0.5)) (/ 2.0 H))
-          Py (* (- (- (* H 0.5) Y) (trace.next-real State)) (/ 2.0 H))
-          Norm (trace.ray-norm Px Py)
-       (trace.path Scene End State Out At (/ Px Norm) (/ Py Norm) (/ -2 Norm) 6)))
-
-(define trace.samples
-  0 _ _ _ _ _ _ _ _ _ -> done
-  N Scene End State Out At X Y W H
-  -> (do (trace.sample Scene End State Out At X Y W H)
-         (trace.samples (- N 1) Scene End State Out At X Y W H)))
-
-(define trace.row
-  X _ W _ _ _ _ _ _ -> done where (>= X W)
-  X Y W H N Scene End State Out
-  -> (do (trace.samples N Scene End State Out (* (+ (* Y W) X) 24) X Y W H)
-         (trace.row (+ X 1) Y W H N Scene End State Out)))
-
-(define trace.rows
-  Y _ H _ _ _ _ _ -> done where (>= Y H)
-  Y W H N Scene End State Out
-  -> (do (trace.row 0 Y W H N Scene End State Out)
-         (trace.rows (+ Y 1) W H N Scene End State Out)))
 
 \\ Turns light into bytes, and hashes them with FNV-1a.
 (define-native trace.develop (Light Image Count Samples Hash)
@@ -212,7 +192,7 @@
   (real Each Samples)
   (word H (u64 Hash 0))
   (word Prime 1099511628211)
-  (loop)
+  (loop bytes)
   (jump-unless-word (< I N) done)
   (word B (truncate (* (sqrt (/ (f64 Light (* I 8)) Each)) 255.5)))
   (jump-unless-word (> B 255) in-range)
@@ -221,7 +201,7 @@
   (u8! Image I B)
   (word H (* (bit-xor H B) Prime))
   (word I (+ I 1))
-  (tail-call trace.develop Light Image Count Samples Hash)
+  (again bytes)
   (label done)
   (u64! Hash 0 H)
   (return Image))
@@ -264,7 +244,7 @@
           _ (trace.seed State 1234567 89101112)
           _ (trace.seed Hash 3421674724 2216829733)
           T0 (get-time unix)
-          _ (trace.rows 0 W H N Scene End State Light)
+          _ (trace.light Scene End State Light W H N)
           _ (trace.develop Light Image Size N Hash)
           T1 (get-time unix)
           Check (trace.word-hex Hash)

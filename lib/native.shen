@@ -21,16 +21,16 @@
 \\ Real registers hold doubles, unboxed, and word registers 64-bit integers that wrap, in code
 \\ that calls nothing and catches nothing:
 \\
-\\ (define-native dot (A B I End Start)
-\\   (real Acc Start)
-\\   (loop)
-\\   (prim T >= I End)
-\\   (jump-if-false T more)
-\\   (return-real Acc)
-\\   (label more)
+\\ (define-native dot (A B End)
+\\   (real Acc 0)
+\\   (word I 0)
+\\   (loop terms)
+\\   (jump-unless-word (< I End) done)
 \\   (real Acc (+ Acc (* (f64 A I) (f64 B I))))
-\\   (prim I + I 8)
-\\   (tail-call dot A B I End Start))
+\\   (word I (+ I 8))
+\\   (again terms)
+\\   (label done)
+\\   (return-real Acc))
 \\
 \\ Code a program generates is data, lists and not forms: (shen-jit.assemble Name
 \\ Params Body) gives the code object for instructions in the same shape, and
@@ -94,7 +94,7 @@
        Where "bad code header" [Name Arity Frame Kind]))
 
 (define shen-jit.check.labels
-  Instructions -> (mapcan (/. I (if (= (hd I) label) (tl I) [])) Instructions))
+  Instructions -> (mapcan (/. I (if (element? (hd I) [label loop]) (tl I) [])) Instructions))
 
 (define shen-jit.check.handler-target
   [push-handler L] -> [L]
@@ -149,9 +149,10 @@
 
 \\ The instructions on real and word registers, by what each operand is: a tagged operand read, a
 \\ slot written, a real register read or written, a word register or constant read, a word
-\\ register written, or a label. As raw_kinds in ops.h.
+\\ register written, a label, a loop's head, or the loop to go back to. As raw_kinds in ops.h.
 (define shen-jit.check.shape
-  loop -> []
+  loop -> [head]
+  again -> [back]
   real-number -> [real! tagged]
   real-box -> [slot! real]
   real-load -> [real! tagged tagged]
@@ -190,43 +191,27 @@
   _ _ word! A -> (shen-jit.check.below? A 16)
   Ctx _ word [const K] -> (shen-jit.check.below? K (nth 4 Ctx))
   _ _ word A -> (shen-jit.check.below? A 16)
-  _ Labels label A -> (element? A Labels))
+  _ Labels label A -> (element? A Labels)
+  _ _ head A -> (integer? A)
+  _ Labels back A -> (element? A Labels))
 
 (define shen-jit.check.raw-op?
   [Op | _] -> (not (= (shen-jit.check.shape Op) none)))
 
-\\ Raw registers live only in code that calls nothing and catches nothing: nothing
-\\ saves them across a call, and a handler would find them as a raise left them. A
-\\ self tail call comes back to loop, which only straight-line code may come before.
+\\ Raw registers and loops are only for code that calls nothing and catches nothing: nothing
+\\ saves a register across a call, and a handler would find them as a raise left them.
 (define shen-jit.check.reals
   Where Is -> (if (shen-jit.check.any-raw? Is)
-                  (do (map (/. I (shen-jit.check.assert
-                                   (not (element? (hd I) [call call-sealed call-value push-handler pop-handler
-                                                          exception entry jump-unless-entry]))
-                                   Where "raw registers with a call or a handler" I))
-                           Is)
-                      (shen-jit.check.before-loop Where Is))
+                  (map (/. I (shen-jit.check.assert
+                               (not (element? (hd I) [call call-sealed call-value push-handler pop-handler
+                                                      exception entry jump-unless-entry]))
+                               Where "raw registers or loops with a call or a handler" I))
+                       Is)
                   skip))
 
 (define shen-jit.check.any-raw?
   [] -> false
   [I | Is] -> (or (shen-jit.check.raw-op? I) (shen-jit.check.any-raw? Is)))
-
-\\ Is, up to a loop if there is one, is straight-line code; there is one loop at most.
-(define shen-jit.check.before-loop
-  Where [] -> skip
-  Where [[loop] | Is] -> (shen-jit.check.assert (not (element? [loop] Is)) Where "two loops" [loop])
-  Where [[Op | X] | Is]
-  -> (do (if (element? [loop] Is)
-             (shen-jit.check.assert (not (or (element? Op [label jump jump-if-false return])
-                                             (shen-jit.check.jumps? Op)))
-                                    Where "control flow before loop" [Op | X])
-             skip)
-         (shen-jit.check.before-loop Where Is)))
-
-(define shen-jit.check.jumps?
-  Op -> (let Shape (shen-jit.check.shape Op)
-          (and (cons? Shape) (element? label Shape))))
 
 (define shen-jit.check.below?
   I N -> (and (integer? I) (>= I 0) (< I N)))
@@ -291,31 +276,17 @@
 \\ ---------------------------------------------------------------------------
 \\ Dataflow. A state is [Defined | Handlers] or dead; Pending holds, per
 \\ label, the merged state of the jumps (and raises) to it, or done once the
-\\ label is passed, so a backward jump is caught. Defined also holds
+\\ label is passed, so a backward jump is caught, or for a loop's head, the state
+\\ there, as [head | State]. Only again goes back, and has to bring all of that
+\\ state back with it, so that a single pass is enough. Defined also holds
 \\ [param P] for each parameter slot, and [new P] once P is written: only a
 \\ tail call with window 0 may then read P, as its argument.
 
 (define shen-jit.check.flow
   Where Arity Instructions NLabels
   -> (let Pending (shen-jit.check.fill (absvector NLabels) 0 NLabels none)
-          Final (shen-jit.check.flow-h Where (shen-jit.check.mark-loop Arity Instructions)
-                                       (shen-jit.check.entry-state Arity) Pending [])
+          Final (shen-jit.check.flow-h Where Instructions (shen-jit.check.entry-state Arity) Pending [])
        (shen-jit.check.assert (= Final dead) Where "code falls off the end" Final)))
-
-\\ A slot other than a parameter that code after loop writes counts as unset there: what
-\\ reads it must have written it the same time round, as the JIT does not store what it
-\\ finds dead going forward. A parameter's next value is the tail call's argument.
-(define shen-jit.check.mark-loop
-  _ [] -> []
-  Arity [[loop] | Is] -> [[loop (shen-jit.check.locals-written Arity Is)] | Is]
-  Arity [I | Is] -> [I | (shen-jit.check.mark-loop Arity Is)])
-
-(define shen-jit.check.locals-written
-  Arity Is -> (mapcan (/. I (if (and (element? (hd I) [move const capture closure prim real-box word-box exception])
-                                     (> (hd (tl I)) (+ Arity 1)))
-                                [(hd (tl I))]
-                                []))
-                      Is))
 
 (define shen-jit.check.fill
   V I N X -> V where (= I N)
@@ -381,9 +352,30 @@
 
 (define shen-jit.check.propagate
   Where L State Pending
-  -> (if (= (<-address Pending L) done)
+  -> (if (shen-jit.check.passed? (<-address Pending L))
          (shen-jit.check.fail Where "backward jump" L)
          (address-> Pending L (shen-jit.check.merge Where State (<-address Pending L)))))
+
+(define shen-jit.check.passed?
+  done -> true
+  [head | _] -> true
+  _ -> false)
+
+(define shen-jit.check.loop-head
+  Where L State Pending
+  -> (do (shen-jit.check.assert (= (<-address Pending L) none) Where "a jump into a loop's head" L)
+         (address-> Pending L [head | State])
+         State))
+
+(define shen-jit.check.back
+  Where L [Defined | Handlers] Pending -> (shen-jit.check.back-to Where L (<-address Pending L) Defined Handlers))
+
+(define shen-jit.check.back-to
+  Where L [head Was | Handlers] Defined Handlers
+  -> (do (shen-jit.check.assert (shen-jit.check.subset? Was Defined) Where
+                                "going back without what the loop's head has" [L Was Defined])
+         dead)
+  Where L _ _ _ -> (do (shen-jit.check.fail Where "again without its loop before it" L) dead))
 
 \\ Slots an instruction reads; constant operands read none.
 (define shen-jit.check.used
@@ -408,7 +400,8 @@
   [real | Ks] [A | As] -> [[real A] | (shen-jit.check.raw-used Ks As)]
   [word | Ks] [[const _] | As] -> (shen-jit.check.raw-used Ks As)
   [word | Ks] [A | As] -> [[word A] | (shen-jit.check.raw-used Ks As)]
-  [_ | Ks] [_ | As] -> (shen-jit.check.raw-used Ks As))
+  [_ | Ks] [_ | As] -> (shen-jit.check.raw-used Ks As)
+  _ _ -> [])
 
 (define shen-jit.check.slots
   Ss -> (mapcan (/. S (if (integer? S) [S] [])) Ss))
@@ -441,7 +434,8 @@
   -> (do (shen-jit.check.propagate Where L State Pending) State)
   Where [entry N L] State Pending
   -> (do (shen-jit.check.propagate Where L (shen-jit.check.entry-state N) Pending) State)
-  _ [loop Forget] [Defined | Handlers] _ -> [(shen-jit.check.without Forget Defined) | Handlers]
+  Where [loop L] State Pending -> (shen-jit.check.loop-head Where L State Pending)
+  Where [again L] State Pending -> (shen-jit.check.back Where L State Pending)
   Where [Op | Args] State Pending -> (shen-jit.check.raw-step Where (shen-jit.check.shape Op) Args State Pending)
       where (not (= (shen-jit.check.shape Op) none))
   Where [return S] [_ | Handlers] _ -> (shen-jit.check.leave Where [return S] Handlers)
@@ -474,8 +468,6 @@
          (shen-jit.check.raw-step Where Ks As State Pending))
   Where [_ | Ks] [_ | As] State Pending -> (shen-jit.check.raw-step Where Ks As State Pending))
 
-(define shen-jit.check.without
-  Xs Ys -> (mapcan (/. Y (if (element? Y Xs) [] [Y])) Ys))
 
 \\ A handler reads no slot written since its push: the JIT does not store a test's
 \\ result that the code after the test never reads.
@@ -576,10 +568,11 @@
   none _ -> []
   [] _ -> []
   [K | Ks] [A | As] -> [A | (shen-jit.native.raw-uses Ks As)] where (element? K [tagged slot!])
-  [_ | Ks] [_ | As] -> (shen-jit.native.raw-uses Ks As))
+  [_ | Ks] [_ | As] -> (shen-jit.native.raw-uses Ks As)
+  _ _ -> [])
 
 (define shen-jit.native.labels
-  Body -> (let Names (mapcan (/. I (if (= (hd I) label) (tl I) [])) Body)
+  Body -> (let Names (shen-jit.check.labels Body)
             (if (shen-jit.check.distinct? Names)
                 (shen-jit.lower.bind Names 0)
                 (simple-error (make-string "native code: a label given twice: ~R" Names)))))
@@ -643,7 +636,8 @@
   _ [] _ -> []
   C [tagged | Ks] [A | As] -> [(shen-jit.native.operand C A) | (shen-jit.native.raw-args C Ks As)]
   C [word | Ks] [A | As] -> [(shen-jit.native.operand C A) | (shen-jit.native.raw-args C Ks As)]
-  C [label | Ks] [A | As] -> [(shen-jit.native.label C A) | (shen-jit.native.raw-args C Ks As)]
+  C [K | Ks] [A | As] -> [(shen-jit.native.label C A) | (shen-jit.native.raw-args C Ks As)]
+      where (element? K [label head back])
   C [_ | Ks] [A | As] -> [(shen-jit.native.slot C A) | (shen-jit.native.raw-args C Ks As)]
   _ _ X -> (simple-error (make-string "native code: wrong operands: ~R" X)))
 
@@ -939,7 +933,8 @@
   _ none _ -> []
   _ [] _ -> []
   Kinds [K | Ks] [A | As] -> [A | (shen-jit.real.reads-h Kinds Ks As)] where (element? K Kinds)
-  Kinds [_ | Ks] [_ | As] -> (shen-jit.real.reads-h Kinds Ks As))
+  Kinds [_ | Ks] [_ | As] -> (shen-jit.real.reads-h Kinds Ks As)
+  _ _ _ -> [])
 
 (define shen-jit.real.count
   _ [] N -> N

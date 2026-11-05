@@ -64,8 +64,8 @@ static sljit_sw real_offset(uint32_t n) { return n < REAL_FLOATS ? 0 : (sljit_sw
 
 /* Raw integers, numbered word registers first and cached memory after them: an integer register,
    or a place in the native frame. */
-static sljit_s32 raw_kind(uint32_t n) { return n < WORD_GPRS ? SLJIT_R(5 + n) : SLJIT_MEM1(SLJIT_SP); }
-static sljit_sw raw_offset(uint32_t n) { return n < WORD_GPRS ? 0 : (sljit_sw)(REAL_REGISTERS + n) * WORD; }
+static sljit_s32 raw_kind(uint32_t n) { return (sljit_s32)n < WORD_GPRS ? SLJIT_R(5 + n) : SLJIT_MEM1(SLJIT_SP); }
+static sljit_sw raw_offset(uint32_t n) { return (sljit_s32)n < WORD_GPRS ? 0 : (sljit_sw)(REAL_REGISTERS + n) * WORD; }
 #define RAW(n) raw_kind(n), raw_offset(n)
 #define RAW_SAVED(n) SLJIT_MEM1(SLJIT_SP), (sljit_sw)(REAL_REGISTERS + (n)) * WORD
 
@@ -909,6 +909,9 @@ static uint32_t home_count(const Emit *e, const uint32_t *words, size_t nwords)
         case OP_TAIL_CALL: case OP_TAIL_CALL_SEALED:
             loop = loop || self_tail_call(e, p) != OTHER_CALLEE;
             break;
+        case OP_LOOP:
+            loop = true;
+            break;
         default:
             break;
         }
@@ -979,6 +982,9 @@ static void choose_cached_memory(Emit *e, const uint32_t *words, size_t nwords)
                 loop = true;
             }
             break;
+        case OP_LOOP:
+            loop = true;
+            break;
         default:
             break;
         }
@@ -1039,7 +1045,7 @@ static void emit_memory_caches(Emit *e)
     }
 }
 
-/* Whether self tail calls come back to a loop instruction, past what the body does once. */
+/* Whether the code has a loop instruction. */
 static bool raw_loop(const uint32_t *words, size_t nwords)
 {
     for (size_t i = 0; i < nwords; i += insn_length(words + i))
@@ -1209,7 +1215,7 @@ static void save_raw(Emit *e)
 {
     for (uint32_t k = 0; k < e->reals && k < REAL_FLOATS; k++)
         sljit_emit_fop1(e->c, SLJIT_MOV_F64, REAL_SAVED(k), REAL(k));
-    for (uint32_t k = 0; k < e->word_regs && k < WORD_GPRS; k++)
+    for (uint32_t k = 0; k < e->word_regs && (sljit_s32)k < WORD_GPRS; k++)
         sljit_emit_op1(e->c, SLJIT_MOV, RAW_SAVED(k), RAW(k));
 }
 
@@ -1217,7 +1223,7 @@ static void load_raw(Emit *e)
 {
     for (uint32_t k = 0; k < e->reals && k < REAL_FLOATS; k++)
         sljit_emit_fop1(e->c, SLJIT_MOV_F64, REAL(k), REAL_SAVED(k));
-    for (uint32_t k = 0; k < e->word_regs && k < WORD_GPRS; k++)
+    for (uint32_t k = 0; k < e->word_regs && (sljit_s32)k < WORD_GPRS; k++)
         sljit_emit_op1(e->c, SLJIT_MOV, RAW(k), RAW_SAVED(k));
 }
 
@@ -2735,7 +2741,7 @@ static bool writes_slot(const uint32_t *p, uint32_t s)
 
 /* Whether slot s is written before it is read on every path from the two
    successors of a jump-if-false, or from after alone when target is NONE.
-   Jumps only go forward, so the walk ends. */
+   It visits each instruction once, so the walk ends, also round a loop. */
 static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
                        size_t after, uint32_t target, uint32_t s)
 {
@@ -2760,7 +2766,7 @@ static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
             switch (p[0]) {
             case OP_RETURN: case OP_TAIL_CALL: case OP_TAIL_CALL_SEALED: case OP_TAIL_CALL_VALUE:
                 break;
-            case OP_JUMP: todo[ntodo++] = label_pos[p[1]]; break;
+            case OP_JUMP: case OP_AGAIN: todo[ntodo++] = label_pos[p[1]]; break;
             case OP_JUMP_IF_FALSE: case OP_ENTRY:
                 todo[ntodo++] = next;
                 todo[ntodo++] = label_pos[p[2]];
@@ -2773,7 +2779,7 @@ static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
                     todo[ntodo++] = label_pos[p[3]];
             }
             if (ntodo > n)
-                dead = false; /* cannot happen with forward jumps; be safe */
+                dead = false; /* the stack is full, so assume the worst */
         }
     }
     free(seen);
@@ -3163,12 +3169,12 @@ static void *compile_code(VM *vm, V code)
     uint32_t nlabels = 0;
     size_t ninsns = 0;
     for (size_t i = 0; i < nwords; i += insn_length(words + i), ninsns++)
-        if (words[i] == OP_LABEL && words[i + 1] + 1 > nlabels)
+        if ((words[i] == OP_LABEL || words[i] == OP_LOOP) && words[i + 1] + 1 > nlabels)
             nlabels = words[i + 1] + 1;
     size_t *label_pos = calloc(nlabels + 1, sizeof *label_pos);
     if (label_pos)
         for (size_t i = 0; i < nwords; i += insn_length(words + i))
-            if (words[i] == OP_LABEL)
+            if (words[i] == OP_LABEL || words[i] == OP_LOOP)
                 label_pos[words[i + 1]] = i;
 
     Emit e = {.vm = vm, .c = sljit_create_compiler(NULL), .frame = co[CODE_FRAME],
@@ -3231,7 +3237,7 @@ static void *compile_code(VM *vm, V code)
     struct sljit_label *start = sljit_emit_label(c);
     enter(&e);
     emit_memory_caches(&e);
-    e.loops = loops(&e, words, nwords);
+    e.loops = loops(&e, words, nwords) || raw_loop(words, nwords);
     e.body = e.loops ? sljit_emit_aligned_label(c, LOOP_ALIGN, NULL) : sljit_emit_label(c);
     if (grow)
         grow->back = e.homes || e.nmemory ? start : e.body;
@@ -3359,9 +3365,13 @@ static void *compile_code(VM *vm, V code)
             break;
         case OP_INLINE: /* left only if strip_marks could not allocate */
             break;
-        case OP_LOOP:
-            /* Self tail calls come here, past what runs once: the checker has it before any jump. */
-            e.body = sljit_emit_aligned_label(c, LOOP_ALIGN, NULL);
+        case OP_LOOP: /* nothing is assumed of CACHE here, as a jump back has it as it may */
+            e.labels[p[1]] = sljit_emit_aligned_label(c, LOOP_ALIGN, NULL);
+            e.post = NONE;
+            break;
+        case OP_AGAIN:
+            emit_loop_check(&e);
+            sljit_set_label(sljit_emit_jump(c, SLJIT_JUMP), e.labels[p[1]]);
             break;
         default:
             emit_raw(&e, p);
@@ -3462,7 +3472,7 @@ static void *compile_code(VM *vm, V code)
                  p[0] != OP_JUMP_UNLESS_ENTRY && p[0] != OP_INLINE && p[1] < 64 &&
                  !(p[0] == OP_PRIM && i != (size_t)(p - words)))
             e.pairs &= ~(UINT64_C(1) << p[1]);
-        falls = !(p[0] == OP_RETURN || p[0] == OP_JUMP || p[0] == OP_TAIL_CALL ||
+        falls = !(p[0] == OP_RETURN || p[0] == OP_JUMP || p[0] == OP_AGAIN || p[0] == OP_TAIL_CALL ||
                   p[0] == OP_TAIL_CALL_SEALED || p[0] == OP_TAIL_CALL_VALUE);
         /* A restart after a collection runs the instruction again from the
            state before it; going back after a slow path continues from the

@@ -197,11 +197,11 @@
 
 (define-native memory-test.word-store-round (M N)
   (word I 0)
-  (loop)
+  (loop top)
   (jump-unless-word (< I N) done)
   (u8! M I 9)
   (word I (+ I 1))
-  (tail-call memory-test.word-store-round M N)
+  (again top)
   (label done)
   (return M))
 (memory-test.check "in word registers" 9 (freeze (shen-jit.u8 (memory-test.word-store-round (value killable) 8) 7)))

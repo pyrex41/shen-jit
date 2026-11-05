@@ -187,7 +187,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         case 'o': ok = operand(v, frame, nconst, &x); break;
         case 'k': ok = small_int(v, nconst, &x); break;
         case 'c': ok = small_int(v, ncode, &x); break;
-        case 'l': ok = small_int(v, UINT32_MAX, &x); break;
+        case 'l': case 'h': case 'b': ok = small_int(v, UINT32_MAX, &x); break;
         case 'n': ok = small_int(v, 256, &x); break;
         case 'r': ok = small_int(v, REAL_REGISTERS, &x); break;
         case 'w': ok = small_int(v, WORD_REGISTERS, &x); break;
@@ -245,17 +245,18 @@ static bool check_control(Loader *l)
     size_t len = l->len, last = 0;
     uint32_t nlabels = 0;
     for (size_t i = 0; i < len; i += insn_length(buf + i))
-        if (buf[i] == OP_LABEL && buf[i + 1] >= nlabels)
+        if ((buf[i] == OP_LABEL || buf[i] == OP_LOOP) && buf[i + 1] >= nlabels)
             nlabels = buf[i + 1] + 1;
     if (nlabels > (1u << 20))
         return fail(l, "too many labels");
-    unsigned char *defined = calloc(nlabels + 1, 1);
+    unsigned char *defined = calloc(2 * (nlabels + 1), 1);
     if (!defined)
         return fail(l, "out of memory");
+    unsigned char *head = defined + nlabels + 1; /* the loops passed so far */
     bool ok = len > 0;
     for (size_t i = 0; ok && i < len; i += insn_length(buf + i)) {
         last = i;
-        if (buf[i] == OP_LABEL)
+        if (buf[i] == OP_LABEL || buf[i] == OP_LOOP)
             ok = !defined[buf[i + 1]]++;
     }
     for (size_t i = 0; ok && i < len; i += insn_length(buf + i)) {
@@ -265,12 +266,16 @@ static bool check_control(Loader *l)
                             ? buf[i + 3] : UINT32_MAX;
         if (target != UINT32_MAX)
             ok = target < nlabels && defined[target];
+        if (buf[i] == OP_LOOP)
+            head[buf[i + 1]] = 1;
+        if (buf[i] == OP_AGAIN) /* back to a loop this code has passed, and nothing else */
+            ok = ok && buf[i + 1] < nlabels && head[buf[i + 1]];
         if (buf[i] == OP_ENTRY) /* first, for more arguments than the arity */
             ok = ok && i == 0;
     }
     if (ok) {
         uint32_t op = buf[last];
-        ok = op == OP_RETURN || op == OP_JUMP || op == OP_TAIL_CALL ||
+        ok = op == OP_RETURN || op == OP_JUMP || op == OP_AGAIN || op == OP_TAIL_CALL ||
              op == OP_TAIL_CALL_SEALED || op == OP_TAIL_CALL_VALUE;
     }
     free(defined);

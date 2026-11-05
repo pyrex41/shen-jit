@@ -29,7 +29,8 @@
     X(OP_ENTRY, "entry", 2)                   \
     X(OP_JUMP_UNLESS_ENTRY, "jump-unless-entry", 3) \
     X(OP_INLINE, "inline", 2)                 \
-    X(OP_LOOP, "loop", 0)                     \
+    X(OP_LOOP, "loop", 1)                     \
+    X(OP_AGAIN, "again", 1)                   \
     X(OP_REAL_NUMBER, "real-number", 2)       \
     X(OP_REAL_BOX, "real-box", 2)             \
     X(OP_REAL_MOVE, "real-move", 2)           \
@@ -109,12 +110,14 @@ static inline size_t insn_length(const uint32_t *p)
 #define WORD_REGISTERS 16
 
 /* What each operand of the instructions on them is: s a slot written, o a slot or constant read,
-   r a real register, w a word register written, W a word register or constant read, l a label.
+   r a real register, w a word register written, W a word register or constant read, l a label jumped
+   to on a test, h a loop's head, which defines a label, b a label jumped back to.
    real-load and real-store are laid out as prim is, with the real register first. */
 static inline const char *raw_kinds(unsigned op)
 {
     switch (op) {
-    case OP_LOOP: return "";
+    case OP_LOOP: return "h";
+    case OP_AGAIN: return "b";
     case OP_REAL_NUMBER: return "ro";
     case OP_REAL_BOX: return "sr";
     case OP_REAL_MOVE: case OP_REAL_NEG: case OP_REAL_ABS: case OP_REAL_SQRT: return "rr";

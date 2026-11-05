@@ -17,8 +17,8 @@ All notable changes to this project are documented in this file. The format is b
   `handle.sweep`, over `shen-jit.pointer-guard`, `shen-jit.pointer-owner` and `shen-jit.pointers-dead`.
 - `shen-jit.collect` collects now.
 - `shen-jit.pointer-read-only` makes a pointer that raises when stored to, which is what `mmap.read` gives.
-- Real registers in native code written by hand: `real`, `f64!`, `jump-unless`, `return-real` and `loop` keep
-  doubles unboxed in loops that call nothing.
+- Real registers in native code written by hand: `real`, `f64!`, `jump-unless` and `return-real` keep doubles
+  unboxed in loops that call nothing, and `loop` and `again` make those loops, which can nest.
 - Word registers there too: `word`, `jump-unless-word`, `return-word`, `word-box`, and `u8!` to `u64!` keep 64-bit
   integers that wrap, for hashes and random numbers, and as indices with no tag to check.
 - `make bench-numeric` runs numeric programs and a path tracer in C and in Shen.

@@ -658,36 +658,36 @@ own output is held to, so wrong code is refused instead of crashing. A program g
 lists to `shen-jit.assemble` and `shen-jit.install-code`. Slots hold tagged values, as in all Shen code, and
 [bytes and bits](#bytes-and-bits) and [memory outside the heap](#memory-outside-the-heap) are primitives here as anywhere.
 
-For numeric work, `real` keeps doubles unboxed in registers, in code that calls nothing. It reads an expression, and a
-`loop` instruction lets a self tail call skip what should run once:
+For numeric work, `real` keeps doubles unboxed in registers, in code that calls nothing. It reads an expression. `word`
+does the same for 64-bit integers, which wrap, for hashes and random numbers, and as an index, which then has no tag to
+check. `(loop L)` marks the head of a loop and `(again L)` goes back to it, and loops can nest:
 
 ```shen
-(define-native dot (A B I End Start)
-  (real Acc Start)
-  (loop)
-  (prim T >= I End)
-  (jump-if-false T more)
-  (return-real Acc)
-  (label more)
+(define-native dot (A B End)
+  (real Acc 0)
+  (word I 0)
+  (loop terms)
+  (jump-unless-word (< I End) done)
   (real Acc (+ Acc (* (f64 A I) (f64 B I))))
-  (prim I + I 8)
-  (tail-call dot A B I End Start))
+  (word I (+ I 8))
+  (again terms)
+  (label done)
+  (return-real Acc))
 ```
 
 Every read and store is still checked against its memory's length, and nothing in these loops allocates until
-`return-real` boxes the result. `word` does the same for 64-bit integers, which wrap, for hashes and random numbers, and as an
-index, which then has no tag to check:
+`return-real` boxes the result. An FNV-1a hash, say, is a loop of wrapping multiplications:
 
 ```shen
 (define-native fnv (Bytes End)
   (word Prime 1099511628211)
   (word Hash (+ (* 3421674724 4294967296) 2216829733))
   (word I 0)
-  (loop)
+  (loop bytes)
   (jump-unless-word (< I End) done)
   (word Hash (* (bit-xor Hash (u8 Bytes I)) Prime))
   (word I (+ I 1))
-  (tail-call fnv Bytes End)
+  (again bytes)
   (label done)
   (return-word (shift-right Hash 8)))
 ```
