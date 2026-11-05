@@ -29,32 +29,38 @@ static void fill_cleared(V *from, V *to)
         *p = V_CLEARED;
 }
 
-/* Both semispaces lie in one block of reserved address space, which takes no
-   memory until it is committed and used. So growing commits more of each, and
+/* The heap is three regions in one block of reserved address space, which takes
+   no memory until it is committed and used. So growing commits more of each, and
    nothing moves. A process limited in address space reserves less, and one that
    starts with larger semispaces reserves that. On macOS each process's start
-   takes longer with the size: 1.8 ms at 1 TiB each, 0.1 at this. The second
-   starts a little past the first's reservation, so that their addresses differ
-   in their low bits: with those equal, collections took up to half as long again
-   on a Ryzen 5 5600X. */
-#define RESERVED_WORDS ((size_t)1 << 33) /* 64 GiB for each semispace */
+   takes longer with the size: 1.8 ms at 1 TiB each, 0.1 at this. Each starts a
+   little past the last one's reservation, so that their addresses differ in their
+   low bits: with those equal, collections took up to half as long again on a
+   Ryzen 5 5600X.
+
+   New objects always go in the area, and what a collection keeps goes back and
+   forth between the two spaces. So the memory written to is the same each time,
+   and stays in the cache, where two semispaces taking turns would be twice as
+   much. The area lies between the spaces, so that one range holds what a
+   collection may move, and not where it copies to: the collector need not know. */
+#define RESERVED_WORDS ((size_t)1 << 33) /* 64 GiB for each region */
 #define STAGGER_WORDS (((size_t)33 << 17) + (1 << 13)) /* 33 MiB and 64 KiB, so whole pages */
+#define HEAP_BYTES(words) ((3 * (words) + 2 * STAGGER_WORDS) * sizeof(uint64_t))
 
 static uint64_t *reserve_heap(size_t min_words, size_t *words)
 {
     for (*words = min_words > RESERVED_WORDS ? min_words : RESERVED_WORDS; *words >= min_words; *words /= 2) {
 #ifdef _WIN32
-        void *p = win_reserve((2 * *words + STAGGER_WORDS) * sizeof(uint64_t));
+        void *p = win_reserve(HEAP_BYTES(*words));
         if (p)
             return p;
 #else
-        void *p = mmap(NULL, (2 * *words + STAGGER_WORDS) * sizeof(uint64_t), PROT_NONE,
-                       MAP_PRIVATE | MAP_ANON, -1, 0);
+        void *p = mmap(NULL, HEAP_BYTES(*words), PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
         if (p != MAP_FAILED) {
 #ifdef MADV_HUGEPAGE
             /* Touching fresh small pages costs about as much as allocating
                on them. Without this, Linux may not give huge pages at all. */
-            madvise(p, (2 * *words + STAGGER_WORDS) * sizeof(uint64_t), MADV_HUGEPAGE);
+            madvise(p, HEAP_BYTES(*words), MADV_HUGEPAGE);
 #endif
             return p;
         }
@@ -72,6 +78,13 @@ static bool commit_space(uint64_t *space, size_t words)
 #endif
 }
 
+/* Empties the area, whose room is what the space's contents leave of a semispace. */
+void vm_fresh_area(VM *vm)
+{
+    vm->hp = vm->area_from = vm->area;
+    vm->hlimit = vm->area + (vm->space_words - (size_t)(vm->live_end - vm->space));
+}
+
 V *vm_cleared_stack(size_t words)
 {
     V *stack = malloc(words * sizeof(V));
@@ -86,16 +99,17 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     if (!vm)
         return NULL;
     vm->space = reserve_heap(semispace_words, &vm->reserved_words);
-    vm->other = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
+    vm->area = vm->space ? vm->space + vm->reserved_words + STAGGER_WORDS : NULL;
+    vm->other = vm->space ? vm->area + vm->reserved_words + STAGGER_WORDS : NULL;
     vm->stack = malloc(stack_words * sizeof(V));
     if (!vm->space || !vm->stack || !commit_space(vm->space, semispace_words) ||
-        !commit_space(vm->other, semispace_words)) {
+        !commit_space(vm->area, semispace_words) || !commit_space(vm->other, semispace_words)) {
         vm_destroy(vm);
         return NULL;
     }
     vm->space_words = semispace_words;
-    vm->hp = vm->space;
-    vm->hlimit = vm->space + semispace_words;
+    vm->live_end = vm->space;
+    vm_fresh_area(vm);
     vm->stack_words = stack_words;
     vm->stack_max_words = (size_t)1 << 27; /* 1 GiB of slots */
     vm->fp = vm->top = vm->stack;
@@ -129,8 +143,7 @@ void vm_destroy(VM *vm)
 #ifdef _WIN32
         win_release(vm->space < vm->other ? vm->space : vm->other);
 #else
-        munmap(vm->space < vm->other ? vm->space : vm->other,
-               (2 * vm->reserved_words + STAGGER_WORDS) * sizeof(uint64_t));
+        munmap(vm->space < vm->other ? vm->space : vm->other, HEAP_BYTES(vm->reserved_words));
 #endif
     }
     free(vm->stack);
@@ -338,7 +351,7 @@ static void sweep_code(VM *vm)
 bool vm_in_heap(const VM *vm, const void *at)
 {
     const uint64_t *p = at;
-    if (p >= vm->space && p < vm->hp)
+    if ((p >= vm->space && p < vm->live_end) || (p >= vm->area_from && p < vm->hp))
         return true;
     size_t lo = 0, hi = vm->nlarge; /* the first large object after p */
     while (lo < hi) {
@@ -625,7 +638,9 @@ static V *clear_above_top(const VM *vm, V *stack, size_t words, V *fp, V *top, V
 
 static void collect_into(VM *vm, uint64_t *to)
 {
-    Copy c = {vm->space, (size_t)(vm->hp - vm->space), to, vm, NULL, 0, 0};
+    uint64_t *from = vm->space < vm->area ? vm->space : vm->area;
+    uint64_t *from_end = vm->space < vm->area ? vm->hp : vm->live_end;
+    Copy c = {from, (size_t)(from_end - from), to, vm, NULL, 0, 0};
     for (V *p = vm->stack; p < vm->top; p++)
         copy_slot(&c, p);
     for (Thread *t = vm->threads; t; t = t->next) {
@@ -708,8 +723,8 @@ static void collect_into(VM *vm, uint64_t *to)
     vm->nnatives = kept;
 
     vm->space = to;
-    vm->hp = c.next;
-    vm->hlimit = to + vm->space_words;
+    vm->live_end = c.next;
+    vm_fresh_area(vm);
     vm->collections++;
     vm_set_limit(vm, clear_above_top(vm, vm->stack, vm->stack_words, vm->fp, vm->top, vm->stack_limit));
     for (Thread *t = vm->threads; t; t = t->next)
@@ -727,19 +742,23 @@ static double seconds(void)
 bool vm_collect(VM *vm, size_t need_words)
 {
     double start = seconds();
-    uint64_t *old = vm->space, *old_end = vm->hp;
+    uint64_t *old = vm->space, *old_end = vm->live_end, *area_from = vm->area_from, *area_end = vm->hp;
     collect_into(vm, vm->other);
     vm->other = old;
-    /* Under stress nothing is left to read in the old space, so that a stale pointer
+    /* Under stress nothing is left to read where objects were, so that a stale pointer
        fails at once instead of finding what it pointed to still there. Not an address
        on any target, and tagged as a procedure if it is ever read as a value. */
-    if (vm->stress)
+    if (vm->stress) {
         for (uint64_t *p = old; p < old_end; p++)
             *p = UINT64_C(0xDEADDEADDEADDEAD);
+        for (uint64_t *p = area_from; p < area_end; p++)
+            *p = UINT64_C(0xDEADDEADDEADDEAD);
+    }
 
     /* Grow until live data and the request fit in 40% of a semispace, up to
        the limit. Live large objects count: every collection scans them. */
-    size_t live = (size_t)(vm->hp - vm->space);
+    size_t kept = (size_t)(vm->live_end - vm->space);
+    size_t live = kept;
     for (size_t i = 0; i < vm->nlarge; i++)
         if (!vm->large[i].spare)
             live += vm->large[i].words;
@@ -747,27 +766,37 @@ bool vm_collect(VM *vm, size_t need_words)
     while ((live + need_words) * 10 > want * 4 && want * 2 <= vm->reserved_words &&
            (!vm->max_words || want * 2 <= vm->max_words))
         want *= 2;
-    if (want != vm->space_words && commit_space(vm->space, want) && commit_space(vm->other, want)) {
+    if (want != vm->space_words && commit_space(vm->space, want) && commit_space(vm->area, want) &&
+        commit_space(vm->other, want)) {
         vm->space_words = want;
-        vm->hlimit = vm->space + want;
+        vm_fresh_area(vm);
     }
     /* At SHEN_JIT_MAX_HEAP, the last tenth of the heap is a reserve: an
        allocation that does not fit below it fails, and raising the "out of
        memory" error may then use it. Without it, a heap full of live data
        would leave no room for the error. */
-    if (vm->max_words && vm->space_words * 2 > vm->max_words)
-        vm->hlimit = vm->space + vm->space_words / 10 * 9;
-    /* Under stress, leave room for this request or vm->stress words, so
-       inline allocation in native code also collects. */
+    if (vm->max_words && vm->space_words * 2 > vm->max_words) {
+        size_t usable = vm->space_words / 10 * 9;
+        vm->hlimit = vm->area + (kept < usable ? usable - kept : 0);
+    }
+    /* Under stress, new objects go past the words just overwritten for as long as
+       they fit, or they would land on what a stale pointer points to and hide it.
+       And leave room for this request or vm->stress words, so inline allocation in
+       native code also collects. */
     size_t room = need_words > vm->stress ? need_words : vm->stress;
-    if (vm->stress && (size_t)(vm->hlimit - vm->hp) >= room)
-        vm->hlimit = vm->hp + room;
+    if (vm->stress) {
+        if (room <= (size_t)(vm->hlimit - vm->area) &&
+            (size_t)(area_end - vm->area) <= (size_t)(vm->hlimit - vm->area) - room)
+            vm->hp = vm->area_from = area_end;
+        if ((size_t)(vm->hlimit - vm->hp) >= room)
+            vm->hlimit = vm->hp + room;
+    }
     double pause = seconds() - start;
     vm->gc_seconds += pause;
     if (pause > vm->gc_longest)
         vm->gc_longest = pause;
     if ((size_t)(vm->hlimit - vm->hp) < need_words) {
-        vm->hlimit = vm->space + vm->space_words; /* the reserve, for the error */
+        vm_fresh_area(vm); /* the reserve, for the error */
         return false;
     }
     return true;
@@ -842,7 +871,7 @@ void vm_census(VM *vm, size_t count[T_LIMIT], size_t words[T_LIMIT])
             count[hdr_type(vm->large[i].object[0])]++;
             words[hdr_type(vm->large[i].object[0])] += vm->large[i].words;
         }
-    for (uint64_t *s = vm->space; s < vm->hp;) {
+    for (uint64_t *s = vm->space; s < vm->live_end;) {
         unsigned t = is_header(*s) ? hdr_type(*s) : 0;
         size_t n = t ? obj_words(*s) : 2;
         count[t]++;

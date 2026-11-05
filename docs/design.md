@@ -13,7 +13,7 @@ larger or harder to follow needs clear evidence that it is worth the cost.
 | Execution engine | A baseline JIT that compiles each function at its first call. There is no interpreter |
 | Frontend | A lowerer written in Shen, run by another Shen at stage 0 and as guest code afterwards |
 | Boot artifact | A heap image written at build time, holding no native code |
-| Collector | A Cheney semispace copying collector with inline bump allocation and no write barriers |
+| Collector | A Cheney copying collector with inline bump allocation into one reused area, and no write barriers |
 | Native emitters | Handwritten C. Only what dominates execution is inline; the rest calls C helpers |
 | Runtime organisation | One contiguous guest stack per thread, and a handler stack |
 
@@ -190,8 +190,14 @@ heap address. Native code lives in SLJIT's executable memory, and a collection f
 ## Collection
 
 Allocation bumps a cursor that emitted code checks against a limit, and the slow path collects, after which the
-instruction runs again. There are no write barriers or remembered sets. The semispaces lie in one reserved block of
-address space and double in place when live data passes 40% of them.
+instruction runs again. There are no write barriers or remembered sets.
+
+New objects always go in one area, from its start after every collection, and what a collection keeps goes back and forth
+between two spaces. So the memory written to is the same each time and stays in the cache, where two semispaces taking turns
+would be twice as much. Every collection still copies all that is live, as there are no generations. The area's room is what the
+kept data leaves of a semispace's size, so collections come as often as with two semispaces, and at worst as much memory is
+touched. The three lie in one reserved block of address space, with the area between the spaces, so that one range holds what a
+collection may move and not where it copies to, and they double in place when live data passes 40% of a semispace's size.
 
 - **Lists stay contiguous.** Cheney's breadth-first order scatters a list's pairs among everything else live, so when a pair is
   copied, the pairs of its tail are copied right after it.
@@ -218,7 +224,8 @@ The stack is scanned linearly, from its base to the published top, which three r
 - **The stack never shrinks during guest execution, and new stack starts cleared.**
 - **Return addresses scan as fixnums.** Return labels are aligned to 4 bytes, so their low bits match the zero tag.
 
-Under `SHEN_JIT_GC_STRESS` the collector also overwrites the old space, so that a stale pointer fails at once.
+Under `SHEN_JIT_GC_STRESS` the collector also overwrites where objects were, and new objects go past those words for as long as they
+fit, so that a stale pointer fails at once.
 
 ## Threads
 

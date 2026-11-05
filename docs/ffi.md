@@ -166,7 +166,7 @@ It links against nothing: `shen_vm` is a pointer to a table of functions, which 
 
 **Mistakes end the process, with a message naming the procedure:** passing `SHEN_NONE` or `SHEN_ERROR` on, returning `SHEN_NONE`, or a value left over
 from before a collection, where that can be seen. So test with `SHEN_JIT_GC_STRESS=1`: every allocation then collects, and every read checks its value too, which finds
-most of what breaks the first rule. A value that has lived through an even number of collections points back into the heap, as the two semispaces take turns, and goes unseen.
+most of what breaks the first rule. A value that a collection had already kept, and that then lives through an even number more, points back into the heap, as the two spaces take turns, and goes unseen.
 
 A callback from a library that takes userdata needs nothing more. It runs inside the foreign call that started it, so `vm` is still valid:
 

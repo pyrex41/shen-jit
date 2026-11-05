@@ -31,6 +31,8 @@ All notable changes to this project are documented in this file. The format is b
 - A loop that calls nothing works out the memory it reads and stores through once, on the way in.
 - In native code, machine registers go to what the deepest loops use most, whatever the order of the names, and
   an access to memory reached at one width takes one comparison.
+- New objects now always go in the same memory, so a program that allocates uses much less of it, and allocates
+  faster where two semispaces taking turns outgrew the cache. A process that only starts takes about 2 MB more.
 
 ### Fixed
 

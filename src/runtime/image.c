@@ -156,12 +156,12 @@ static bool write_image(VM *vm, const char *path, const char *mode)
        does any other object: one collection makes room, the next copies
        them. */
     if (vm->large_words && (!vm_collect(vm, vm->large_words) ||
-                            (size_t)(vm->hp - vm->space) + vm->large_words > vm->space_words))
+                            (size_t)(vm->live_end - vm->space) + vm->large_words > vm->space_words))
         return false;
     vm->copy_large = true;
     vm_collect(vm, 0);
     vm->copy_large = false;
-    size_t words = (size_t)(vm->hp - vm->space);
+    size_t words = (size_t)(vm->live_end - vm->space);
     uint64_t *copy = malloc((words ? words : 1) * sizeof(uint64_t));
     if (!copy)
         return false;
@@ -269,7 +269,8 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
     vm->foreign_stub = foreign_stub;
     if (fread(vm->space, sizeof(uint64_t), h.heap_words, f) != h.heap_words)
         goto fail;
-    vm->hp = vm->space + h.heap_words;
+    vm->live_end = vm->space + h.heap_words;
+    vm_fresh_area(vm);
     intptr_t delta = (intptr_t)(uintptr_t)vm->space;
     rebase_heap(vm, vm->space, h.heap_words, delta, restore_raw);
     if (!read_root_array(f, &vm->cells, h.cell_entries, delta) ||
@@ -278,7 +279,7 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
     vm->intern = rebase(h.intern, delta);
     vm->nsymbols = h.nsymbols;
     /* The code objects take their constant slots again (heap.c). */
-    for (uint64_t *s = vm->space; s < vm->hp; s += is_header(*s) ? obj_words(*s) : 2)
+    for (uint64_t *s = vm->space; s < vm->live_end; s += is_header(*s) ? obj_words(*s) : 2)
         if (is_header(*s) && hdr_type(*s) == T_CODE)
             vm_track_code(vm, tagged(s, TAG_OBJECT));
     vm_find_free_consts(vm);

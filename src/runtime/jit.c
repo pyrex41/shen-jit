@@ -3845,7 +3845,7 @@ void jit_stats(VM *vm, size_t *compiled, size_t *freed)
 void jit_recompile(VM *vm)
 {
     vm_collect(vm, 0); /* so that the heap can be walked */
-    for (uint64_t *s = vm->space; s < vm->hp;) {
+    for (uint64_t *s = vm->space; s < vm->live_end;) {
         if (!is_header(*s)) {
             s += 2;
             continue;

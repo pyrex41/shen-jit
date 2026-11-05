@@ -143,6 +143,9 @@ Lowering rules, the collector and the kernel port have their own sections.
   patterns of 16 and 24 elements took 1.2 and 1.5 times as long.
 - **List walks are not bound by dependent loads** (2026-11-04). Corrects an earlier conclusion: walking a pattern
   takes 0.20 ns per element on the Ryzen VM and 0.14 on the M3 Max up to 12 elements, about one cycle.
+- **Slots are not slow on Zen 3** (2026-11-05, Ryzen VM, hand-written chains). A store and a reload of the same slot add nothing to
+  a chain of additions at any base register, 0.216 ns a link with or without them, and about one cycle when the frame pointer
+  moves between them, as across a call, 0.432 ns. So `rbx` as the frame pointer costs nothing against `rbp`.
 
 ### Branch shapes and code placement
 
@@ -172,6 +175,13 @@ Lowering rules, the collector and the kernel port have their own sections.
   An unsound timing build: 0.40 to 0.24 ns per compare at 16 on the Ryzen VM, 0.25 to 0.22 on the M3 Max, and
   `match list` did not move. A correct version needs a lane for objects, and only 30 of 2,207 `=` tests have this
   shape.
+- **Rejected: long NOPs in loop padding** (2026-11-05, Ryzen VM, best of 5, against the build before). A loop head's padding runs on
+  entry, up to 31 one-byte NOPs. Filled with few long ones: kernel rows 0.998, others 0.998, `list membership (first item)` 0.74,
+  `string get tail (short)` 0.87, the realistic programs within noise. A second patch to SLJIT for no gain on real programs.
+- **Rejected: cells and constants below 2 GB on x86-64** (2026-11-05, Ryzen VM, best of 5, against the build before). With
+  `MAP_32BIT`, SLJIT writes `cmp rax,[abs32]` where a 10-byte move and a load were, with no change in the JIT. Kernel rows 0.997,
+  others 0.994, the realistic programs 1.00, workloads never used for tuning 0.94 to 1.03. `literal symbol equality` 0.88, but `literal
+  float equality (false)` 1.50 and `match list (multiple clauses, not matching)` 1.33: such rows move by whole cycles either way.
 
 ### Constants and arithmetic
 
@@ -221,7 +231,12 @@ Lowering rules, the collector and the kernel port have their own sections.
   campaign and 0.92 alone, as the first row to fault in the semispaces, about 4 ms. Every process would pay that
   and 32 MB resident.
 - **x86-64 allocation is bound by memory** (2026-11-03, Ryzen VM). `tuple create` 2.2 ns for 32 bytes and a `cons`
-  1.1 for 16, about 14 GB/s against about 28 on the M3 Max.
+  1.1 for 16, about 14 GB/s against about 28 on the M3 Max. The cause, and what lifted it, are under "One allocation area".
+- **Rejected: prefetching ahead of the heap pointer** (2026-11-05, Ryzen VM, a model in C of bump allocation over 32 MB twice). `prefetcht0`
+  or `prefetchw` at +2048 bytes: 32 bytes 1.79 to 1.50 ns, 16 bytes 1.04 to 0.93, at nearer distances less, for one more instruction at each
+  allocation. One area does better with none.
+- **Rejected: clearing chunks ahead of the heap pointer** (2026-11-05, the same model). `memset` or `rep stosq` over 4 KB to 1 MB: 32 bytes
+  1.79 to 2.24 ns at best, as the lines are still read. `clzero`, which would not read them, is hidden in the VM.
 
 ### Errors and handlers
 
@@ -373,6 +388,19 @@ Nothing in the runtime changes for it alone.
 - **First writes: not done.** The first row to touch the semispaces pays about 4 ms of page faults (2026-11-03, M3 Max), and
   Windows 10 about 13 ms against Linux's 3 on the same Ryzen (2026-11-04). Touching the heap at startup would put 32 MB
   resident in every process. A smaller start means more collections. Large pages on Windows need a privilege.
+- **One allocation area** (2026-11-05, Ryzen VM at load about 0, in alternation with the build before, best of 2 to 4 rounds; M3 Max at load
+  about 3, best of 3). Two semispaces taking turns write to 64 MB, past that machine's 32 MB L3. Modelled in C, 32 bytes took 1.79 ns at 32 MB
+  each and 0.95 at 16 MB each, and 16 bytes 1.04 and 0.89, and each smaller semispace also means more collections. So new objects now always
+  go in one area, and what a collection keeps goes back and forth between two spaces: the same collections, and half the memory written to. No
+  barrier and no generations, and the copier does not change, as the area lies between the spaces and one range still holds what may move.
+  About 35 lines net.
+  - **Ryzen VM:** `vector create (big)` 0.62, `tuple create` 0.69, `dict create` 0.82, `absvector create (small)` 0.89, `reverse (32 items)` 0.94,
+    `closure allocation` 0.97. All kernel rows 0.980, their data rows 0.942. `compile pipeline` 0.999, `bytecode VM` 1.004. Workloads never used
+    for tuning: startup 0.99, kernel suite 1.00, extensions 0.98, stlib install 1.00, contract 0.96.
+  - **Peak memory, Ryzen VM:** kernel suite 74 to 49 MB, 1.6 GB of short lists 69 to 37 MB. A bare start 3.7 to 5.4 MB, as the area takes a huge page.
+  - **M3 Max:** kernel rows 1.000, others 0.999, `vector create (big)` 0.94.
+  - **`list equality (late mismatch)` read 1.32 and later 0.84, which is placement.** Timed alone at shifted heap positions, both builds take 31 or
+    43 ns by where the two lists land.
 
 ### The guest stack
 
@@ -396,6 +424,10 @@ Nothing in the runtime changes for it alone.
   stale read beyond the one its first test was written to show: C roots shared by threads, which crashed 3 runs of 3 and pass
   3 of 3 per thread. Its limit: the semispaces take turns, so after an even number of collections a stale pointer is back
   inside the heap.
+- **2026-11-05, one allocation area hid stale pointers, and passed.** Its first build passed all of GC stress, while the next allocation landed on the
+  words just overwritten, so a stale pointer found a new object instead of failing. Noticed reading what this section promises, and a unit test now
+  shows it. Under stress, new objects go past those words for as long as they fit, and those words no longer count as the heap. So a stale pointer to a
+  young object now stays caught at any number of collections, until the area wraps. One to what a collection had kept still comes back every second one.
 
 ### Images and executables
 
@@ -431,6 +463,7 @@ Nothing in the runtime changes for it alone.
 Real programs would gain 6–15% and allocation loops on x86-64 15–27%, against about twice the time where data lives and a
 barrier every C store must honour for good. About 200 lines by estimate: today's semispaces as the old space, survivors
 promoted at once, remembered slots in a fixed buffer, no barrier on cells and constants. Nothing below ran with a real one.
+One allocation area (2026-11-05) has since given part of this, staying in the cache, with no barrier, so these figures overstate what is left.
 
 - **Survivors at 4 and 16 MB** (M3 Max, throwaway build): kernel suite 2.9%, 1.5%; stlib install 23%, 24%; short lists 1.0%,
   0.3%; a long list kept 100%; an old vector filled with new pairs 38%, 10%.
@@ -1143,6 +1176,14 @@ the recorded 0.50's time on the M3 Max. The earlier prototype has no x86-64 numb
   `reverse` 1.41, `closure allocation` 1.31.
 - **`trap-error` with an error raised looks 3 to 7 times worse there, from Shen/Scheme's side:** raising takes it 0.65 s on macOS
   against 0.13 s on Linux for the basic row.
+- **Those four rows, 2026-11-05, against Shen/Scheme 0.53, the kernel's benchmarks in one process, before and after one allocation area:** `tuple create`
+  1.73 to 1.20, `reverse (32 items)` 1.38 to 1.28, `closure allocation` 1.32 to 1.26, `match list (multiple clauses, matching)` 1.47 to 1.47. All rows 0.410 to 0.402.
+- **`match list` is measured against an unsound test, 2026-11-05.** Shen/Scheme 0.53 compiles `(= X 5)` to `(eqv? X 5)`, so `(= (* 2.5 2) 5)` through a literal
+  is false. Its next commit compiles it to `(kl:= X 5)`. With that emulated by shadowing `eqv?` in user code, `match list` reads 0.26, `literal integer equality (false)` 0.30 and all rows 0.27,
+  control loops taking Shen/Scheme about 2.2 ns more a turn; `compile pipeline` 0.85 to 0.89 and `bytecode VM` 0.94 to 0.96. That charges a whole call per test, which an inline sound test would not, so these are bounds.
+- **What x86-64 costs, 2026-11-05, Ryzen VM over M3 Max, 103 rows:** Shen/JIT 1.30, Shen/Scheme 1.14. `bytecode VM` 1.48 and 1.12, on Shen/JIT with 78% of its samples in `exec` and 3.1% of its time collecting. Not memory, slots, constant loads
+  or padding (each above). `exec` makes real calls, so loop registers would not apply. Times on this machine come in whole cycles a turn, which suggests the front end or dispatch, as Zen 3 is narrower than the M3, but that is a guess: `perf` is
+  blocked there by `kernel.perf_event_paranoid`, so nothing counted instructions.
 
 ### Native Windows (2026-11-04)
 

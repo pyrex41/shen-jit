@@ -53,7 +53,7 @@ typedef struct Thread {
 typedef struct VM {
     /* Fields read by emitted code first, at fixed offsets. */
     uint64_t *hp;      /* allocation cursor */
-    uint64_t *hlimit;  /* end of the current semispace */
+    uint64_t *hlimit;  /* where the room in the allocation area ends */
     V *fp;             /* frame pointer published at a safepoint */
     V *top;            /* scanned stack top published at a safepoint */
     V *stack_limit;    /* dirty mark: slots at or above it are cleared */
@@ -68,9 +68,12 @@ typedef struct VM {
     size_t nhandlers, handlers_cap;
 
     /* Heap. */
-    uint64_t *space;    /* current semispace */
-    uint64_t *other;    /* the other semispace */
-    size_t space_words; /* size of each semispace */
+    uint64_t *area;     /* where new objects go, from its start after every collection */
+    uint64_t *area_from; /* where they start: area, except under stress (vm_collect) */
+    uint64_t *space;    /* holds what the last collection kept, up to live_end */
+    uint64_t *live_end;
+    uint64_t *other;    /* where the next collection copies to */
+    size_t space_words; /* what the space holds and the area's room add up to */
     size_t reserved_words; /* the most it can grow to (heap.c) */
     size_t max_words;   /* SHEN_JIT_MAX_HEAP: semispaces grow no larger; 0 for no limit */
     uint64_t *scan_hp;  /* to-space cursor during collection */
@@ -202,6 +205,7 @@ V sj_raise_text_value(VM *vm, const char *text, V value);
 
 /* vm.c */
 VM *vm_create(size_t semispace_words, size_t stack_words);
+void vm_fresh_area(VM *vm);
 V *vm_cleared_stack(size_t words);
 
 /* Threads (thread.c): real ones, of which one runs at a time. (thread F) starts

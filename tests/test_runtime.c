@@ -197,6 +197,24 @@ static void test_world_under_stress(void)
     vm_destroy(vm);
 }
 
+/* Under stress a stale pointer fails at once: a new object never lands on the
+   overwritten words it points to, and they no longer count as the heap. */
+static void test_stale_under_stress(void)
+{
+    VM *vm = vm_create(1024, 64);
+    vm->stress = 1;
+    uint64_t *a = vm_alloc(vm, 2);
+    a[0] = fix(1);
+    a[1] = V_NIL;
+    CHECK(vm_in_heap(vm, a));
+    uint64_t *b = vm_alloc(vm, 2); /* collects, and nothing reaches a */
+    CHECK(b != a);
+    CHECK(a[0] == UINT64_C(0xDEADDEADDEADDEAD));
+    CHECK(!vm_in_heap(vm, a));
+    CHECK(vm_in_heap(vm, b));
+    vm_destroy(vm);
+}
+
 /* A large caller calls a small callee that collects; the caller then resumes
    with its larger extent and collects again. */
 static void test_clear_above_top(void)
@@ -412,6 +430,7 @@ int main(void)
     test_loader();
     test_long_list();
     test_world_under_stress();
+    test_stale_under_stress();
     test_clear_above_top();
     test_stack_growth();
     test_symbols();

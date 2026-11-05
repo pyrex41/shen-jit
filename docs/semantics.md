@@ -297,14 +297,14 @@ Shen/Scheme also uses, so Shen/JIT needs no command-line parser in C.
 
 ## 14. Memory, stack and compilation failures
 
-- **Heap.** When a collection does not free enough space, the semispaces grow.
+- **Heap.** When a collection does not free enough space, the heap grows.
   If growth fails, the allocation raises a catchable "out of memory" error,
-  using a preallocated exception; the heap stays consistent because semispaces
+  using a preallocated exception; the heap stays consistent because its regions
   are always the same size. The process aborts only if the collector itself
   cannot complete.
-- **Semispaces** start at 32 MiB each and double after a collection that
-  leaves live data above 40% of a semispace. They never shrink in the first
-  version.
+- **The heap's size,** what a collection keeps and the room for new objects
+  together, starts at 32 MiB and doubles after a collection that leaves live
+  data above 40% of it. It never shrinks in the first version.
 - **Large objects:** vectors and strings of 32K words or more are allocated
   apart and never copied; collections mark them, scan them in place and
   free the dead ones. They count as live data for the 40% rule, and once
@@ -333,7 +333,7 @@ An image is a header followed by sections and a trailer, all little-endian:
   reads it from the end of the file, so an image can be appended to another
   file: the executable carries its image this way.
 
-Loading reads the heap into a semispace at least twice its size, adds the base
+Loading reads the heap into a region at least twice its size, adds the base
 to every pointer in one linear pass over objects and pairs, does the same for
 the root arrays, and then applies the reconstruction rules in
 [design.md](design.md): native entries from each procedure's kind, the standard streams
