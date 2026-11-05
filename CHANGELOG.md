@@ -5,8 +5,16 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.2] - 2026-11-05
+
+### Added
+
+- A checkout now builds on Linux arm64, from `make deps`.
+
 ### Changed
 
+- A checkout now builds with the previous release of Shen/JIT, which `make deps` fetches. Shen/Scheme can
+  still build it, with `make BOOTSTRAP=...`, and makes the same generated files.
 - The guide is centered on wide screens.
 
 ## [0.1] - 2026-11-05
@@ -15,5 +23,6 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.1...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.2...HEAD
+[0.2]: https://github.com/tizoc/shen-jit/compare/v0.1...v0.2
 [0.1]: https://github.com/tizoc/shen-jit/releases/tag/v0.1
