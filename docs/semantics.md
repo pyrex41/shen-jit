@@ -230,10 +230,12 @@ error; a non-symbol raises an error.
   `eval-kl` code and lambda forms) but not calls made inside the kernel. This is
   the arrangement the kernel's port performance guide describes, and Shen/Scheme
   behaves the same way for kernel-to-kernel calls: after an `eval-kl` `defun` of
-  `shen.misc?`, `shen.alpha?` still uses the original. Shen/Scheme's own
-  compiler is port code outside its sealed kernel and calls kernel functions
-  openly, so redefining `append` there broke later compilation. In Shen/JIT
-  the lowerer and port code are lowered at stage 0 and sealed with the kernel.
+  `shen.misc?`, `shen.alpha?` still uses the original. Shen/Scheme's compiler is
+  in the same library as its kernel, so redefining `append` there leaves later
+  compilation working. Calls from its user code are bound when compiled: code
+  compiled before the `defun` keeps the original, and code compiled after it
+  sees the new definition. In Shen/JIT the lowerer and port code are lowered at
+  stage 0 and sealed with the kernel.
 
 ## 11. `eval-kl`
 
