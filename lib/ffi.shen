@@ -28,7 +28,8 @@
 \\
 \\ A function is found at its first call, so an image saved with some finds them again, and a
 \\ system can declare what it never calls without harm. A pointer saved in an image loads dead,
-\\ and raises when given to C, as one does after shen-jit.pointer-kill. See docs/ffi.md.
+\\ and raises when given to C, as one does after shen-jit.pointer-kill. A pointer with a length
+\\ can be read and written in place: shen-jit.pointer-sized, and lib/memory.shen. See docs/ffi.md.
 \\
 \\ The C name, the result and each argument type are expressions, evaluated when the definition
 \\ is, which lets one definition suit each system: lib/socket.shen shows how.

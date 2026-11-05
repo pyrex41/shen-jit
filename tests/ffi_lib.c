@@ -19,6 +19,37 @@
 #include <time.h>
 #endif
 
+/* Memory that C owns, read and written from Shen in place (tests/memory.shen). */
+typedef struct {
+    double x, y;
+    int32_t id;
+} point;
+
+point *make_points(int32_t n)
+{
+    point *p = calloc((size_t)n, sizeof *p);
+    for (int32_t i = 0; p && i < n; i++) {
+        p[i].x = i + 0.5;
+        p[i].y = -i;
+        p[i].id = i - 1;
+    }
+    return p;
+}
+
+double sum_x(const point *p, int32_t n)
+{
+    double sum = 0;
+    for (int32_t i = 0; i < n; i++)
+        sum += p[i].x;
+    return sum;
+}
+
+void free_points(point *p) { free(p); }
+
+void fill_bytes(unsigned char *p, int32_t n, int32_t value) { memset(p, value, (size_t)n); }
+
+void *pointer_in(void **slot) { return *slot; }
+
 /* Each type, as a result. */
 int64_t add64(int64_t a, int64_t b) { return a + b; }
 int64_t too_big(void) { return INT64_C(1) << 61; }

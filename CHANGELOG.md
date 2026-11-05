@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Memory outside the heap: `shen-jit.pointer-sized` makes a C pointer readable and writable in place, with
+  the same functions as a byte buffer, each access checked against the length stated. `lib/memory.shen`
+  allocates and frees such memory.
+- `shen-jit.s32`, `s64`, `f32` and `f64` and their stores, on byte buffers too, and `shen-jit.pointer!`.
+
 ### Fixed
 
 - An integer literal too big for a fixnum, and one with a large exponent such as `1e300`, now reads as the

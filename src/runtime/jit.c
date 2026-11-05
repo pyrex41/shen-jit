@@ -510,7 +510,7 @@ static void *h_compile(VM *vm)
 /* Emitting a code object. */
 
 typedef enum { SLOW_PRIM, SLOW_ALLOC, SLOW_BOOLEAN, SLOW_NOT_PROC, SLOW_GROW, SLOW_LOOP, SLOW_RESOLVE, SLOW_GUARD,
-               SLOW_RETURN } SlowKind;
+               SLOW_RETURN, SLOW_POINTER } SlowKind;
 
 typedef struct Slow {
     SlowKind kind;
@@ -524,6 +524,7 @@ typedef struct Slow {
     struct sljit_label *start; /* where the slow path's code begins */
     uint32_t chain;            /* the bodies inlined where it comes from */
     struct Slow *exit;         /* for an exit test's SLOW_PRIM: its return, taken on true */
+    struct Slow *prim;         /* for SLOW_POINTER: the instruction's SLOW_PRIM, emitted before it */
 } Slow;
 
 typedef struct {
@@ -1877,33 +1878,37 @@ static void emit_prim(Emit *e, const uint32_t *p)
         }
         break;
     case P_BYTES_LENGTH:
-    case P_U8: case P_U16: case P_U32:
+    case P_U8: case P_U16: case P_U32: case P_S32:
     case P_SET_U8: case P_SET_U16: case P_SET_U32: {
         /* A byte buffer and a fixnum index with room for the width: anything
-           else takes the slow path, which raises. A value to store must fit
-           in the width, and one mask tests that and its tag together. */
+           else leaves this path. A pointer with a length comes back to it from
+           SLOW_POINTER, with its length and base in the same registers, and
+           anything else takes the slow path, which raises. A value to store must
+           fit in the width, and one mask tests that and its tag together. */
         sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
         slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
         sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
         sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
-        slow->from[1] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER));
+        Slow *pointer = slow_path(e, SLOW_POINTER, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER)));
+        pointer->prim = slow;
         sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8)); /* the length */
+        sljit_emit_op2(c, SLJIT_ADD, R0, R0, IMM(sizeof(V) - TAG_OBJECT)); /* the base */
+        pointer->back = sljit_emit_label(c);
         if (prim == P_BYTES_LENGTH) {
             sljit_emit_op2(c, SLJIT_SHL, R0, R2, IMM(2));
             store_result(e, dst);
             break;
         }
         static const sljit_s32 mov[] = {SLJIT_MOV_U8, SLJIT_MOV_U16, SLJIT_MOV_U32};
-        unsigned size = (prim - P_U8) % 3;
+        unsigned size = prim == P_S32 ? 2 : (prim - P_U8) % 3;
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R1, IMM(3));
         slow->from[2] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
         sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(2)); /* a negative index becomes huge */
         sljit_emit_op2(c, SLJIT_ADD, R3, R1, IMM(((sljit_sw)1 << size) - 1));
         slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, R2);
-        sljit_emit_op2(c, SLJIT_ADD, R0, R0, IMM(sizeof(V) - TAG_OBJECT));
-        if (prim <= P_U32) {
-            sljit_emit_op1(c, mov[size], R0, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0);
+        if (prim <= P_U32 || prim == P_S32) {
+            sljit_emit_op1(c, prim == P_S32 ? SLJIT_MOV_S32 : mov[size], R0, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0);
             sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(2));
             store_result(e, dst);
         } else {
@@ -2351,6 +2356,14 @@ static void emit_slow_paths(Emit *e)
             if (s->from[j])
                 sljit_set_label(s->from[j], here);
         switch (s->kind) {
+        case SLOW_POINTER:
+            /* Not a byte buffer, with its header's low byte in R3. A pointer goes back to
+               the byte primitive with its length and base, and the rest to raise. */
+            sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_POINTER << 3 | TAG_HEADER)), s->prim->start);
+            sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), POINTER_LENGTH * (sljit_sw)sizeof(V) - TAG_OBJECT);
+            sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0), POINTER_ADDRESS * (sljit_sw)sizeof(V) - TAG_OBJECT);
+            go_back(e, s);
+            break;
         case SLOW_PRIM: {
             const uint32_t *p = s->insn;
             if (s->catch_label != NONE) {

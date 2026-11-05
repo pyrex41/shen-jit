@@ -75,7 +75,7 @@ enum {
                      then [name][bytecode] */
     T_EXCEPTION,  /* [message][value]: the value goes before the message */
     T_STREAM,     /* [flags raw][handle raw] */
-    T_POINTER,    /* [kind][address raw]: a C pointer; an image zeroes the address */
+    T_POINTER,    /* [kind][address raw][length raw]: a C pointer; an image zeroes the address and length */
     T_LIMIT
 };
 
@@ -99,7 +99,7 @@ enum {
     CODE_WORDS = 10,
     EXC_MESSAGE = 1, EXC_VALUE = 2, EXC_WORDS = 3,
     STREAM_FLAGS = 1, STREAM_HANDLE = 2, STREAM_WORDS = 3,
-    POINTER_KIND = 1, POINTER_ADDRESS = 2, POINTER_WORDS = 3
+    POINTER_KIND = 1, POINTER_ADDRESS = 2, POINTER_LENGTH = 3, POINTER_WORDS = 4
 };
 
 /* Every object is at least two words, so a copied object always has room

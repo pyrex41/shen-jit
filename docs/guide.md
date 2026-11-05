@@ -324,7 +324,10 @@ them.
 | `(shen-jit.bytes N)` | A new buffer of N zero bytes |
 | `(shen-jit.bytes? X)`, `(shen-jit.bytes-length B)` | Whether X is a buffer, and B's length |
 | `(shen-jit.u8 B I)`, `u16`, `u32` | The unsigned value at byte offset I, little-endian, at any alignment |
-| `(shen-jit.u8! B I X)`, `u16!`, `u32!` | Stores X at I and returns B. X must fit |
+| `(shen-jit.s32 B I)`, `s64` | The signed value there. An `s64` that does not fit a fixnum raises |
+| `(shen-jit.f32 B I)`, `f64` | The floating-point value there, as a new real |
+| `(shen-jit.u8! B I X)`, `u16!`, `u32!`, `s32!`, `s64!` | Stores X at I and returns B. X must fit |
+| `(shen-jit.f32! B I X)`, `f64!` | Stores a number at I, rounded to fit, and returns B |
 | `(shen-jit.string->bytes S)` | A new buffer with S's bytes |
 | `(shen-jit.bytes->string B I N)` | A new string of the N bytes from I |
 | `(shen-jit.copy-bytes To I From J N)` | Copies N bytes from J in From to I in To, which may overlap, and returns To |
@@ -399,10 +402,56 @@ A pointer has a kind, a symbol, for reading and for messages. `=` compares kind 
 | `(shen-jit.bytes->pointer B I Kind)` | The pointer at offset I in a buffer, for out-parameters, and `[]` if NULL |
 | `(shen-jit.pointer->string P)` | Copies the NUL-terminated string it points to |
 | `(shen-jit.pointer->bytes P I N)` | Copies N bytes from offset I. It cannot check them |
-| `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C |
+| `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C or read |
+| `(shen-jit.pointer-sized P N)` | A new pointer to the same address, whose N bytes can be read and written: see [Memory outside the heap](#memory-outside-the-heap) |
+| `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
 
 In typed code, a declaration whose types are all plain Shen types, and whose result cannot be NULL, can be called at
 once. Others are for the program to `declare`, under `(tc -)`.
+
+### Memory outside the heap
+
+A byte buffer lives in the Shen heap, where the collector may move it. Memory outside the heap stays where it is, so C
+can keep its address, a `blocking` call needs no copy, and the collector never copies or scans it, however large.
+
+It is a pointer with a length. A pointer from C has none, and cannot be read until you state how many bytes it reaches.
+Then it works with what works on a byte buffer, in place, each access checked against that length:
+
+```shen
+\\ struct point { double x, y; int32_t id; };   /* 24 bytes */
+(define-foreign make-points mine "make_points" (int32) --> pointer)
+(define-foreign free-points mine "free_points" (pointer) --> void)
+
+(let P (make-points 1000)
+     M (shen-jit.pointer-sized P 24000)
+  (do (shen-jit.f64! M 72 1.5)                                     \\ x of point 3
+      (output "~A ~A~%" (shen-jit.f64 M 72) (shen-jit.s32 M 88))   \\ and its id
+      (shen-jit.pointer-kill M)
+      (free-points P)))
+```
+
+`lib/memory.shen` allocates it, in Shen alone. Give it to C as a `pointer`:
+
+```shen
+(define-foreign c-read libc "read" (int32 pointer int64) --> int64 blocking)
+
+(let M (memory.alloc 1073741824)    \\ 1 GB, all zero
+  (do (c-read Fd M 1073741824)
+      (output "~A~%" (shen-jit.u32 M 0))
+      (memory.free M)))
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l program.shen
+```
+
+- **Nothing frees it for you.** `memory.free` frees and kills it, and forgetting to leaks, as in C.
+- **The length you state is trusted,** and it is the one thing not checked. A wrong one, or memory C has freed, can
+  crash. Kill a pointer once its memory is gone, so that using it raises.
+- **Each sized pointer stands alone.** Killing one kills no other, nor the pointer it came from.
+- **A saved image holds it dead,** and the memory itself is not saved: a byte buffer is what lasts in an image.
+- **The same code works on both.** `u8`, `u16`, `u32` and `s32` compile inline for a buffer and for a pointer. `s64`,
+  `f32` and `f64` call C for both.
 
 ### SQLite
 
@@ -553,8 +602,9 @@ shen-jit eval -l lib/native.shen -l sum.shen
 
 A variable is a slot, a symbol is itself, and `[1 2]` is a list. The code is checked first, by the rules the lowerer's
 own output is held to, so wrong code is refused instead of crashing. A program generating code at run time passes
-lists to `shen-jit.assemble` and `shen-jit.install-code`. Values stay tagged, as in all Shen code: untagged data and
-foreign memory are not there yet, and [bytes and bits](#bytes-and-bits) are primitives here as anywhere.
+lists to `shen-jit.assemble` and `shen-jit.install-code`. Values stay tagged, as in all Shen code: untagged data is not
+there yet, and [bytes and bits](#bytes-and-bits) and [memory outside the heap](#memory-outside-the-heap) are primitives
+here as anywhere.
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Native code written by hand", has
 the instructions.
 
@@ -663,11 +713,11 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | --- | --- |
 | `make test` | The runtime's unit tests |
 | `make test-jit`, `make test-ops` | The JIT and the instructions, on small programs |
-| `make test-kl` | 857 `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
+| `make test-kl` | 877 `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
-| `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, and the SQLite and socket libraries |
+| `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |

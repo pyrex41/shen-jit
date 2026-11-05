@@ -230,6 +230,10 @@ The same goes for the REPL, when it starts catching Ctrl-C.
 Foreign functions are procedures entered through one shared stub, so a call needs no new instruction and no code per signature. See
 [ffi.md](ffi.md).
 
+Memory outside the heap is a pointer with a length, and the byte primitives take one as they take a buffer. Their compiled code tests for a buffer, as it always has, so a buffer's path
+is unchanged. What is not one leaves through an out-of-line block that tests for a pointer, loads its length and address into the registers the buffer's length and base would be in, and comes back for the
+same bounds check and access. A pointer that is dead or has no length has length 0, so nothing else needs to test for that.
+
 ## Left out on purpose
 
 - **An interpreter.** A target without an SLJIT backend could add one: the slot layout and instructions do not depend on the JIT. It would be

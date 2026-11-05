@@ -66,9 +66,35 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 | `(shen-jit.bytes->pointer B I Kind)` | The pointer at offset I in a buffer, for out-parameters; `[]` if NULL |
 | `(shen-jit.pointer->string P)` | Copies the NUL-terminated string it points to |
 | `(shen-jit.pointer->bytes P I N)` | Copies N bytes from offset I. Unchecked by nature |
-| `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C |
+| `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C or read |
+| `(shen-jit.pointer-sized P N)` | A new pointer to the same address and of the same kind, whose N bytes can be read and written in place |
+| `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
 
 `=` compares kind and address, and a pointer prints as `#<pointer sqlite3 0x...>`. One saved in an image loads dead.
+
+**Memory outside the heap** is a pointer with a length. Pointers come from C with none, which refuses any read. `shen-jit.pointer-sized` states one, and then
+what works on a byte buffer works on the pointer, checked against that length: `shen-jit.u8` to `u32`, `s32`, `s64`, `f32`, `f64`, their stores, `bytes-length`,
+`copy-bytes`, `bytes->string`, `bytes->pointer` and `pointer!` ([bytecode.md](bytecode.md), "Byte buffers and bit operations").
+
+```shen
+\\ struct point { double x, y; int32_t id; };   /* 24 bytes */
+(define-foreign make-points mine "make_points" (int32) --> pointer)
+(define-foreign free-points mine "free_points" (pointer) --> void)
+
+(let P (make-points 1000)
+     M (shen-jit.pointer-sized P 24000)
+  (do (shen-jit.f64! M 72 1.5)                                     \\ x of point 3
+      (output "~A ~A~%" (shen-jit.f64 M 72) (shen-jit.s32 M 88))   \\ and its id
+      (shen-jit.pointer-kill M)
+      (free-points P)))
+```
+
+- **It stays where it is,** so C may keep the address, and a `blocking` call passes it as a `pointer` with no copy. The collector neither copies nor scans it.
+- **The length is trusted.** It is the one thing not checked, and a wrong one, or memory C has freed, can crash. Kill a pointer once its memory is gone: address and length become
+  0, so the ordinary bounds check refuses it.
+- **Each sized pointer stands alone.** Killing one kills no other, nor the pointer it came from.
+- **Nothing frees it for you.** `lib/memory.shen` has `(memory.alloc N)`, which gives N zero bytes, and `(memory.free M)`, over `calloc` and `free`. A saved image holds such a pointer dead, and the
+  memory itself is not saved: a byte buffer is what lasts in an image.
 
 **Typed code:** a declaration whose types are all plain Shen types, and whose result cannot be NULL, also emits a `declare`, with `int64`, `int32`,
 `uint32` and `double` as `number`, `bool` as `boolean`, and `string` for an argument. Others leave the declaring to the program, under `(tc -)`, since

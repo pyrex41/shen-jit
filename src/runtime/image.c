@@ -89,7 +89,10 @@ static void clear_raw(VM *vm, uint64_t *o)
         o[PROC_ENTRY] = 0;
         o[FOREIGN_ADDRESS] = 0;
         break;
-    case T_POINTER: o[POINTER_ADDRESS] = 0; break;
+    case T_POINTER:
+        o[POINTER_ADDRESS] = 0;
+        o[POINTER_LENGTH] = 0;
+        break;
     case T_CODE: o[CODE_NATIVE] = 0; break;
     case T_STREAM:
         /* File streams always load closed, so write them closed. */

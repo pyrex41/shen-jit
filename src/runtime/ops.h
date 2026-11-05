@@ -122,6 +122,7 @@ enum Prim {
     /* Byte buffers (docs/bytecode.md). */
     P_BYTES, P_BYTESP, P_BYTES_LENGTH,
     P_U8, P_U16, P_U32, P_SET_U8, P_SET_U16, P_SET_U32, /* in this order */
+    P_S32, P_S64, P_F32, P_F64, P_SET_S32, P_SET_S64, P_SET_F32, P_SET_F64,
     P_STRING_BYTES, P_BYTES_STRING, P_COPY_BYTES,
     /* Bit operations on fixnums (docs/bytecode.md). */
     P_BIT_AND, P_BIT_OR, P_BIT_XOR, P_BIT_NOT, P_SHIFT_LEFT, P_SHIFT_RIGHT,
@@ -133,7 +134,7 @@ enum Prim {
     /* C functions and pointers (ffi.c), in this order. */
     P_FOREIGN, /* shen-jit.foreign: makes a name a C function */
     P_POINTERP, P_POINTER_KIND, P_POINTER_ADDRESS, P_BYTES_POINTER, P_POINTER_STRING, P_POINTER_BYTES,
-    P_ERRNO, P_C_ERRNO, P_POINTER_KILL,
+    P_ERRNO, P_C_ERRNO, P_POINTER_KILL, P_POINTER_SIZED, P_SET_POINTER,
     P_COUNT
 };
 #define PRIM_RAISE_COND P_COUNT

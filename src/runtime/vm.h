@@ -271,6 +271,27 @@ uint64_t hash_bytes(const void *bytes, size_t len);
 
 static inline size_t string_length(V s) { return (size_t)hdr_size(ptr(s)[0]); }
 static inline char *string_bytes(V s) { return (char *)(ptr(s) + 1); }
+
+/* What the byte primitives read and write: a byte buffer, or the memory a pointer was given
+   a length for. A pointer that has none, or is dead, has length 0, so that the ordinary
+   bounds check refuses it. A buffer's base lasts until the next allocation. */
+static inline bool memory_of(V v, char **base, size_t *length)
+{
+    if (!is_object(v))
+        return false;
+    if (obj_type(v) == T_BYTES) {
+        *base = string_bytes(v);
+        *length = string_length(v);
+        return true;
+    }
+    if (obj_type(v) == T_POINTER) {
+        *base = (char *)(uintptr_t)ptr(v)[POINTER_ADDRESS];
+        *length = (size_t)ptr(v)[POINTER_LENGTH];
+        return true;
+    }
+    return false;
+}
+
 static inline double real_value(V r)
 {
     double d;

@@ -730,6 +730,19 @@ else
     check ffi-dead-pointer "$dir/ffi2.out" "raised"
     check ffi-uncaught "$dir/ffi2.out" "shen-jit: uncaught error: foreign: 1 is not a string"
     check ffi-status "$dir/ffi2.out" "status 1"
+    # Memory outside the heap is not saved: in an image its pointer is dead, and the ordinary
+    # bounds check refuses it.
+    cat > "$dir/mem.shen" <<'EOF'
+(set mem.kept (memory.alloc 8))
+(shen-jit.u8! (value mem.kept) 0 9)
+(output "before saving ~A~%" (shen-jit.u8 (value mem.kept) 0))
+EOF
+    "$SHEN" --save "$dir/mem.img" eval -l lib/ffi.shen -l lib/memory.shen -l "$dir/mem.shen" > "$dir/mem.out" 2>&1 < /dev/null
+    check memory-before-saving "$dir/mem.out" "before saving 9"
+    SHEN_JIT_IMAGE="$dir/mem.img" "$SHEN" eval \
+        -e '(output "~A ~A~%" (shen-jit.bytes-length (value mem.kept)) (trap-error (shen-jit.u8 (value mem.kept) 0) (/. E (error-to-string E))))' \
+        > "$dir/mem2.out" 2>&1 < /dev/null
+    check memory-dead-in-image "$dir/mem2.out" "0 bytes: 0 is not a valid index"
     cat > "$dir/ffi3.shen" <<EOF
 (shen-jit.library ffi.libc ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
 (define-foreign ffi.strlen ffi.libc "strlen" (string) --> int64)

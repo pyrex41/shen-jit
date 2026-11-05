@@ -197,12 +197,21 @@ does not scan. It lives in the heap like a string, so:
 - every access checks the type, the index and, for a store, the value, and raises if
   any is wrong.
 
+A pointer with a length is memory outside the heap ([ffi.md](ffi.md)), and all of these except
+`bytes?` and `string->bytes` take one in place of a buffer, with the same checks against its
+length. `u8`, `u16`, `u32`, `s32`, `bytes-length` and the stores `u8!`, `u16!` and `u32!` compile inline
+for both; the others call C for both.
+
 | Form | Result |
 | --- | --- |
 | `(shen-jit.bytes N)` | A new buffer of N zero bytes. |
 | `(shen-jit.bytes? X)`, `(shen-jit.bytes-length B)` | Whether X is a buffer; B's length. |
 | `(shen-jit.u8 B I)`, `u16`, `u32` | The unsigned value at byte offset I, little-endian, at any alignment. |
+| `(shen-jit.s32 B I)`, `s64` | The signed value there. An `s64` that does not fit a fixnum raises. |
+| `(shen-jit.f32 B I)`, `f64` | The floating-point value there, as a new real. |
 | `(shen-jit.u8! B I X)`, `u16!`, `u32!` | Stores X at I and returns B. X must fit: 0 to 255 for `u8!`. |
+| `(shen-jit.s32! B I X)`, `s64!` | The same, signed. |
+| `(shen-jit.f32! B I X)`, `f64!` | The same for a number, rounded to fit. |
 | `(shen-jit.string->bytes S)` | A new buffer with S's bytes. |
 | `(shen-jit.bytes->string B I N)` | A new string of the N bytes from I. |
 | `(shen-jit.copy-bytes To I From J N)` | Copies N bytes from J in From to I in To, which may overlap, and returns To. |

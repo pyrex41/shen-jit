@@ -503,14 +503,16 @@ V ffi_primitive(VM *vm, unsigned prim)
         return fix_fits(address) ? fix(address) : sj_raise_value(vm, "shen-jit.pointer-address: ~S is out of range", a);
     }
     case P_BYTES_POINTER: {
-        if (!is_object(a) || obj_type(a) != T_BYTES)
+        char *base;
+        size_t length;
+        if (!memory_of(a, &base, &length))
             return sj_raise_value(vm, "shen-jit.bytes->pointer: ~S is not a byte buffer", a);
-        if (!is_fix(b) || fixval(b) < 0 || (uint64_t)fixval(b) + sizeof(W) > string_length(a))
+        if (!is_fix(b) || fixval(b) < 0 || (uint64_t)fixval(b) + sizeof(W) > length)
             return sj_raise_value(vm, "shen-jit.bytes->pointer: ~S is not a valid offset", b);
         if (!is_symbol(k))
             return sj_raise_value(vm, "shen-jit.bytes->pointer: ~S is not a symbol", k);
         W address;
-        memcpy(&address, string_bytes(a) + fixval(b), sizeof address);
+        memcpy(&address, base + fixval(b), sizeof address);
         if (!address)
             return V_NIL;
         V p = make_pointer(vm, address, k);
@@ -536,7 +538,32 @@ V ffi_primitive(VM *vm, unsigned prim)
         if (!is_pointer(a))
             return sj_raise_value(vm, "shen-jit.pointer-kill: ~S is not a pointer", a);
         ptr(a)[POINTER_ADDRESS] = 0;
+        ptr(a)[POINTER_LENGTH] = 0;
         return a;
+    case P_POINTER_SIZED: { /* a new pointer to the same address, whose bytes can be read */
+        if (!is_pointer(a) || !ptr(a)[POINTER_ADDRESS])
+            return sj_raise_value(vm, "shen-jit.pointer-sized: ~S is not a live pointer", a);
+        if (!is_fix(b) || fixval(b) < 0)
+            return sj_raise_value(vm, "shen-jit.pointer-sized: ~S is not a valid length", b);
+        V p = make_pointer(vm, ptr(a)[POINTER_ADDRESS], ptr(a)[POINTER_KIND]);
+        if (p == V_CLEARED)
+            return sj_raise(vm, "out of memory");
+        ptr(p)[POINTER_LENGTH] = (uint64_t)fixval(b);
+        return p;
+    }
+    case P_SET_POINTER: { /* a pointer field: the buffer or memory, the offset, a pointer or [] */
+        char *base;
+        size_t length;
+        if (!memory_of(a, &base, &length))
+            return sj_raise_value(vm, "shen-jit.pointer!: ~S is not a byte buffer", a);
+        if (!is_fix(b) || fixval(b) < 0 || (uint64_t)fixval(b) + sizeof(W) > length)
+            return sj_raise_value(vm, "shen-jit.pointer!: ~S is not a valid offset", b);
+        if (k != V_NIL && (!is_pointer(k) || !ptr(k)[POINTER_ADDRESS]))
+            return sj_raise_value(vm, "shen-jit.pointer!: ~S is not a live pointer or []", k);
+        W address = k == V_NIL ? 0 : ptr(k)[POINTER_ADDRESS];
+        memcpy(base + fixval(b), &address, sizeof address);
+        return a;
+    }
     case P_ERRNO: return fix(vm->foreign_error);
     case P_C_ERRNO: return fix(vm->foreign_c_error);
     default: return sj_raise(vm, "unknown primitive");

@@ -77,6 +77,14 @@ const Primitive primitive_table[] = {
     {"shen-jit.u8!", 3, NULL},
     {"shen-jit.u16!", 3, NULL},
     {"shen-jit.u32!", 3, NULL},
+    {"shen-jit.s32", 2, NULL},
+    {"shen-jit.s64", 2, NULL},
+    {"shen-jit.f32", 2, NULL},
+    {"shen-jit.f64", 2, NULL},
+    {"shen-jit.s32!", 3, NULL},
+    {"shen-jit.s64!", 3, NULL},
+    {"shen-jit.f32!", 3, NULL},
+    {"shen-jit.f64!", 3, NULL},
     {"shen-jit.string->bytes", 1, NULL},
     {"shen-jit.bytes->string", 3, NULL},
     {"shen-jit.copy-bytes", 5, NULL},
@@ -108,6 +116,8 @@ const Primitive primitive_table[] = {
     {"shen-jit.errno", 0, NULL},
     {"shen-jit.c-errno", 0, NULL},
     {"shen-jit.pointer-kill", 1, NULL},
+    {"shen-jit.pointer-sized", 2, NULL},
+    {"shen-jit.pointer!", 3, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -1172,32 +1182,98 @@ static __attribute__((noinline)) V backtrace(VM *vm)
     return list;
 }
 
-/* Byte buffers (docs/bytecode.md). Values are little-endian, as on every target. */
+/* Byte buffers and sized pointers (docs/bytecode.md). Values are little-endian, as on every
+   target. */
 static V bytes_access(VM *vm, unsigned prim)
 {
     V b = vm->args[0], i = vm->args[1], x = vm->args[2];
-    size_t width = (size_t)1 << ((prim - P_U8) % 3);
-    if (!is_type(b, T_BYTES))
+    size_t width = (size_t)1 << ((prim - P_U8) % 3), length;
+    char *base;
+    if (!memory_of(b, &base, &length))
         return sj_raise_value(vm, "bytes: ~S is not a byte buffer", b);
-    if (!is_fix(i) || fixval(i) < 0 || (uint64_t)fixval(i) + width > string_length(b))
+    if (!is_fix(i) || fixval(i) < 0 || (uint64_t)fixval(i) + width > length)
         return sj_raise_value(vm, "bytes: ~S is not a valid index", i);
     uint64_t n = 0;
     if (prim <= P_U32) {
-        memcpy(&n, string_bytes(b) + fixval(i), width);
+        memcpy(&n, base + fixval(i), width);
         return fix((int64_t)n);
     }
     if (!is_fix(x) || fixval(x) < 0 || (uint64_t)fixval(x) >> (8 * width))
         return sj_raise_value(vm, "bytes: ~S does not fit", x);
     n = (uint64_t)fixval(x);
-    memcpy(string_bytes(b) + fixval(i), &n, width);
+    memcpy(base + fixval(i), &n, width);
     return b;
 }
 
-/* Whether the n bytes from start lie within buffer b. */
-static bool bytes_range(V b, V start, V n)
+/* The widths C structs have beyond those above: signed integers and floating point. */
+static V wide_access(VM *vm, unsigned prim)
+{
+    V b = vm->args[0], i = vm->args[1], x = vm->args[2];
+    bool narrow = prim == P_S32 || prim == P_F32 || prim == P_SET_S32 || prim == P_SET_F32;
+    size_t width = narrow ? 4 : 8, length;
+    char *base;
+    if (!memory_of(b, &base, &length))
+        return sj_raise_value(vm, "bytes: ~S is not a byte buffer", b);
+    if (!is_fix(i) || fixval(i) < 0 || (uint64_t)fixval(i) + width > length)
+        return sj_raise_value(vm, "bytes: ~S is not a valid index", i);
+    char *at = base + fixval(i);
+    switch (prim) {
+    case P_S32: {
+        int32_t n;
+        memcpy(&n, at, sizeof n);
+        return fix(n);
+    }
+    case P_S64: {
+        int64_t n;
+        memcpy(&n, at, sizeof n);
+        return fix_fits(n) ? fix(n) : sj_raise_value(vm, "shen-jit.s64: the value at ~S does not fit in an integer", i);
+    }
+    case P_F32: {
+        float f;
+        memcpy(&f, at, sizeof f);
+        return make_real(vm, f);
+    }
+    case P_F64: {
+        double d;
+        memcpy(&d, at, sizeof d);
+        return make_real(vm, d);
+    }
+    case P_SET_S32: {
+        if (!is_fix(x) || fixval(x) < INT32_MIN || fixval(x) > INT32_MAX)
+            return sj_raise_value(vm, "bytes: ~S does not fit", x);
+        int32_t n = (int32_t)fixval(x);
+        memcpy(at, &n, sizeof n);
+        return b;
+    }
+    case P_SET_S64: {
+        if (!is_fix(x))
+            return sj_raise_value(vm, "bytes: ~S does not fit", x);
+        int64_t n = fixval(x);
+        memcpy(at, &n, sizeof n);
+        return b;
+    }
+    case P_SET_F32: {
+        if (!is_number(x))
+            return sj_raise_value(vm, "bytes: ~S is not a number", x);
+        float f = (float)number(x);
+        memcpy(at, &f, sizeof f);
+        return b;
+    }
+    default: { /* P_SET_F64 */
+        if (!is_number(x))
+            return sj_raise_value(vm, "bytes: ~S is not a number", x);
+        double d = number(x);
+        memcpy(at, &d, sizeof d);
+        return b;
+    }
+    }
+}
+
+/* Whether the n bytes from start lie within what has this length. */
+static bool bytes_range(size_t length, V start, V n)
 {
     return is_fix(start) && is_fix(n) && fixval(start) >= 0 && fixval(n) >= 0 &&
-           (uint64_t)fixval(start) + (uint64_t)fixval(n) <= string_length(b);
+           (uint64_t)fixval(start) + (uint64_t)fixval(n) <= length;
 }
 
 /* The double nearest to the decimal number in s, times 10^e, for a literal past the
@@ -1230,6 +1306,8 @@ static V bytes_primitive(VM *vm, unsigned prim)
     V a = vm->args[0], b = vm->args[1], c = vm->args[2];
     V d = vm->args[3], n = vm->args[4];
     V v;
+    char *base, *from;
+    size_t length, from_length;
     switch (prim) {
     case P_BYTES:
         if (!is_fix(a) || fixval(a) < 0 || fixval(a) >> 48)
@@ -1237,8 +1315,8 @@ static V bytes_primitive(VM *vm, unsigned prim)
         v = make_bytes(vm, NULL, (size_t)fixval(a));
         return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
     case P_BYTES_LENGTH:
-        return is_type(a, T_BYTES) ? fix((int64_t)string_length(a))
-                                   : sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
+        return memory_of(a, &base, &length) ? fix((int64_t)length)
+                                            : sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
     case P_STRING_BYTES:
         if (!is_type(a, T_STRING))
             return sj_raise_value(vm, "shen-jit.string->bytes: ~S is not a string", a);
@@ -1248,17 +1326,22 @@ static V bytes_primitive(VM *vm, unsigned prim)
         memcpy(string_bytes(v), string_bytes(vm->args[0]), string_length(v));
         return v;
     case P_BYTES_STRING:
-        if (!is_type(a, T_BYTES))
+        if (!memory_of(a, &base, &length))
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
-        if (!bytes_range(a, b, c))
+        if (!bytes_range(length, b, c))
             return sj_raise_value(vm, "shen-jit.bytes->string: ~S is not a valid range", b);
-        return substring(vm, (size_t)fixval(b), (size_t)fixval(c));
+        /* substring reads the buffer again after allocating, which may move it. A pointer's
+           memory stays where it is. */
+        return is_type(a, T_BYTES) ? substring(vm, (size_t)fixval(b), (size_t)fixval(c))
+                                   : make_string(vm, base + fixval(b), (size_t)fixval(c));
     default: /* P_COPY_BYTES: to, its start, from, its start, how many */
-        if (!is_type(a, T_BYTES) || !is_type(c, T_BYTES))
-            return sj_raise_value(vm, "bytes: ~S is not a byte buffer", is_type(a, T_BYTES) ? c : a);
-        if (!bytes_range(a, b, n) || !bytes_range(c, d, n))
+        if (!memory_of(a, &base, &length))
+            return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
+        if (!memory_of(c, &from, &from_length))
+            return sj_raise_value(vm, "bytes: ~S is not a byte buffer", c);
+        if (!bytes_range(length, b, n) || !bytes_range(from_length, d, n))
             return sj_raise_value(vm, "shen-jit.copy-bytes: ~S is not a valid count", n);
-        memmove(string_bytes(a) + fixval(b), string_bytes(c) + fixval(d), (size_t)fixval(n));
+        memmove(base + fixval(b), from + fixval(d), (size_t)fixval(n));
         return a;
     }
 }
@@ -1513,6 +1596,8 @@ V sj_primitive(VM *vm, size_t index)
         return bytes_primitive(vm, (unsigned)index);
     case P_U8: case P_U16: case P_U32: case P_SET_U8: case P_SET_U16: case P_SET_U32:
         return bytes_access(vm, (unsigned)index);
+    case P_S32: case P_S64: case P_F32: case P_F64: case P_SET_S32: case P_SET_S64: case P_SET_F32: case P_SET_F64:
+        return wide_access(vm, (unsigned)index);
     case P_BIT_AND: case P_BIT_OR: case P_BIT_XOR: case P_BIT_NOT: case P_SHIFT_LEFT: case P_SHIFT_RIGHT:
     case P_ROTATE32: case P_BSWAP32: case P_POPCOUNT: case P_CLZ: case P_CTZ:
         return bit_operation(vm, (unsigned)index);
@@ -1526,6 +1611,7 @@ V sj_primitive(VM *vm, size_t index)
     case P_THREAD: return thread_start(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
+    case P_POINTER_SIZED: case P_SET_POINTER:
         return ffi_primitive(vm, (unsigned)index);
     case P_DEREF: {
         /* What X is bound to in the vector b, along a chain of variables; the

@@ -366,7 +366,17 @@ may use as values, as (fn shen-jit.u8)."
     (do (shen-jit.primitive shen-jit.pointer->bytes 3)
     (do (shen-jit.primitive shen-jit.errno 0)
     (do (shen-jit.primitive shen-jit.c-errno 0)
-    (do (shen-jit.primitive shen-jit.pointer-kill 1) shen.skip))))))))))))))))))))))))))))))))))))))))
+    (do (shen-jit.primitive shen-jit.s32 2)
+    (do (shen-jit.primitive shen-jit.s64 2)
+    (do (shen-jit.primitive shen-jit.f32 2)
+    (do (shen-jit.primitive shen-jit.f64 2)
+    (do (shen-jit.primitive shen-jit.s32! 3)
+    (do (shen-jit.primitive shen-jit.s64! 3)
+    (do (shen-jit.primitive shen-jit.f32! 3)
+    (do (shen-jit.primitive shen-jit.f64! 3)
+    (do (shen-jit.primitive shen-jit.pointer-sized 2)
+    (do (shen-jit.primitive shen-jit.pointer! 3)
+    (do (shen-jit.primitive shen-jit.pointer-kill 1) shen.skip))))))))))))))))))))))))))))))))))))))))))))))))))
 
 "Stage 1 calls this after the kernel and extensions are initialised: it
 registers the port functions meant for Shen code. (shen-jit.exit N) ends
