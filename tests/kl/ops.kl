@@ -75,7 +75,7 @@ function returns a fixnum or a Boolean computed without =, or raises."
 
 (defun t-add-real-check () (let R (+ 1.5 2) (if (< R 3.6) (if (> R 3.4) 1 0) 0)))
 
-(defun t-sub-overflow () (- -2305843009213693952 1))
+(defun t-sub-overflow () (- (- -2305843009213693951 1) 1))
 
 (defun t-add-overflow () (+ 2305843009213693951 1))
 

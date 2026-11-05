@@ -635,9 +635,14 @@ that. Its readings decided nothing below.
   check with 0 differences, the kernel's tests, the CLI tests and the FFI suites. It needs no hook in the host's runtime, only in the build tools: the lowerer's own names are sealed in the host's image, so a new lowerer loads
   under other names; the host's `define` must know the arity of `shen-jit.inline-body`; and `filter` is Shen/Scheme's, so the tools define it. Of the four files that differ, `port/lower.kl` and the two made from it differ as the host compiles
   and numbers things its own way, and `kl/ops.sbc` as `-2305843009213693952`, the smallest fixnum, reads as a real under `shen-jit`, its digits overflowing before the sign applies. So the manifest would have to follow one host, or those be normalised.
+- **The smallest fixnum as a literal: a reader fix rejected** (2026-11-05). `-2305843009213693952` reads as a real, because `shen.compute-integer` gets only the digits, which are past the range, and the kernel's `shen.<number>` applies the sign
+  afterwards. A fix would override `shen.<number>`, 1.4 KB of generated code to keep in step with the kernel, for one value in 2^62. `docs/semantics.md` records the limit, and `tests/kl/ops.kl` computes the value instead, which takes
+  `kl/ops.sbc` out of the files that differ by host: lowered under `shen-jit` and under Shen/Scheme it is now the same byte for byte, where one line differed before.
 
 ### Not tried yet
 
+- **Correctly rounded literals past the fixnum range.** `shen.compute-integer` falls back to doubles digit by digit, so errors build up. The same arithmetic in Python (2026-11-05), on random integers: 55% of those of 19 digits land on the nearest
+  double, the worst 3 units in the last place off; 8% of those of 300 digits, the worst 23. Handing the digits to `strtod` should fix it. Fractions and exponents were not looked at.
 - The lowerer computing `(cons (hd X) Acc)` before `(tl X)`, so `tl X` goes straight into X's slot. It needs the
   lowerer to know X is a pair after its `cons?` test.
 - Lowering the last operand into the destination, for long `cons` chains: `shen.initialise-environment` uses 830
