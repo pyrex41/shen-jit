@@ -5,6 +5,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- The guide is centered on wide screens.
+
 ## [0.1] - 2026-11-05
 
 ### Added

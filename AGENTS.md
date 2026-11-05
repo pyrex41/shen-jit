@@ -20,7 +20,7 @@ checkout's own workflow, and git ignores it.
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
 | `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `sqlite.shen` and `socket.shen` over it |
-| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel and Shen/Scheme, and `package.sh` makes a release archive |
+| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel and Shen/Scheme, `package.sh` makes a release archive, and `release-notes.sh` prints a version's section of the changelog |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
 | `contract/` | The contract examples, and Shen/Scheme's results for them |
@@ -79,7 +79,7 @@ tests it with a C compiler alone. Moving the kernel or Shen/Scheme updates the h
 ## Releasing
 
 Move what is under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) to a heading with the version and the date, push `main`, and once its CI has passed push a tag `vM.N` that matches `VERSION`. CI builds Linux x86-64 and arm64 (dynamic, in a container with an old glibc, and static, which cannot load libraries), macOS arm64 and Windows
-x86-64, and runs the fast suites on them. GC stress, the sanitizers and the mutated code objects ran on `main`, so a tag leaves them out, and it refuses to publish a commit that has not passed there: if it was tagged too early, re-run its release job once `main` is green. It then publishes those archives (`tools/package.sh`), each with the rendered guide, the source tarball and `SHA256SUMS`. A tag with a hyphen is a prerelease.
+x86-64, and runs the fast suites on them. GC stress, the sanitizers and the mutated code objects ran on `main`, so a tag leaves them out, and it refuses to release a commit that has not passed there: if it was tagged too early, re-run its release job once `main` is green. It then makes a draft release of those archives (`tools/package.sh`), each with the rendered guide, the source tarball and `SHA256SUMS`, with the version's section of the changelog as the notes, and refuses if that section is empty (`sh tools/release-notes.sh VERSION` shows them). A tag with a hyphen is a prerelease. Making a draft public is done by hand, on GitHub, and only by the project's owner.
 
 ## Measuring performance
 

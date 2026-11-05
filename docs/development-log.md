@@ -737,6 +737,10 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
   `save-executable` bug below, and stray `\r` in five extensions' strings in the KLambda in use, unlike the 43.2 release and a
   fresh build of its tag.
 - **Found later (2026-11-05):** release archives left out `lib/` and `include/`, so a binary could not have loaded `lib/ffi.shen`.
+- **Release notes come from the changelog, and releases start as drafts (2026-11-05).** `v0.1` went out at once, with GitHub's generated
+  notes, which with one commit are only a link to the tag. A release is now a draft that someone makes public by hand, and carries its
+  section of `CHANGELOG.md`, as Shen/Scheme's and the kernel's do. A tag with an empty section makes no release: those two fall back to
+  a line pointing at the file.
 - **Tag runs leave out the heavy suites (2026-11-05).** In a run on `main`, GC stress took 176 to 312 s per job, the sanitizers 43 to
   59 s and the mutated code objects 69 s, and a tag repeated them on the same commit. A tag's run now builds and runs the fast suites,
   10 to 19 s, on what it publishes, and the release job refuses a commit that has not passed on `main`. From those step times, a
