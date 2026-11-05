@@ -380,7 +380,7 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	cd $(BUILD) && ./test_runtime-san && ./test_jit-san $(TEST_ARGS_test_jit) && ./test_ops-san $(TEST_ARGS_test_ops) && ./test_kl-san $(TEST_ARGS_test_kl)
 	$(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -DSJ_VERSION='"$(VERSION)"' -o $(BUILD)/shen-jit-san src/runtime/main.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
 	cd $(BUILD) && ./shen-jit-san --stage1 stage0 shen-jit-san.img && \
-	  $(call FFI_SUITES,ASAN_OPTIONS=detect_leaks=0 SHEN_JIT_IMAGE=shen-jit-san.img ./shen-jit-san)
+	  $(call FFI_SUITES,ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=shen-jit-san.img ./shen-jit-san)
 
 test-x86: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done | $(BUILD)
 	for t in $(TESTS); do \
