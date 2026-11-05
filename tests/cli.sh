@@ -6,7 +6,7 @@ dir=$(mktemp -d)
 trap 'rm -rf "$dir"' EXIT
 # A native Windows program knows C:/..., not MSYS2's /tmp.
 # Its kill ends a native program instead of interrupting it: a console is
-# needed to send one a Ctrl-C, so the tests that do so run elsewhere. There is
+# needed to send one a Ctrl-C, so tests/ctrlc_windows.py does that. There is
 # no profiler there either.
 posix=yes
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); posix=no; fi

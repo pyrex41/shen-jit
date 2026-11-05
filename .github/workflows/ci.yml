@@ -96,6 +96,11 @@ jobs:
             make "KERNEL_DIR=$KERNEL_DIR" "$suite"
             echo "::endgroup::"
           done
+      # A real Ctrl-C, which tests/cli.sh cannot send there. The runner's own Python, for ctypes.windll.
+      - name: Ctrl-C
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: python tests/ctrlc_windows.py build/shen-jit.exe
       - name: GC stress
         if: github.ref_type != 'tag'
         run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress

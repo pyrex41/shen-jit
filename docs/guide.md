@@ -674,6 +674,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl` and the FFI's tests under AddressSanitizer and UBSan |
 | `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |
+| `make test-ctrlc-windows` | A real Ctrl-C to the REPL on Windows, through a console |
 | `make test-linux` | Every suite on Linux arm64 and x86-64, in Docker, from a source tarball. Needs pandoc, as `make dist` does |
 | `make deps` | Fetches the kernel and the earlier release of Shen/JIT that makes the generated files |
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
@@ -689,7 +690,7 @@ make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl t
 ```
 
 On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that
-send a signal or use the profiler. The sanitizers stay on Linux and macOS.
+send a signal, which `make test-ctrlc-windows` covers, or use the profiler. The sanitizers stay on Linux and macOS.
 
 [AGENTS.md](https://github.com/tizoc/shen-jit/blob/main/AGENTS.md) has more on working on it.
 

@@ -719,7 +719,7 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
     time there, as `clock()` is: the processor-time counter ticks only every 15.6 ms.
   - `*os*` said "Unix" there until 2026-11-05.
 - **Tests:** every suite passes on Windows 10 from the tarball, GC stress included, but MSYS2's `kill` ends a native program, so CLI
-  tests that send a signal do not run. A driver through a real console (2026-11-05) saw Ctrl-C end `accept` and `recv` in 92 ms.
+  tests that send a signal do not run. A driver through a real console (2026-11-05) saw Ctrl-C end `accept` and `recv` in 92 ms. It became `tests/ctrlc_windows.py`, 8 checks in 3.3 s on the Windows 10 machine, which CI runs too.
 - **Timing:** Windows 10 Pro with gcc 16 on a Ryzen 5 5600X, against the Linux VM it hosts: all rows 0.961 open and 0.939 sealed,
   applications 1.10; the kernel test suite 309 ms against 277, startup 7 against 2.
 - **Its slower rows are a fixed cost per process.** Long application rows read 0.86 to 1.00; short ones at 1.2 to 1.7 lose 6 to

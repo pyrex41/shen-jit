@@ -56,7 +56,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-linux bench bench-independent stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -300,6 +300,10 @@ $(FFI_TEST_LIB): tests/ffi_lib.c include/shen.h | $(BUILD)
 test-ffi: $(BUILD)/shen-jit $(FFI_TEST_LIB)
 	cd $(BUILD) && SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit eval -l ../lib/ffi.shen -e '(tc +)' -l ../tests/ffi_typed.shen | $(FFI_RESULT)
 	cd $(BUILD) && $(call FFI_SUITES,SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit)
+
+# A real Ctrl-C to the REPL on Windows, which tests/cli.sh cannot send there.
+test-ctrlc-windows: $(BUILD)/shen-jit
+	python3 tests/ctrlc_windows.py $(BUILD)/shen-jit$(EXE)
 
 # The suites on Linux arm64 and x86-64, in Docker (tests/linux.sh).
 test-linux:
