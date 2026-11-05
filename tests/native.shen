@@ -401,4 +401,181 @@
 (native-test.refused "none of those was installed" (freeze ((fn native-test.bad))))
 (native-test.refused "redefines a sealed function, built" (freeze (define-native reverse () (return 1))))
 
+\\ ---------------------------------------------------------------------------
+\\ Real registers.
+
+\\ The loop instruction: what comes before it runs once, a register keeps its value round the
+\\ loop, and a slot read for a number takes an integer as well as a real.
+(define-native native-test.real-sum (B I End Start)
+  (real Acc Start)
+  (loop)
+  (prim T >= I End)
+  (jump-if-false T more)
+  (return-real Acc)
+  (label more)
+  (real Acc (+ Acc (f64 B I)))
+  (prim I + I 8)
+  (tail-call native-test.real-sum B I End Start))
+
+(set native-test.reals (shen-jit.bytes 24))
+(shen-jit.f64! (value native-test.reals) 0 1.5)
+(shen-jit.f64! (value native-test.reals) 8 2.5)
+(shen-jit.f64! (value native-test.reals) 16 0.25)
+(native-test.check "a loop on a buffer" 4.25 (freeze (native-test.real-sum (value native-test.reals) 0 24 0)))
+(native-test.check "from a real" 4.75 (freeze (native-test.real-sum (value native-test.reals) 0 24 0.5)))
+(native-test.check "no times round gives what it started with, boxed" 2.5 (freeze (native-test.real-sum (value native-test.reals) 0 0 2.5)))
+(native-test.check "it is a real" true (freeze (number? (native-test.real-sum (value native-test.reals) 0 0 2))))
+(native-test.check "not a number" [error "a is not a number"]
+  (freeze (native-test.result (freeze (native-test.real-sum (value native-test.reals) 0 24 a)))))
+(native-test.check "past the end" [error "bytes: 32 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.real-sum (value native-test.reals) 32 40 0)))))
+(native-test.check "not memory" error
+  (freeze (hd (native-test.result (freeze (native-test.real-sum "abc" 0 8 0))))))
+
+\\ Each operation, nested, with literals and slots among them.
+(define-native native-test.real-ops (A B)
+  (real X A)
+  (real Y B)
+  (real R (- (/ (* (+ X Y) 2) Y) (sqrt (abs (neg X)))))
+  (return-real R))
+(native-test.check "arithmetic" 4 (freeze (native-test.real-ops 4 2)))
+
+\\ What is on both sides, written after it is read.
+(define-native native-test.real-same (A)
+  (real X A)
+  (real X (+ (* X X) X))
+  (real X (- X (* X 0.5)))
+  (return-real X))
+(native-test.check "a register read in what writes it" 6 (freeze (native-test.real-same 3)))
+
+(define-native native-test.real-many (A B)
+  (real X (+ A B 1 2.5))
+  (real Y (* A B 2))
+  (return-real (+ X Y)))
+(native-test.check "several operands, from slots" 25.5 (freeze (native-test.real-many 2 4)))
+
+(define-native native-test.real-divide (A B)
+  (real X A)
+  (real Y B)
+  (return-real (/ X Y)))
+(native-test.check "division by zero gives infinity" true (freeze (> (native-test.real-divide 1 0) 1e300)))
+
+\\ An index in arithmetic, and a store.
+(define-native native-test.real-store (B I X)
+  (real V X)
+  (f64! B (* (+ I 1) 8) (+ V 1))
+  (return-real (f64 B (* (+ I 1) 8))))
+(native-test.check "a store, and an index worked out" 3.5 (freeze (native-test.real-store (shen-jit.bytes 16) 0 2.5)))
+(native-test.check "a store past the end" [error "bytes: 16 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.real-store (shen-jit.bytes 16) 1 2.5)))))
+
+\\ Each comparison, NaN making each one false.
+(define-native native-test.real-lt (A B) (jump-unless (< A B) no) (return yes) (label no) (return no))
+(define-native native-test.real-gt (A B) (jump-unless (> A B) no) (return yes) (label no) (return no))
+(define-native native-test.real-le (A B) (jump-unless (<= A B) no) (return yes) (label no) (return no))
+(define-native native-test.real-ge (A B) (jump-unless (>= A B) no) (return yes) (label no) (return no))
+(define-native native-test.real-eq (A B) (jump-unless (= A B) no) (return yes) (label no) (return no))
+
+(define native-test.compare-all
+  A B -> [(native-test.real-lt A B) (native-test.real-gt A B) (native-test.real-le A B)
+          (native-test.real-ge A B) (native-test.real-eq A B)])
+
+(set native-test.nan (let I (* 1e300 1e300) (- I I)))
+(native-test.check "below" [yes no yes no no] (freeze (native-test.compare-all 1.5 2)))
+(native-test.check "above" [no yes no yes no] (freeze (native-test.compare-all 2 1.5)))
+(native-test.check "equal" [no no yes yes yes] (freeze (native-test.compare-all 2 2)))
+(native-test.check "NaN" [no no no no no] (freeze (native-test.compare-all (value native-test.nan) 1)))
+(native-test.check "a comparison raises on what is no number" [error "a is not a number"]
+  (freeze (native-test.result (freeze (native-test.real-lt a 1)))))
+
+\\ What calls C or collects keeps them: boxes that allocate, a primitive that calls C and
+\\ allocates, and an = that calls C and does not.
+(define-native native-test.real-keep (N Acc)
+  (real X 0)
+  (real Y 100)
+  (loop)
+  (prim T = N 0)
+  (jump-if-false T more)
+  (return Acc)
+  (label more)
+  (real X (+ X 1))
+  (real Y (- Y 1))
+  (real-box A X)
+  (real-box B Y)
+  (prim S str N)
+  (prim S2 str N)
+  (prim E = S S2)
+  (jump-if-false E fail)
+  (prim P + A B)
+  (prim Acc + Acc P)
+  (prim N - N 1)
+  (tail-call native-test.real-keep N Acc)
+  (label fail)
+  (return fail))
+(native-test.check "kept across C and collections" 20000 (freeze (native-test.real-keep 200 0)))
+
+\\ All twelve, for a square root whose registers an instruction encodes in extra bits.
+(define-native native-test.real-twelve (A)
+  (real R0 A)
+  (real R1 (+ R0 1))
+  (real R2 (+ R1 1))
+  (real R3 (+ R2 1))
+  (real R4 (+ R3 1))
+  (real R5 (+ R4 1))
+  (real R6 (+ R5 1))
+  (real R7 (+ R6 1))
+  (real R8 (+ R7 1))
+  (real R9 (+ R8 1))
+  (real R10 (sqrt (* R9 R9)))
+  (real R0 (sqrt R10))
+  (real R10 (sqrt R1))
+  (real R0 (+ R0 R10 R2 R3 R4 R5 R6 R7 R8))
+  (return-real R0))
+(native-test.check "every register, and a root in each" true
+  (freeze (let V (native-test.real-twelve 3)
+            (and (> V 61.46) (< V 61.47)))))
+
+(native-test.refused "an unknown instruction among them"
+  (freeze (define-native native-test.bad (A) (real X A) (call-result R F) (return-real X))))
+
+\\ What must be refused.
+(native-test.refused "a call" (freeze (define-native native-test.bad (A) (real X A) (call R reverse A) (return-real X))))
+(native-test.refused "a call of a value" (freeze (define-native native-test.bad (F) (real X 1) (call R F 1) (return-real X))))
+(native-test.refused "a handler"
+  (freeze (define-native native-test.bad (A) (push-handler h) (real X A) (pop-handler) (return-real X) (label h) (return A))))
+(native-test.refused "a register unset" (freeze (define-native native-test.bad (A) (real X (+ Y 1)) (real Y 1) (return-real X))))
+(native-test.refused "a register set on one path"
+  (freeze (define-native native-test.bad (A) (jump-if-false A l) (real X 1) (label l) (return-real X))))
+(native-test.refused "a register as a slot" (freeze (define-native native-test.bad (A) (real X A) (prim Y + X 1) (return Y))))
+(native-test.refused "a register as memory" (freeze (define-native native-test.bad (A) (real X A) (real Y (f64 X 0)) (return-real Y))))
+(native-test.refused "two loops" (freeze (define-native native-test.bad () (real X 1) (loop) (loop) (return-real X))))
+(native-test.refused "a jump before the loop"
+  (freeze (define-native native-test.bad (A) (jump-if-false A l) (label l) (loop) (return A))))
+(native-test.refused "a comparison before the loop"
+  (freeze (define-native native-test.bad (A) (jump-unless (< A 1) l) (label l) (loop) (return A))))
+(native-test.refused "a slot from before the loop that it also writes"
+  (freeze (define-native native-test.bad (A)
+            (prim K + A 1)
+            (loop)
+            (prim T = K 0)
+            (jump-if-false T more)
+            (return A)
+            (label more)
+            (prim K + K 1)
+            (tail-call native-test.bad A))))
+(native-test.refused "not a real expression" (freeze (define-native native-test.bad (A) (real X (foo A)) (return-real X))))
+(native-test.refused "not a comparison" (freeze (define-native native-test.bad (A) (jump-unless (foo A A) l) (label l) (return A))))
+(native-test.refused "more registers than there are"
+  (freeze (define-native native-test.bad (A)
+            (real R0 A) (real R1 A) (real R2 A) (real R3 A) (real R4 A) (real R5 A) (real R6 A)
+            (real R7 A) (real R8 A) (real R9 A) (real R10 A) (real R11 A) (real R12 A)
+            (return-real R12))))
+(native-test.raw "a register out of range" [code native-test.bad 0 3 [0] [[real-number 12 [const 0]] [return [const 0]]] []])
+(native-test.raw "a negative register" [code native-test.bad 0 3 [0] [[real-number -1 [const 0]] [return [const 0]]] []])
+(native-test.raw "a slot for a register" [code native-test.bad 0 3 [0] [[real-box 2 2] [return 2]] []])
+(native-test.raw "a label that is not there" [code native-test.bad 0 3 [0] [[real-number 0 [const 0]] [real-unless< 0 0 9] [return [const 0]]] []])
+(native-test.raw "a load into nothing" [code native-test.bad 1 4 [0] [[real-load 12 2 [const 0]] [return 2]] []])
+(native-test.raw "a store of nothing" [code native-test.bad 1 4 [0] [[real-store 2 [const 0] 0] [return 2]] []])
+(native-test.refused "none of those was installed, again" (freeze ((fn native-test.bad))))
+
 (output "~A passed, ~A failed~%" (value native-test.*passed*) (value native-test.*failed*))

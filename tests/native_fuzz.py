@@ -38,12 +38,22 @@ BASES = [
     "(code fuzz.f 2 8 (0 1 2) ((prim 4 = 2 (const 0)) (jump-if-false 4 0) (return 3) (label 0)"
     " (prim 5 absvector (const 2)) (prim 5 address-> 5 (const 0) 2) (prim 6 str 2) (prim 5 address-> 5 (const 1) 6)"
     " (prim 3 cons 5 3) (prim 2 - 2 (const 1)) (tail-call 0 fuzz.f 2)) ())",
+    # Real registers: a loop, what it keeps round it, and each kind of instruction.
+    "(code fuzz.f 2 8 (0 1.5) ((real-number 0 (const 1)) (real-number 1 (const 0)) (loop) (prim 4 cons? 2)"
+    " (jump-if-false 4 0) (prim 5 hd 2) (real-number 2 5) (real+ 1 1 2) (real* 2 1 0) (real-sqrt 2 2) (prim 2 tl 2)"
+    " (tail-call 0 fuzz.f 2) (label 0) (real-box 6 1) (return 6)) ())",
+    # Real registers on memory: a store, a load, a comparison.
+    "(code fuzz.f 2 8 (8 1.5 16) ((prim 4 shen-jit.bytes (const 2)) (real-number 0 (const 1)) (real-store 4 (const 0) 0)"
+    " (real-load 1 4 (const 0)) (real-unless< 0 1 0) (real-box 5 1) (return 5) (label 0) (real-neg 2 0) (real-box 5 2)"
+    " (return 5)) ())",
 ]
 ATOMS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 12, -1] + ['foo', 'fuzz.g', 'fuzz.f', 'reverse', 'hd', 'tl', 'cons', 'cons?', '+', '=', 'str']
 INSNS = ["(move 4 2)", "(const 4 0)", "(prim 4 cons? 2)", "(jump-if-false 4 0)", "(jump 0)", "(label 9)",
          "(pop-handler)", "(push-handler 0)", "(exception 4)", "(capture 4 0)", "(return 2)", "(return (const 0))",
          "(call 4 4 fuzz.g 1)", "(call-value 4 4 0)", "(tail-call 0 fuzz.f 2)", "(tail-call 4 fuzz.g 1)", "(closure 4 0 2)",
-         "(prim 4 hd 2)", "(prim 2 tl 2)", "(move 2 4)", "(prim 4 cons (const 0) 2)", "(jump-unless-entry 2 2 0)"]
+         "(prim 4 hd 2)", "(prim 2 tl 2)", "(move 2 4)", "(prim 4 cons (const 0) 2)", "(jump-unless-entry 2 2 0)",
+         "(real-number 0 2)", "(real-number 1 (const 0))", "(real+ 0 0 1)", "(real-move 1 0)", "(real-box 4 0)",
+         "(real-load 0 2 3)", "(real-store 2 3 0)", "(real-unless< 0 1 0)", "(loop)"]
 
 
 def parse(text):

@@ -75,7 +75,7 @@ enum {
                      then [name][bytecode] */
     T_EXCEPTION,  /* [message][value]: the value goes before the message */
     T_STREAM,     /* [flags raw][handle raw] */
-    T_POINTER,    /* [kind][owner][address raw][length raw]: a C pointer; an image clears all but the kind */
+    T_POINTER,    /* [kind][owner][address raw][length raw]: a C pointer, read only if its size is 1; an image clears all but the kind */
     T_LIMIT
 };
 

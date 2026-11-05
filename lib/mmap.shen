@@ -17,7 +17,7 @@
 \\ is read from the file until it is touched. An empty file cannot be mapped, and raises. Errors
 \\ raise, with the system's message or, for the mapping itself on Windows, its number.
 \\
-\\ Two things the length cannot check end the process: a store into mmap.read's memory, and an
+\\ A store into what mmap.read gives raises. One thing no check can catch ends the process: an
 \\ access past the end of a file that something has since made shorter.
 \\
 \\ It stays mapped until mmap.close, or the end of the process. lib/handle.shen closes it once nothing
@@ -95,7 +95,11 @@
   Path Fd Write -> (let Length (mmap.c-lseek Fd 0 2)
                      (cases (< Length 0) (mmap.fail Path)
                             (= Length 0) (error "mmap: ~A is empty, and cannot be mapped" Path)
-                            true (shen-jit.pointer-sized (mmap.view Path Fd Length Write) Length))))
+                            true (mmap.access (shen-jit.pointer-sized (mmap.view Path Fd Length Write) Length) Write))))
+
+(define mmap.access
+  M true -> M
+  M false -> (shen-jit.pointer-read-only M))
 
 (define mmap.view
   Path Fd Length Write -> (if (mmap.windows?)

@@ -201,6 +201,10 @@ address space and double in place when live data passes 40% of them.
   from the dead, and what one value uses outlasts it. The list's pair takes less to-space than the pointer, which is not copied, leaves free.
 - **Repeated pointers** are skipped while scanning, which matters for the Prolog engine's big vectors.
 
+Reals are boxed, each a 16-byte object, and native code does their arithmetic and comparisons on its slow path, after the
+test for fixnums fails, loading each operand into a float register and allocating the result in line. Code written by hand can keep them unboxed
+in real registers, which the collector never sees ([bytecode.md](bytecode.md), "Real registers").
+
 The roots are the scanned extent of each thread's guest stack, the global cells and constants, what C holds, and a few VM
 fields. C holds values in explicitly registered locals, per thread, and in the roots that outlive a call (`shen_root_new`), which a
 thread with no lock may delete, so a collection first drains the list of those deleted.

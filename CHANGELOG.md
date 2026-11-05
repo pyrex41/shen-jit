@@ -16,8 +16,16 @@ All notable changes to this project are documented in this file. The format is b
 - `lib/handle.shen`: memory that releases itself once nothing reaches it, with `handle.wrap`, `handle.close` and
   `handle.sweep`, over `shen-jit.pointer-guard`, `shen-jit.pointer-owner` and `shen-jit.pointers-dead`.
 - `shen-jit.collect` collects now.
+- `shen-jit.pointer-read-only` makes a pointer that raises when stored to, which is what `mmap.read` gives.
+- Real registers in native code written by hand: `real`, `f64!`, `jump-unless`, `return-real` and `loop` keep
+  doubles unboxed in loops that call nothing.
+- `make bench-numeric` runs numeric programs in C and in Shen.
 - The rendered guide now has how Shen/JIT works, its semantics, its instructions and calling C as pages of
   their own.
+
+### Changed
+
+- Arithmetic and comparisons on reals, and division, compile inline.
 
 ### Fixed
 

@@ -25,7 +25,11 @@
    before calling C, which may allocate or collect, and loads it after. */
 #define HP SLJIT_S3, 0
 #define NONE UINT32_MAX
-#define SCRATCHES 5
+/* Float registers: three for one instruction's work, and the real registers of code written by
+   hand, which C does not preserve, so they wait in the native frame around a call. */
+#define SCRATCHES (5 | SLJIT_ENTER_FLOAT(3 + REAL_REGISTERS))
+#define REAL(n) SLJIT_FR(3 + (n))
+#define LOCALS (REAL_REGISTERS * (sljit_s32)sizeof(double))
 /* Registers S4 and up hold the slots of a loop that keeps them in registers
    (Emit.homes): six on arm64, fewer where SLJIT has fewer saved registers. */
 #define HOMES (SLJIT_NUMBER_OF_SAVED_REGISTERS - 4 < 6 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 4 : 6)
@@ -379,6 +383,7 @@ static V h_not_procedure(VM *vm, V p, size_t cell)
 }
 
 static V h_boolean_error(VM *vm, V v) { return sj_raise_value(vm, "~S is not a boolean", v); }
+static V h_not_number(VM *vm, V v) { return sj_raise_value(vm, "~S is not a number", v); }
 
 /* A sealed call whose target was not defined when its code was installed:
    the slot holds the target's symbol until this binds it, once. */
@@ -446,30 +451,6 @@ static V h_cn_bytes(uint64_t *p, V a, V b)
     return tagged(p, TAG_OBJECT);
 }
 
-/* +, - and * with a real operand, before the slow path's dispatcher, into
-   the two words native code allocated at p. 0 for anything else, two
-   fixnums that overflowed included, which the dispatcher handles. */
-static bool reals(V a, V b, double *x, double *y)
-{
-    bool ra = is_object(a) && obj_type(a) == T_REAL, rb = is_object(b) && obj_type(b) == T_REAL;
-    if (!(ra || rb) || !(ra || is_fix(a)) || !(rb || is_fix(b)))
-        return false;
-    *x = ra ? real_value(a) : (double)fixval(a);
-    *y = rb ? real_value(b) : (double)fixval(b);
-    return true;
-}
-
-static V real_at(uint64_t *p, double d)
-{
-    p[0] = HEADER(T_REAL, 0);
-    memcpy(p + REAL_VALUE, &d, sizeof d);
-    return tagged(p, TAG_OBJECT);
-}
-
-static V h_real_add(uint64_t *p, V a, V b) { double x, y; return reals(a, b, &x, &y) ? real_at(p, x + y) : 0; }
-static V h_real_sub(uint64_t *p, V a, V b) { double x, y; return reals(a, b, &x, &y) ? real_at(p, x - y) : 0; }
-static V h_real_mul(uint64_t *p, V a, V b) { double x, y; return reals(a, b, &x, &y) ? real_at(p, x * y) : 0; }
-
 /* = where the inline tests could not settle it. Equality neither allocates
    nor raises, so it needs no published frame. */
 static V h_equal(V a, V b) { return sj_equal(a, b) ? V_TRUE : V_FALSE; }
@@ -510,7 +491,7 @@ static void *h_compile(VM *vm)
 /* Emitting a code object. */
 
 typedef enum { SLOW_PRIM, SLOW_ALLOC, SLOW_BOOLEAN, SLOW_NOT_PROC, SLOW_GROW, SLOW_LOOP, SLOW_RESOLVE, SLOW_GUARD,
-               SLOW_RETURN, SLOW_POINTER } SlowKind;
+               SLOW_RETURN, SLOW_POINTER, SLOW_NOT_NUMBER } SlowKind;
 
 typedef struct Slow {
     SlowKind kind;
@@ -530,6 +511,7 @@ typedef struct Slow {
 typedef struct {
     VM *vm;
     struct sljit_compiler *c;
+    uint32_t reals; /* how many real registers the code uses */
     uint64_t frame, arity, cbase, nconst;
     struct sljit_label **labels;
     struct {
@@ -882,6 +864,45 @@ static uint32_t home_count(const Emit *e, const uint32_t *words, size_t nwords)
     return loop && top > 2 && top - 2 <= HOMES ? top - 2 : 0;
 }
 
+/* How many real registers the code uses: one more than the highest. */
+static uint32_t real_registers(const uint32_t *words, size_t nwords)
+{
+    uint32_t top = 0;
+    for (size_t i = 0; i < nwords; i += insn_length(words + i)) {
+        const uint32_t *p = words + i;
+        uint32_t r[3] = {0, 0, 0};
+        switch (p[0]) {
+        case OP_REAL_NUMBER: case OP_REAL_LOAD: case OP_REAL_STORE: r[0] = p[1] + 1; break;
+        case OP_REAL_BOX: r[0] = p[2] + 1; break;
+        case OP_REAL_MOVE: case OP_REAL_NEG: case OP_REAL_ABS: case OP_REAL_SQRT:
+        case OP_REAL_UNLESS_LT: case OP_REAL_UNLESS_GT: case OP_REAL_UNLESS_LE: case OP_REAL_UNLESS_GE:
+        case OP_REAL_UNLESS_EQ:
+            r[0] = p[1] + 1;
+            r[1] = p[2] + 1;
+            break;
+        case OP_REAL_ADD: case OP_REAL_SUB: case OP_REAL_MUL: case OP_REAL_DIV:
+            r[0] = p[1] + 1;
+            r[1] = p[2] + 1;
+            r[2] = p[3] + 1;
+            break;
+        default:
+            break;
+        }
+        for (int k = 0; k < 3; k++)
+            top = r[k] > top ? r[k] : top;
+    }
+    return top;
+}
+
+/* Whether self tail calls come back to a loop instruction, past what the body does once. */
+static bool raw_loop(const uint32_t *words, size_t nwords)
+{
+    for (size_t i = 0; i < nwords; i += insn_length(words + i))
+        if (words[i] == OP_LOOP)
+            return true;
+    return false;
+}
+
 /* Whether the code loops to its own body, which is then a loop head. */
 static bool loops(const Emit *e, const uint32_t *words, size_t nwords)
 {
@@ -1038,10 +1059,24 @@ static void spill(Emit *e)
         sljit_emit_op1(e->c, SLJIT_MOV, SLOT(2 + k), SLJIT_S(4 + k), 0);
 }
 
+/* C keeps no float register, and the collector does not look at them. */
+static void save_reals(Emit *e)
+{
+    for (uint32_t k = 0; k < e->reals; k++)
+        sljit_emit_fop1(e->c, SLJIT_MOV_F64, SLJIT_MEM1(SLJIT_SP), (sljit_sw)(k * sizeof(double)), REAL(k), 0);
+}
+
+static void load_reals(Emit *e)
+{
+    for (uint32_t k = 0; k < e->reals; k++)
+        sljit_emit_fop1(e->c, SLJIT_MOV_F64, REAL(k), 0, SLJIT_MEM1(SLJIT_SP), (sljit_sw)(k * sizeof(double)));
+}
+
 static void fill(Emit *e)
 {
     for (uint32_t k = 0; k < e->homes; k++)
         sljit_emit_op1(e->c, SLJIT_MOV, SLJIT_S(4 + k), 0, SLOT(2 + k));
+    load_reals(e);
 }
 
 /* At entry only the arguments are loaded; the other slots are written
@@ -1064,6 +1099,7 @@ static void publish(Emit *e)
 {
     struct sljit_compiler *c = e->c;
     spill(e);
+    save_reals(e);
     sljit_emit_op1(c, SLJIT_MOV, VMF(fp), FP, 0);
     sljit_emit_op2(c, SLJIT_ADD, R3, FP, 0, IMM(e->frame * sizeof(V)));
     sljit_emit_op1(c, SLJIT_MOV, VMF(top), R3);
@@ -1098,9 +1134,11 @@ static void call_c_raising(Emit *e, const Slow *s, sljit_s32 arg_types, void *fn
 /* A call to C that neither allocates nor collects: the heap pointer stays in
    its register, which C preserves, rather than going through memory, where
    a loop that calls would wait on it. */
-static void call_leaf(struct sljit_compiler *c, sljit_s32 arg_types, void *fn)
+static void call_leaf(Emit *e, sljit_s32 arg_types, void *fn)
 {
-    sljit_emit_icall(c, SLJIT_CALL, arg_types, SLJIT_IMM, SLJIT_FUNC_ADDR(fn));
+    save_reals(e);
+    sljit_emit_icall(e->c, SLJIT_CALL, arg_types, SLJIT_IMM, SLJIT_FUNC_ADDR(fn));
+    load_reals(e);
 }
 
 static void check_raise(Emit *e)
@@ -1343,6 +1381,25 @@ static struct sljit_jump *fixnum_operands(Emit *e, uint32_t a, uint32_t b, sljit
     return sljit_emit_jump(c, SLJIT_NOT_ZERO);
 }
 
+/* The number at operand x in a float register: a real's value, or a fixnum's, converted. Anything
+   else jumps away, through other[0] and other[1]. Uses R0 and R1. */
+static void load_number(Emit *e, uint32_t x, sljit_s32 f, struct sljit_jump **other)
+{
+    struct sljit_compiler *c = e->c;
+    sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, x));
+    struct sljit_jump *not_object = tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_OBJECT);
+    sljit_emit_op1(c, SLJIT_MOV_U8, R1, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
+    other[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(T_REAL << 3 | TAG_HEADER));
+    sljit_emit_fop1(c, SLJIT_MOV_F64, f, 0, SLJIT_MEM1(SLJIT_R0), REAL_VALUE * WORD - TAG_OBJECT);
+    struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);
+    sljit_set_label(not_object, sljit_emit_label(c));
+    sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(3));
+    other[1] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
+    sljit_emit_op2(c, SLJIT_ASHR, R0, R0, IMM(2));
+    sljit_emit_fop1(c, SLJIT_CONV_F64_FROM_SW, f, 0, R0);
+    sljit_set_label(done, sljit_emit_label(c));
+}
+
 /* Type tests: cons?, shen-jit.symbol? and the tag, absvector?, string? and
    number? also the header's type, shen-jit.tagged? an absvector's length and
    element 0, and shen-jit.pvar? the low byte. Falling through means yes; the test leaves its jumps
@@ -1449,6 +1506,117 @@ static void emit_inlined_test(Emit *e, size_t cell, uint32_t body, struct sljit_
     sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R1), CLO_CODE * sizeof(V) - TAG_PROC);
     sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0), CODE_INLINE * sizeof(V) - TAG_OBJECT);
     no[2] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R0, OPND(e, body));
+}
+
+/* A byte buffer in reach of an instruction: its base in R0 and its length in R2. Anything else
+   leaves this path. A pointer with a length comes back to it from SLOW_POINTER, with its length
+   and base in the same registers, and anything else takes the slow path, which raises. */
+static Slow *emit_memory_base(Emit *e, uint32_t memory)
+{
+    struct sljit_compiler *c = e->c;
+    sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, memory));
+    Slow *slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
+    sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
+    sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
+    Slow *pointer = slow_path(e, SLOW_POINTER, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER)));
+    pointer->prim = slow;
+    sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8)); /* the length */
+    sljit_emit_op2(c, SLJIT_ADD, R0, R0, IMM(sizeof(V) - TAG_OBJECT)); /* the base */
+    pointer->back = sljit_emit_label(c);
+    return slow;
+}
+
+/* A fixnum index with room for the width, in R1. */
+static void emit_memory_index(Emit *e, Slow *slow, uint32_t index, unsigned size)
+{
+    struct sljit_compiler *c = e->c;
+    sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, index));
+    sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R1, IMM(3));
+    slow->from[2] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
+    sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(2)); /* a negative index becomes huge */
+    sljit_emit_op2(c, SLJIT_ADD, R3, R1, IMM(((sljit_sw)1 << size) - 1));
+    slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, R2);
+}
+
+/* SLJIT has no square root, and both targets do. */
+static void emit_sqrt(struct sljit_compiler *c, sljit_s32 d, sljit_s32 s)
+{
+    sljit_u32 rd = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, d);
+    sljit_u32 rs = (sljit_u32)sljit_get_register_index(SLJIT_FLOAT_REGISTER, s);
+#if (defined SLJIT_CONFIG_ARM_64 && SLJIT_CONFIG_ARM_64)
+    sljit_u32 fsqrt = 0x1E61C000u | rs << 5 | rd;
+    sljit_emit_op_custom(c, &fsqrt, sizeof fsqrt);
+#elif (defined SLJIT_CONFIG_X86_64 && SLJIT_CONFIG_X86_64)
+    sljit_u8 sqrtsd[] = {0xF2, (sljit_u8)(0x40 | (rd >> 3) << 2 | rs >> 3), 0x0F, 0x51,
+                         (sljit_u8)(0xC0 | (rd & 7) << 3 | (rs & 7))};
+    sljit_emit_op_custom(c, sqrtsd, sizeof sqrtsd);
+#else
+#error "no square root for this target"
+#endif
+}
+
+/* Instructions on real registers. They are only in code written by hand, which the checker
+   holds to making no calls, and neither the collector nor a raise looks at the registers. */
+static void emit_real(Emit *e, const uint32_t *p)
+{
+    struct sljit_compiler *c = e->c;
+    switch (p[0]) {
+    case OP_REAL_NUMBER: {
+        if (p[2] & OPERAND_CONST) {
+            V k = *operand_cell(e, p[2]);
+            if (is_fix(k) || (is_object(k) && obj_type(k) == T_REAL)) {
+                sljit_emit_fset64(c, REAL(p[1]), is_fix(k) ? (double)fixval(k) : real_value(k));
+                break;
+            }
+        }
+        struct sljit_jump *other[2];
+        load_number(e, p[2], REAL(p[1]), other);
+        Slow *s = slow_path(e, SLOW_NOT_NUMBER, other[0]);
+        s->from[1] = other[1];
+        s->insn = p;
+        break;
+    }
+    case OP_REAL_BOX: {
+        struct sljit_label *restart = sljit_emit_label(c);
+        sljit_emit_op2(c, SLJIT_ADD, R1, HP, IMM(REAL_WORDS * sizeof(V)));
+        Slow *alloc = slow_path(e, SLOW_ALLOC, sljit_emit_cmp(c, SLJIT_GREATER, R1, VMF(hlimit)));
+        alloc->words = REAL_WORDS;
+        alloc->back = restart;
+        sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_S3), 0, IMM(HEADER(T_REAL, 0)));
+        sljit_emit_fop1(c, SLJIT_MOV_F64, SLJIT_MEM1(SLJIT_S3), REAL_VALUE * WORD, REAL(p[2]), 0);
+        sljit_emit_op2(c, SLJIT_ADD, R0, HP, IMM(TAG_OBJECT));
+        sljit_emit_op1(c, SLJIT_MOV, HP, R1);
+        store_result(e, p[1]);
+        break;
+    }
+    case OP_REAL_MOVE: sljit_emit_fop1(c, SLJIT_MOV_F64, REAL(p[1]), 0, REAL(p[2]), 0); break;
+    case OP_REAL_NEG: sljit_emit_fop1(c, SLJIT_NEG_F64, REAL(p[1]), 0, REAL(p[2]), 0); break;
+    case OP_REAL_ABS: sljit_emit_fop1(c, SLJIT_ABS_F64, REAL(p[1]), 0, REAL(p[2]), 0); break;
+    case OP_REAL_SQRT: emit_sqrt(c, REAL(p[1]), REAL(p[2])); break;
+    case OP_REAL_ADD: sljit_emit_fop2(c, SLJIT_ADD_F64, REAL(p[1]), 0, REAL(p[2]), 0, REAL(p[3]), 0); break;
+    case OP_REAL_SUB: sljit_emit_fop2(c, SLJIT_SUB_F64, REAL(p[1]), 0, REAL(p[2]), 0, REAL(p[3]), 0); break;
+    case OP_REAL_MUL: sljit_emit_fop2(c, SLJIT_MUL_F64, REAL(p[1]), 0, REAL(p[2]), 0, REAL(p[3]), 0); break;
+    case OP_REAL_DIV: sljit_emit_fop2(c, SLJIT_DIV_F64, REAL(p[1]), 0, REAL(p[2]), 0, REAL(p[3]), 0); break;
+    case OP_REAL_UNLESS_LT: case OP_REAL_UNLESS_GT: case OP_REAL_UNLESS_LE: case OP_REAL_UNLESS_GE:
+    case OP_REAL_UNLESS_EQ: {
+        /* NaN compares as false, so it jumps. */
+        static const sljit_s32 unless[] = {SLJIT_UNORDERED_OR_GREATER_EQUAL, SLJIT_UNORDERED_OR_LESS_EQUAL,
+                                           SLJIT_UNORDERED_OR_GREATER, SLJIT_UNORDERED_OR_LESS,
+                                           SLJIT_UNORDERED_OR_NOT_EQUAL};
+        to_label(e, sljit_emit_fcmp(c, unless[p[0] - OP_REAL_UNLESS_LT], REAL(p[1]), 0, REAL(p[2]), 0), p[3]);
+        break;
+    }
+    default: { /* OP_REAL_LOAD, OP_REAL_STORE: laid out as prim is */
+        Slow *slow = emit_memory_base(e, p[4]);
+        emit_memory_index(e, slow, p[5], 3);
+        if (p[0] == OP_REAL_LOAD)
+            sljit_emit_fop1(c, SLJIT_MOV_F64, REAL(p[1]), 0, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0);
+        else
+            sljit_emit_fop1(c, SLJIT_MOV_F64, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0, REAL(p[1]), 0);
+        slow->insn = p;
+        slow->back = sljit_emit_label(c);
+    }
+    }
 }
 
 /* Primitives with inline fast paths; everything else, and every slow path,
@@ -1610,7 +1778,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, R2, R1);
         sljit_emit_op1(c, SLJIT_MOV, R1, R0);
         sljit_emit_op1(c, SLJIT_MOV, R0, R4);
-        call_leaf(c, SLJIT_ARGS3(W, P, W, W), (void *)h_cn_bytes);
+        call_leaf(e, SLJIT_ARGS3(W, P, W, W), (void *)h_cn_bytes);
         store_result(e, dst);
         break;
     }
@@ -1879,34 +2047,18 @@ static void emit_prim(Emit *e, const uint32_t *p)
         break;
     case P_BYTES_LENGTH:
     case P_U8: case P_U16: case P_U32: case P_S32: case P_F64:
-    case P_SET_U8: case P_SET_U16: case P_SET_U32: {
-        /* A byte buffer and a fixnum index with room for the width: anything
-           else leaves this path. A pointer with a length comes back to it from
-           SLOW_POINTER, with its length and base in the same registers, and
-           anything else takes the slow path, which raises. A value to store must
-           fit in the width, and one mask tests that and its tag together. */
-        sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
-        slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R2, R0, TAG_OBJECT));
-        sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
-        sljit_emit_op2(c, SLJIT_AND, R3, R2, IMM(0xFF));
-        Slow *pointer = slow_path(e, SLOW_POINTER, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_BYTES << 3 | TAG_HEADER)));
-        pointer->prim = slow;
-        sljit_emit_op2(c, SLJIT_LSHR, R2, R2, IMM(8)); /* the length */
-        sljit_emit_op2(c, SLJIT_ADD, R0, R0, IMM(sizeof(V) - TAG_OBJECT)); /* the base */
-        pointer->back = sljit_emit_label(c);
+    case P_SET_U8: case P_SET_U16: case P_SET_U32: case P_SET_F64: {
+        /* A value to store must fit in the width, and one mask tests that and its tag
+           together; f64! takes a real here, and leaves a fixnum to C. */
+        slow = emit_memory_base(e, arg[0]);
         if (prim == P_BYTES_LENGTH) {
             sljit_emit_op2(c, SLJIT_SHL, R0, R2, IMM(2));
             store_result(e, dst);
             break;
         }
         static const sljit_s32 mov[] = {SLJIT_MOV_U8, SLJIT_MOV_U16, SLJIT_MOV_U32};
-        unsigned size = prim == P_F64 ? 3 : prim == P_S32 ? 2 : (prim - P_U8) % 3;
-        sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
-        sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R1, IMM(3));
-        slow->from[2] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
-        sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(2)); /* a negative index becomes huge */
-        sljit_emit_op2(c, SLJIT_ADD, R3, R1, IMM(((sljit_sw)1 << size) - 1));
-        slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, R2);
+        unsigned size = prim == P_F64 || prim == P_SET_F64 ? 3 : prim == P_S32 ? 2 : (prim - P_U8) % 3;
+        emit_memory_index(e, slow, arg[1], size);
         if (prim == P_F64) {
             /* A real holds the word as it is in memory, so this takes no floating point. With
                no room for one, the slow path reads it again and collects. */
@@ -1918,6 +2070,14 @@ static void emit_prim(Emit *e, const uint32_t *p)
             sljit_emit_op2(c, SLJIT_ADD, R0, HP, IMM(TAG_OBJECT));
             sljit_emit_op1(c, SLJIT_MOV, HP, R3);
             store_result(e, dst);
+        } else if (prim == P_SET_F64) {
+            sljit_emit_op1(c, SLJIT_MOV, R2, OPND(e, arg[2]));
+            slow->from[1] = tag_cmp(c, SLJIT_NOT_EQUAL, R3, R2, TAG_OBJECT);
+            sljit_emit_op1(c, SLJIT_MOV_U8, R3, SLJIT_MEM1(SLJIT_R2), -TAG_OBJECT);
+            slow->from[4] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_REAL << 3 | TAG_HEADER));
+            sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R2), REAL_VALUE * WORD - TAG_OBJECT);
+            sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0, R2);
+            sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), OPND(e, arg[0]));
         } else if (prim <= P_U32 || prim == P_S32) {
             sljit_emit_op1(c, prim == P_S32 ? SLJIT_MOV_S32 : mov[size], R0, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0);
             sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(2));
@@ -2274,10 +2434,13 @@ static bool reads_slot(const uint32_t *p, uint32_t s)
     case OP_CAPTURE: return s == 1;
     case OP_CLOSURE:
     case OP_PRIM:
+    case OP_REAL_LOAD:
+    case OP_REAL_STORE:
         for (uint32_t i = 0; i < p[3]; i++)
             if (p[4 + i] == s)
                 return true;
         return false;
+    case OP_REAL_NUMBER: return p[2] == s;
     case OP_JUMP_IF_FALSE:
     case OP_JUMP_UNLESS_ENTRY:
     case OP_RETURN: return p[1] == s;
@@ -2295,7 +2458,7 @@ static bool writes_slot(const uint32_t *p, uint32_t s)
 {
     switch (p[0]) {
     case OP_MOVE: case OP_CONST: case OP_CAPTURE: case OP_CLOSURE: case OP_PRIM:
-    case OP_CALL: case OP_CALL_SEALED: case OP_CALL_VALUE: case OP_EXCEPTION:
+    case OP_CALL: case OP_CALL_SEALED: case OP_CALL_VALUE: case OP_EXCEPTION: case OP_REAL_BOX:
         return p[1] == s;
     default: return false;
     }
@@ -2333,7 +2496,11 @@ static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
                 todo[ntodo++] = next;
                 todo[ntodo++] = label_pos[p[2]];
                 break;
-            case OP_JUMP_UNLESS_ENTRY: todo[ntodo++] = next; todo[ntodo++] = label_pos[p[3]]; break;
+            case OP_JUMP_UNLESS_ENTRY: case OP_REAL_UNLESS_LT: case OP_REAL_UNLESS_GT: case OP_REAL_UNLESS_LE:
+            case OP_REAL_UNLESS_GE: case OP_REAL_UNLESS_EQ:
+                todo[ntodo++] = next;
+                todo[ntodo++] = label_pos[p[3]];
+                break;
             case OP_PUSH_HANDLER: todo[ntodo++] = next; todo[ntodo++] = label_pos[p[1]]; break;
             default: todo[ntodo++] = next;
             }
@@ -2357,6 +2524,11 @@ static void go_back(Emit *e, const Slow *s)
     sljit_set_label(sljit_emit_jump(e->c, SLJIT_JUMP), s->back);
 }
 
+static bool store_prim(uint32_t prim)
+{
+    return prim == P_SET_U8 || prim == P_SET_U16 || prim == P_SET_U32 || prim == P_SET_F64;
+}
+
 static void emit_slow_paths(Emit *e)
 {
     struct sljit_compiler *c = e->c;
@@ -2368,9 +2540,11 @@ static void emit_slow_paths(Emit *e)
                 sljit_set_label(s->from[j], here);
         switch (s->kind) {
         case SLOW_POINTER:
-            /* Not a byte buffer, with its header's low byte in R3. A pointer goes back to
-               the byte primitive with its length and base, and the rest to raise. */
-            sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R3, IMM(T_POINTER << 3 | TAG_HEADER)), s->prim->start);
+            /* Not a byte buffer, with its header in R2 and that's low byte in R3. A pointer goes
+               back to the byte primitive with its length and base, and the rest to raise. A store
+               tests the whole header, which a read-only pointer's differs in. */
+            sljit_set_label(sljit_emit_cmp(c, SLJIT_NOT_EQUAL, store_prim(s->prim->insn[2]) ? SLJIT_R2 : SLJIT_R3, 0,
+                                           IMM(T_POINTER << 3 | TAG_HEADER)), s->prim->start);
             sljit_emit_op1(c, SLJIT_MOV, R2, SLJIT_MEM1(SLJIT_R0), POINTER_LENGTH * (sljit_sw)sizeof(V) - TAG_OBJECT);
             sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0), POINTER_ADDRESS * (sljit_sw)sizeof(V) - TAG_OBJECT);
             go_back(e, s);
@@ -2382,24 +2556,45 @@ static void emit_slow_paths(Emit *e)
                 break;
             }
             struct sljit_jump *differ[3] = {NULL, NULL, NULL}, *same[2] = {NULL, NULL};
-            if (p[2] == P_ADD || p[2] == P_SUB || p[2] == P_MUL) {
-                /* A real result allocated here, and the heap pointer kept
-                   in its register across the call. */
-                static V (*const fn[])(uint64_t *, V, V) = {[P_ADD] = h_real_add, [P_SUB] = h_real_sub,
-                                                           [P_MUL] = h_real_mul};
-                sljit_emit_op2(c, SLJIT_ADD, R0, HP, IMM(REAL_WORDS * sizeof(V)));
-                struct sljit_jump *full = sljit_emit_cmp(c, SLJIT_GREATER, R0, VMF(hlimit));
-                sljit_emit_op1(c, SLJIT_MOV, R0, HP);
-                sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, p[4]));
-                sljit_emit_op1(c, SLJIT_MOV, R2, OPND(e, p[5]));
-                call_leaf(c, SLJIT_ARGS3(W, P, W, W), (void *)fn[p[2]]);
-                struct sljit_jump *other = sljit_emit_cmp(c, SLJIT_EQUAL, R0, IMM(0));
-                sljit_emit_op2(c, SLJIT_ADD, HP, HP, IMM(REAL_WORDS * sizeof(V)));
-                sljit_emit_op1(c, SLJIT_MOV, HOME(e, p[1]), R0);
-                go_back(e, s);
+            bool compare = p[2] == P_LT || p[2] == P_GT || p[2] == P_LE || p[2] == P_GE;
+            if (compare || p[2] == P_ADD || p[2] == P_SUB || p[2] == P_MUL || p[2] == P_DIV) {
+                /* With a real among the operands, the work is done here. What is left is for
+                   the dispatcher: what is not a number, division by zero, no room for the
+                   result, and two fixnums, which overflowed or divide exactly. */
+                static const sljit_s32 fop[] = {[P_ADD] = SLJIT_ADD_F64, [P_SUB] = SLJIT_SUB_F64,
+                                                [P_MUL] = SLJIT_MUL_F64, [P_DIV] = SLJIT_DIV_F64};
+                static const sljit_s32 ftype[] = {[P_LT] = SLJIT_ORDERED_LESS, [P_GT] = SLJIT_ORDERED_GREATER,
+                                                  [P_LE] = SLJIT_ORDERED_LESS_EQUAL,
+                                                  [P_GE] = SLJIT_ORDERED_GREATER_EQUAL};
+                struct sljit_jump *other[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+                if (!compare) {
+                    sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, p[4]));
+                    sljit_emit_op2(c, SLJIT_OR, R0, R0, OPND(e, p[5]));
+                    sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(3));
+                    other[0] = sljit_emit_jump(c, SLJIT_ZERO);
+                }
+                load_number(e, p[4], SLJIT_FR0, other + 1);
+                load_number(e, p[5], SLJIT_FR1, other + 3);
+                if (compare) {
+                    same[0] = sljit_emit_fcmp(c, ftype[p[2]], SLJIT_FR0, 0, SLJIT_FR1, 0);
+                    differ[0] = sljit_emit_jump(c, SLJIT_JUMP);
+                } else {
+                    if (p[2] == P_DIV) {
+                        sljit_emit_fset64(c, SLJIT_FR2, 0.0);
+                        other[5] = sljit_emit_fcmp(c, SLJIT_ORDERED_EQUAL, SLJIT_FR1, 0, SLJIT_FR2, 0);
+                    }
+                    sljit_emit_op2(c, SLJIT_ADD, R0, HP, IMM(REAL_WORDS * sizeof(V)));
+                    other[6] = sljit_emit_cmp(c, SLJIT_GREATER, R0, VMF(hlimit));
+                    sljit_emit_fop2(c, fop[p[2]], SLJIT_FR0, 0, SLJIT_FR0, 0, SLJIT_FR1, 0);
+                    sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_S3), 0, IMM(HEADER(T_REAL, 0)));
+                    sljit_emit_fop1(c, SLJIT_MOV_F64, SLJIT_MEM1(SLJIT_S3), REAL_VALUE * WORD, SLJIT_FR0, 0);
+                    sljit_emit_op2(c, SLJIT_ADD, HOME(e, p[1]), HP, IMM(TAG_OBJECT));
+                    sljit_emit_op1(c, SLJIT_MOV, HP, R0);
+                    go_back(e, s);
+                }
                 struct sljit_label *dispatch = sljit_emit_label(c);
-                sljit_set_label(full, dispatch);
-                sljit_set_label(other, dispatch);
+                for (int j = 0; j < 7; j++)
+                    sljit_set_label(other[j], dispatch);
             }
             if (p[2] == P_EQ && (fixnum_operand(e, p[4]) || fixnum_operand(e, p[5]))) {
                 /* Against a fixnum constant the value here is an object,
@@ -2416,7 +2611,7 @@ static void emit_slow_paths(Emit *e)
                     differ[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R2, IMM(T_REAL << 3 | TAG_HEADER));
                 }
                 sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, p[4 + k]));
-                call_leaf(c, SLJIT_ARGS2(W, W, W), (void *)h_equal);
+                call_leaf(e, SLJIT_ARGS2(W, W, W), (void *)h_equal);
             } else if (p[2] == P_EQ) {
                 /* Before calling C: two objects with different headers
                    (types or lengths), or a fixnum and an object that is not
@@ -2470,7 +2665,7 @@ static void emit_slow_paths(Emit *e)
                 sljit_set_label(heads, call);
                 sljit_set_label(end0, call);
                 sljit_set_label(real, call);
-                call_leaf(c, SLJIT_ARGS2(W, W, W), (void *)h_equal);
+                call_leaf(e, SLJIT_ARGS2(W, W, W), (void *)h_equal);
             } else {
                 publish(e);
                 for (uint32_t k = 0; k < p[3]; k++)
@@ -2479,6 +2674,10 @@ static void emit_slow_paths(Emit *e)
                 sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
                 sljit_emit_op1(c, SLJIT_MOV, R1, IMM(p[2]));
                 call_c_raising(e, s, SLJIT_ARGS2(W, P, W), (void *)h_prim);
+                if (p[0] != OP_PRIM) { /* a real register's: it only comes here to raise */
+                    to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+                    break;
+                }
                 check_raise(e);
                 fill(e);
             }
@@ -2540,6 +2739,13 @@ static void emit_slow_paths(Emit *e)
             sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, s->insn[1]));
             sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
             call_c_raising(e, s, SLJIT_ARGS2(W, P, W), (void *)h_boolean_error);
+            to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
+            break;
+        case SLOW_NOT_NUMBER:
+            publish(e);
+            sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, s->insn[2]));
+            sljit_emit_op1(c, SLJIT_MOV, R0, VMR, 0);
+            call_c_raising(e, s, SLJIT_ARGS2(W, P, W), (void *)h_not_number);
             to_unwind(e, sljit_emit_jump(c, SLJIT_JUMP));
             break;
         case SLOW_NOT_PROC:
@@ -2702,7 +2908,7 @@ static void *compile_code(VM *vm, V code)
     if (!c || !e.labels || !e.fixups || !e.slow || !e.calls || !label_pos || !e.at_label || !e.handlers ||
         !e.selfs || !e.guards || !e.raises)
         goto done;
-    sljit_set_context(c, 0, ARG_TYPES, SCRATCHES, SAVEDS, 0);
+    sljit_set_context(c, 0, ARG_TYPES, SCRATCHES, SAVEDS, LOCALS);
 
     /* Entry: check the argument count and that the frame fits. A lambda
        that returns lambdas also takes all their arguments at once (entry N
@@ -2752,7 +2958,8 @@ static void *compile_code(VM *vm, V code)
     e.next = 0;
     /* Not past a branch: the first branch of a loop usually leads to its
        exit, and what that reads does not count. */
-    e.cached = e.entry = e.arity && read_soon(&e, 2, false) ? 2 : NONE;
+    e.reals = real_registers(words, nwords);
+    e.cached = e.entry = e.arity && !raw_loop(words, nwords) && read_soon(&e, 2, false) ? 2 : NONE;
     bool falls = true;
     size_t mark = 0;
     for (size_t i = 0; i < nwords; i += insn_length(words + i)) {
@@ -2869,6 +3076,16 @@ static void *compile_code(VM *vm, V code)
         case OP_ENTRY: /* dispatched at entry */
             break;
         case OP_INLINE: /* left only if strip_marks could not allocate */
+            break;
+        case OP_LOOP:
+            /* Self tail calls come here, past what runs once: the checker has it before any jump. */
+            e.body = sljit_emit_aligned_label(c, LOOP_ALIGN, NULL);
+            break;
+        case OP_REAL_NUMBER: case OP_REAL_BOX: case OP_REAL_MOVE: case OP_REAL_NEG: case OP_REAL_ABS:
+        case OP_REAL_SQRT: case OP_REAL_ADD: case OP_REAL_SUB: case OP_REAL_MUL: case OP_REAL_DIV:
+        case OP_REAL_UNLESS_LT: case OP_REAL_UNLESS_GT: case OP_REAL_UNLESS_LE: case OP_REAL_UNLESS_GE:
+        case OP_REAL_UNLESS_EQ: case OP_REAL_LOAD: case OP_REAL_STORE:
+            emit_real(&e, p);
             break;
         case OP_JUMP_UNLESS_ENTRY: {
             /* Falls through only for a closure whose code takes p[2]
@@ -3051,7 +3268,7 @@ Jit *jit_create(void)
         free(jit);
         return NULL;
     }
-    sljit_emit_enter(c, 0, ARG_TYPES, SCRATCHES, SAVEDS, 0);
+    sljit_emit_enter(c, 0, ARG_TYPES, SCRATCHES, SAVEDS, LOCALS);
 
     /* Adapter, entered at the start of the code so the prologue runs: the
        VM arrives in S0; vm->fp is a frame whose slot 1 holds the callee and

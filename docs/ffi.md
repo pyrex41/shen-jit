@@ -69,12 +69,13 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 | `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C or read |
 | `(shen-jit.pointer-sized P N)` | A new pointer to the same address and of the same kind, whose N bytes can be read and written in place, and which keeps P alive |
 | `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
+| `(shen-jit.pointer-read-only P)` | A new pointer to the same memory, which keeps P alive, and raises when stored to, as any copy of it does |
 | `(shen-jit.pointer-guard P V)` | A new pointer like P, with the same length, whose V is handed back once nothing reaches it: see below |
 | `(shen-jit.pointer-owner P)` | The pointer that P was sized from, the V it was guarded with, or `[]` |
 | `(shen-jit.pointers-dead)` | The values of the guarded pointers that have died since it was last called, as a list |
 | `(shen-jit.collect)` | Collects now |
 
-`=` compares kind and address, and a pointer prints as `#<pointer sqlite3 0x...>`. One saved in an image loads dead.
+`=` compares kind, address and whether it is read only, and a pointer prints as `#<pointer sqlite3 0x...>`. One saved in an image loads dead.
 
 **Memory outside the heap** is a pointer with a length. Pointers come from C with none, which refuses any read. `shen-jit.pointer-sized` states one, and then
 what works on a byte buffer works on the pointer, checked against that length: `shen-jit.u8` to `u32`, `s32`, `s64`, `f32`, `f64`, their stores, `bytes-length`,
@@ -101,7 +102,7 @@ what works on a byte buffer works on the pointer, checked against that length: `
   memory itself is not saved: a byte buffer is what lasts in an image.
 
 `lib/mmap.shen` maps files the same way, on each system: `(mmap.read Path)`, `(mmap.read-write Path)`, `(mmap.create Path N)` and `(mmap.close M)`, over `mmap` and `lseek`, or `CreateFileMappingA` and
-`MapViewOfFile`. A store into the memory of `mmap.read` ends the process, and so does an access past the end of a file that something has since made shorter, neither of which a length can check.
+`MapViewOfFile`. What `mmap.read` gives is read only, so a store raises instead of ending the process; an access past the end of a file that something has since made shorter does end it, as no check can catch that. C can still write through a read-only pointer given to it, which ends the process too.
 
 **Guarded pointers** let Shen release such memory once nothing uses it. `(shen-jit.pointer-guard P V)` makes a copy of P, the guarded pointer, and holds V strongly. Once nothing else reaches the guarded pointer, a
 collection puts V on the list that `(shen-jit.pointers-dead)` gives, and Shen does the rest: nothing runs during a collection, and whatever releases the memory can be any Shen function.

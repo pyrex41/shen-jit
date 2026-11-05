@@ -147,7 +147,7 @@ plus:
   no instruction is new. `shen-jit.pointer?`, `shen-jit.pointer-kind`, `shen-jit.pointer-address`,
   `shen-jit.pointer->string`, `shen-jit.pointer-kill` (arity 1), `shen-jit.bytes->pointer`, `shen-jit.pointer->bytes` (arity 3)
   handle the pointers such functions pass around, and `shen-jit.errno`, `shen-jit.c-errno` (arity 0) what
-  the last one left. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
+  the last one left. `shen-jit.pointer-read-only` (arity 1) marks one against stores. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
   tell Shen when a pointer has died, and `shen-jit.collect` (arity 0) collects. [ffi.md](ffi.md) has their use.
 - `shen-jit.vector?`: arity 1, the kernel's `vector?` without its
   `trap-error`: true for an absvector with at least one element whose element
@@ -200,9 +200,10 @@ does not scan. It lives in the heap like a string, so:
 
 A pointer with a length is memory outside the heap ([ffi.md](ffi.md)), and all of these except
 `bytes?` and `string->bytes` take one in place of a buffer, with the same checks against its
-length. `u8`, `u16`, `u32`, `s32`, `f64`, `bytes-length` and the stores `u8!`, `u16!` and `u32!` compile
+length. `u8`, `u16`, `u32`, `s32`, `f64`, `bytes-length` and the stores `u8!`, `u16!`, `u32!` and `f64!` compile
 inline for both; the others call C for both. `f64` allocates where it reads, and its real holds the word as it
-is in memory, so it takes no floating point.
+is in memory, so it takes no floating point. `f64!` takes a real inline, and leaves an integer to C. A read-only
+pointer differs in its header, which a store tests whole, so no other access pays for it.
 
 | Form | Result |
 | --- | --- |
@@ -484,4 +485,36 @@ may be any value. `make test-native` has code to run and code to refuse, and `ma
 fuzz-native` mutates code objects and runs what the checker accepts: a crash means it
 accepted something the JIT cannot compile.
 
-Values stay tagged, also with byte buffers and bit operations.
+What is in a slot stays tagged, also with byte buffers and bit operations.
+
+### Real registers
+
+Doubles can live unboxed in 12 real registers, a namespace of their own. The collector does not look at them, and C
+does not keep them, so the JIT saves them to the native frame around any call to C that returns: a collection, a
+primitive, an interrupt check. Nothing saves them across a call of a function, so **code using them calls nothing and
+has no handlers**, though it may tail call. That is what makes raw values safe here, where a raw frame slot could not
+be: the collector reads every slot as a value.
+
+| Form | Meaning |
+| --- | --- |
+| `(real X E)` | Register X := the value of E. X is then a register wherever it is named. |
+| `(f64! M I E)` | Store E at byte offset I of M, checked as `shen-jit.f64!` is. |
+| `(jump-unless (Op E1 E2) L)` | Jump to L unless E1 Op E2, with Op one of `<`, `>`, `<=`, `>=` and `=`. NaN compares false. |
+| `(real-box D E)` | Slot D := a new real holding E. |
+| `(return-real E)` | Return a new real holding E. |
+| `(loop)` | Self tail calls come back here. Only straight-line code may come before it, and at most one in a function. |
+
+An expression E is a register; a number, a slot or `(const K)`, whose number is read with a check, an integer
+converted, and anything else raising; `(+ E1 E2)`, `(- E1 E2)`, `(* E1 E2)`, `(/ E1 E2)`; `(neg E)`, `(abs E)`, `(sqrt E)`; or
+`(f64 M I)`, read and checked as `shen-jit.f64` is. `(+ A B C)` is `(+ A (+ B C))`, as Shen's macro makes it. An index I may be
+integer arithmetic through `prim`, as `(+ I 8)`. Intermediate values take registers too, and more than 12 in a function is refused.
+
+- **Division is IEEE's:** dividing by zero gives an infinity or a NaN, where `/` raises.
+- **A register keeps its value round the loop,** so it is how a loop carries a real. What comes before `(loop)` runs
+  once, and the parameter a register starts from is passed along unchanged, which costs nothing.
+- **A slot the code after `(loop)` writes counts as unset there,** unless it is a parameter, whose next value is the tail
+  call's argument: the JIT does not store a result it finds dead going forward.
+- **Every access is checked,** and those checks are what is left between these loops and C.
+
+The builder turns these into instructions that `shen-jit.install-code` takes too, with registers numbered from 0: `(real-number F O)`, `(real-box D F)`, `(real-move D F)`, `(real-neg D F)`, `(real-abs D F)`,
+`(real-sqrt D F)`, `(real+ D A B)`, `(real- D A B)`, `(real* D A B)`, `(real/ D A B)`, `(real-unless< A B L)`, with `>`, `<=`, `>=` and `=`, `(real-load F M I)`, `(real-store M I F)` and `(loop)`.

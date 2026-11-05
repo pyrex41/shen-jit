@@ -28,7 +28,25 @@
     X(OP_EXCEPTION, "exception", 1)           \
     X(OP_ENTRY, "entry", 2)                   \
     X(OP_JUMP_UNLESS_ENTRY, "jump-unless-entry", 3) \
-    X(OP_INLINE, "inline", 2)
+    X(OP_INLINE, "inline", 2)                 \
+    X(OP_LOOP, "loop", 0)                     \
+    X(OP_REAL_NUMBER, "real-number", 2)       \
+    X(OP_REAL_BOX, "real-box", 2)             \
+    X(OP_REAL_MOVE, "real-move", 2)           \
+    X(OP_REAL_NEG, "real-neg", 2)             \
+    X(OP_REAL_ABS, "real-abs", 2)             \
+    X(OP_REAL_SQRT, "real-sqrt", 2)           \
+    X(OP_REAL_ADD, "real+", 3)                \
+    X(OP_REAL_SUB, "real-", 3)                \
+    X(OP_REAL_MUL, "real*", 3)                \
+    X(OP_REAL_DIV, "real/", 3)                \
+    X(OP_REAL_UNLESS_LT, "real-unless<", 3)   \
+    X(OP_REAL_UNLESS_GT, "real-unless>", 3)   \
+    X(OP_REAL_UNLESS_LE, "real-unless<=", 3)  \
+    X(OP_REAL_UNLESS_GE, "real-unless>=", 3)  \
+    X(OP_REAL_UNLESS_EQ, "real-unless=", 3)   \
+    X(OP_REAL_LOAD, "real-load", 3)           \
+    X(OP_REAL_STORE, "real-store", 3)
 
 enum {
 #define SJ_OP_ENUM(op, name, n) op,
@@ -45,10 +63,13 @@ static inline size_t insn_length(const uint32_t *p)
         SJ_OPCODES(SJ_OP_FIXED)
 #undef SJ_OP_FIXED
     };
-    if (p[0] == OP_CLOSURE || p[0] == OP_PRIM)
+    if (p[0] == OP_CLOSURE || p[0] == OP_PRIM || p[0] == OP_REAL_LOAD || p[0] == OP_REAL_STORE)
         return 4 + p[3];
     return 1 + fixed[p[0]];
 }
+
+/* How many real registers code written by hand has (docs/bytecode.md). */
+#define REAL_REGISTERS 12
 
 /* An operand of prim, jump-if-false or return is a slot, or a constant of
    the code object with this bit set (docs/bytecode.md). */
@@ -135,7 +156,7 @@ enum Prim {
     P_FOREIGN, /* shen-jit.foreign: makes a name a C function */
     P_POINTERP, P_POINTER_KIND, P_POINTER_ADDRESS, P_BYTES_POINTER, P_POINTER_STRING, P_POINTER_BYTES,
     P_ERRNO, P_C_ERRNO, P_POINTER_KILL, P_POINTER_SIZED, P_SET_POINTER,
-    P_POINTER_GUARD, P_POINTER_OWNER, P_POINTERS_DEAD,
+    P_POINTER_GUARD, P_POINTER_OWNER, P_POINTERS_DEAD, P_POINTER_READ_ONLY,
     P_COLLECT, /* shen-jit.collect */
     P_COUNT
 };

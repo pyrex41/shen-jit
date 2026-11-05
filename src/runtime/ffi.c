@@ -488,6 +488,18 @@ static V define_foreign(VM *vm)
 
 static bool is_pointer(V v) { return is_object(v) && obj_type(v) == T_POINTER; }
 
+/* A new pointer to what the first argument points to, as it is, and which keeps it alive. */
+static V copy_pointer(VM *vm)
+{
+    V p = make_pointer(vm, ptr(vm->args[0])[POINTER_ADDRESS], ptr(vm->args[0])[POINTER_KIND]);
+    if (p == V_CLEARED)
+        return p;
+    ptr(p)[0] = ptr(vm->args[0])[0];
+    ptr(p)[POINTER_LENGTH] = ptr(vm->args[0])[POINTER_LENGTH];
+    ptr(p)[POINTER_OWNER] = vm->args[0];
+    return p;
+}
+
 V ffi_primitive(VM *vm, unsigned prim)
 {
     V a = vm->args[0], b = vm->args[1], k = vm->args[2];
@@ -545,20 +557,27 @@ V ffi_primitive(VM *vm, unsigned prim)
             return sj_raise_value(vm, "shen-jit.pointer-sized: ~S is not a live pointer", a);
         if (!is_fix(b) || fixval(b) < 0)
             return sj_raise_value(vm, "shen-jit.pointer-sized: ~S is not a valid length", b);
-        V p = make_pointer(vm, ptr(a)[POINTER_ADDRESS], ptr(a)[POINTER_KIND]);
+        V p = copy_pointer(vm);
         if (p == V_CLEARED)
             return sj_raise(vm, "out of memory");
         ptr(p)[POINTER_LENGTH] = (uint64_t)fixval(b);
-        ptr(p)[POINTER_OWNER] = vm->args[0]; /* it may be guarded, and must outlive this copy */
+        return p;
+    }
+    case P_POINTER_READ_ONLY: {
+        if (!is_pointer(a) || !ptr(a)[POINTER_ADDRESS])
+            return sj_raise_value(vm, "shen-jit.pointer-read-only: ~S is not a live pointer", a);
+        V p = copy_pointer(vm);
+        if (p == V_CLEARED)
+            return sj_raise(vm, "out of memory");
+        ptr(p)[0] = HEADER(T_POINTER, 1);
         return p;
     }
     case P_POINTER_GUARD: { /* a copy with the same length, whose value is taken once it dies */
         if (!is_pointer(a) || !ptr(a)[POINTER_ADDRESS])
             return sj_raise_value(vm, "shen-jit.pointer-guard: ~S is not a live pointer", a);
-        V p = make_pointer(vm, ptr(a)[POINTER_ADDRESS], ptr(a)[POINTER_KIND]);
+        V p = copy_pointer(vm);
         if (p == V_CLEARED)
             return sj_raise(vm, "out of memory");
-        ptr(p)[POINTER_LENGTH] = ptr(vm->args[0])[POINTER_LENGTH];
         ptr(p)[POINTER_OWNER] = vm->args[1];
         return vm_guard(vm, p, vm->args[1]) ? p : sj_raise(vm, "out of memory");
     }
@@ -574,6 +593,8 @@ V ffi_primitive(VM *vm, unsigned prim)
         size_t length;
         if (!memory_of(a, &base, &length))
             return sj_raise_value(vm, "shen-jit.pointer!: ~S is not a byte buffer", a);
+        if (is_read_only(a))
+            return sj_raise_value(vm, "shen-jit.pointer!: ~S is read only", a);
         if (!is_fix(b) || fixval(b) < 0 || (uint64_t)fixval(b) + sizeof(W) > length)
             return sj_raise_value(vm, "shen-jit.pointer!: ~S is not a valid offset", b);
         if (k != V_NIL && (!is_pointer(k) || !ptr(k)[POINTER_ADDRESS]))

@@ -303,6 +303,9 @@ static inline bool memory_of(V v, char **base, size_t *length)
     return false;
 }
 
+/* Whether stores to v are refused: a pointer marked so, by the size in its header. */
+static inline bool is_read_only(V v) { return obj_type(v) == T_POINTER && hdr_size(ptr(v)[0]); }
+
 static inline double real_value(V r)
 {
     double d;

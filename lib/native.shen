@@ -18,6 +18,19 @@
 \\ is a constant, so [1 2] is a list. (const E) is the value of E, at definition.
 \\ See docs/bytecode.md, "Native code written by hand".
 \\
+\\ Real registers hold doubles, unboxed, in code that calls nothing and catches nothing:
+\\
+\\ (define-native dot (A B I End Start)
+\\   (real Acc Start)
+\\   (loop)
+\\   (prim T >= I End)
+\\   (jump-if-false T more)
+\\   (return-real Acc)
+\\   (label more)
+\\   (real Acc (+ Acc (* (f64 A I) (f64 B I))))
+\\   (prim I + I 8)
+\\   (tail-call dot A B I End Start))
+\\
 \\ Code a program generates is data, lists and not forms: (shen-jit.assemble Name
 \\ Params Body) gives the code object for instructions in the same shape, and
 \\ (shen-jit.install-code Form) checks and installs one. shen-jit.install, which
@@ -64,6 +77,7 @@
                                     "label defined twice" Labels)
            (map (/. I (shen-jit.check.instruction Ctx Labels I)) Instructions)
            (shen-jit.check.handlers Where none Instructions Handlers)
+           (shen-jit.check.reals Where Instructions)
            (shen-jit.check.flow Where Arity Instructions (+ 1 (shen-jit.check.max Labels -1)))
            (shen-jit.check.nested Where Instructions Codes)))
   Where X _ _ -> (shen-jit.check.fail Where "malformed code object" X))
@@ -129,7 +143,66 @@
   _ _ [pop-handler] -> true
   _ _ [inline F N] -> (and (symbol? F) (integer? N) (> N 0))
   Ctx _ [exception D] -> (shen-jit.check.write? Ctx D)
+  _ _ [loop] -> true
+  Ctx _ [real-number F O] -> (and (shen-jit.check.real? F) (shen-jit.check.operand? Ctx O))
+  Ctx _ [real-box D F] -> (and (shen-jit.check.write? Ctx D) (shen-jit.check.real? F))
+  Ctx _ [real-load F M I] -> (and (shen-jit.check.real? F) (shen-jit.check.operands? Ctx [M I]))
+  Ctx _ [real-store M I F] -> (and (shen-jit.check.real? F) (shen-jit.check.operands? Ctx [M I]))
+  _ _ [Op D A] -> (and (shen-jit.check.real? D) (shen-jit.check.real? A))
+      where (element? Op (shen-jit.check.real-unary))
+  _ _ [Op D A B] -> (and (shen-jit.check.real? D) (shen-jit.check.real? A) (shen-jit.check.real? B))
+      where (element? Op (shen-jit.check.real-binary))
+  _ Labels [Op A B L] -> (and (shen-jit.check.real? A) (shen-jit.check.real? B) (element? L Labels))
+      where (element? Op (shen-jit.check.real-tests))
   _ _ _ -> false)
+
+\\ As REAL_REGISTERS in ops.h.
+(define shen-jit.check.real?
+  F -> (shen-jit.check.below? F 12))
+
+(define shen-jit.check.real-unary
+  -> [real-move real-neg real-abs real-sqrt])
+
+(define shen-jit.check.real-binary
+  -> [real+ real- real* real/])
+
+(define shen-jit.check.real-tests
+  -> [real-unless< real-unless> real-unless<= real-unless>= real-unless=])
+
+(define shen-jit.check.real-op?
+  [Op | _] -> (or (element? Op [loop real-number real-box real-load real-store])
+                  (element? Op (shen-jit.check.real-unary))
+                  (element? Op (shen-jit.check.real-binary))
+                  (element? Op (shen-jit.check.real-tests))))
+
+\\ Real registers live only in code that calls nothing and catches nothing: nothing
+\\ saves them across a call, and a handler would find them as a raise left them. A
+\\ self tail call comes back to loop, which only straight-line code may come before.
+(define shen-jit.check.reals
+  Where Is -> (if (shen-jit.check.any-real? Is)
+                  (do (map (/. I (shen-jit.check.assert
+                                   (not (element? (hd I) [call call-sealed call-value push-handler pop-handler
+                                                          exception entry jump-unless-entry]))
+                                   Where "real registers with a call or a handler" I))
+                           Is)
+                      (shen-jit.check.before-loop Where Is))
+                  skip))
+
+(define shen-jit.check.any-real?
+  [] -> false
+  [I | Is] -> (or (shen-jit.check.real-op? I) (shen-jit.check.any-real? Is)))
+
+\\ Is, up to a loop if there is one, is straight-line code; there is one loop at most.
+(define shen-jit.check.before-loop
+  Where [] -> skip
+  Where [[loop] | Is] -> (shen-jit.check.assert (not (element? [loop] Is)) Where "two loops" [loop])
+  Where [[Op | X] | Is]
+  -> (do (if (element? [loop] Is)
+             (shen-jit.check.assert (not (or (element? Op [label jump jump-if-false return])
+                                             (element? Op (shen-jit.check.real-tests))))
+                                    Where "control flow before loop" [Op | X])
+             skip)
+         (shen-jit.check.before-loop Where Is)))
 
 (define shen-jit.check.below?
   I N -> (and (integer? I) (>= I 0) (< I N)))
@@ -201,8 +274,24 @@
 (define shen-jit.check.flow
   Where Arity Instructions NLabels
   -> (let Pending (shen-jit.check.fill (absvector NLabels) 0 NLabels none)
-          Final (shen-jit.check.flow-h Where Instructions (shen-jit.check.entry-state Arity) Pending [])
+          Final (shen-jit.check.flow-h Where (shen-jit.check.mark-loop Arity Instructions)
+                                       (shen-jit.check.entry-state Arity) Pending [])
        (shen-jit.check.assert (= Final dead) Where "code falls off the end" Final)))
+
+\\ A slot other than a parameter that code after loop writes counts as unset there: what
+\\ reads it must have written it the same time round, as the JIT does not store what it
+\\ finds dead going forward. A parameter's next value is the tail call's argument.
+(define shen-jit.check.mark-loop
+  _ [] -> []
+  Arity [[loop] | Is] -> [[loop (shen-jit.check.locals-written Arity Is)] | Is]
+  Arity [I | Is] -> [I | (shen-jit.check.mark-loop Arity Is)])
+
+(define shen-jit.check.locals-written
+  Arity Is -> (mapcan (/. I (if (and (element? (hd I) [move const capture closure prim real-box exception])
+                                     (> (hd (tl I)) (+ Arity 1)))
+                                [(hd (tl I))]
+                                []))
+                      Is))
 
 (define shen-jit.check.fill
   V I N X -> V where (= I N)
@@ -286,6 +375,13 @@
   [tail-call-sealed A _ N] -> (shen-jit.check.range (+ A 2) (+ A (+ 1 N)))
   [tail-call-value A N] -> (shen-jit.check.range (+ A 1) (+ A (+ 1 N)))
   [return S] -> (shen-jit.check.slots [S])
+  [real-number _ O] -> (shen-jit.check.slots [O])
+  [real-box _ F] -> [[real F]]
+  [real-load _ M I] -> (shen-jit.check.slots [M I])
+  [real-store M I F] -> [[real F] | (shen-jit.check.slots [M I])]
+  [Op _ A] -> [[real A]] where (element? Op (shen-jit.check.real-unary))
+  [Op _ A B] -> [[real A] [real B]] where (element? Op (shen-jit.check.real-binary))
+  [Op A B _] -> [[real A] [real B]] where (element? Op (shen-jit.check.real-tests))
   _ -> [])
 
 (define shen-jit.check.slots
@@ -317,6 +413,14 @@
   Where [jump-if-false _ L] State Pending -> (do (shen-jit.check.propagate Where L State Pending) State)
   Where [jump-unless-entry _ _ L] State Pending
   -> (do (shen-jit.check.propagate Where L State Pending) State)
+  _ [loop Forget] [Defined | Handlers] _ -> [(shen-jit.check.without Forget Defined) | Handlers]
+  _ [real-number F _] [Defined | Handlers] _ -> [(adjoin [real F] Defined) | Handlers]
+  _ [real-load F _ _] [Defined | Handlers] _ -> [(adjoin [real F] Defined) | Handlers]
+  _ [real-store | _] State _ -> State
+  _ [Op F | X] [Defined | Handlers] _ -> [(adjoin [real F] Defined) | Handlers]
+      where (or (element? Op (shen-jit.check.real-unary)) (element? Op (shen-jit.check.real-binary)))
+  Where [Op _ _ L] State Pending -> (do (shen-jit.check.propagate Where L State Pending) State)
+      where (element? Op (shen-jit.check.real-tests))
   Where [entry N L] State Pending
   -> (do (shen-jit.check.propagate Where L (shen-jit.check.entry-state N) Pending) State)
   Where [return S] [_ | Handlers] _ -> (shen-jit.check.leave Where [return S] Handlers)
@@ -332,8 +436,11 @@
   -> (do (shen-jit.check.forget D Handlers Pending)
          [(shen-jit.check.set D (shen-jit.check.clobber Defined (shen-jit.check.window-base [Op D | X])))
           | Handlers])
-      where (element? Op [move const capture closure prim call call-sealed call-value exception])
+      where (element? Op [move const capture closure prim call call-sealed call-value exception real-box])
   Where I State _ -> (do (shen-jit.check.fail Where "unknown instruction" I) State))
+
+(define shen-jit.check.without
+  Xs Ys -> (mapcan (/. Y (if (element? Y Xs) [] [Y])) Ys))
 
 \\ A handler reads no slot written since its push: the JIT does not store a test's
 \\ result that the code after the test never reads.
@@ -387,17 +494,20 @@
        (trap-error
          (shen-jit.install-code [defun Name Code])
          (/. E (simple-error (make-string "~A~%slots: ~R" (error-to-string E)
-                                          (shen-jit.lower.bind (shen-jit.native.slots Params [] Body) 2)))))))
+                                          (shen-jit.lower.bind (shen-jit.native.slots Params [] (shen-jit.real.expand Body)) 2)))))))
 
 (define shen-jit.assemble
   Name Params Body -> (shen-jit.native.code Name Params [] Body))
 
 (define shen-jit.native.code
-  Name Params Captures Body
-  -> (let B (shen-jit.lower.builder Name (length Params) [])
+  Name Params Captures Written
+  -> (let Body (shen-jit.real.expand Written)
+          B (shen-jit.lower.builder Name (length Params) [])
           Named (shen-jit.native.slots Params Captures Body)
+          Reals (shen-jit.real.registers Name Named Body)
           Window (+ 2 (length Named))
-          C [B (shen-jit.lower.bind Named 2) (shen-jit.native.labels Body) Window]
+          C [B (append (shen-jit.lower.bind Named 2) (shen-jit.lower.bind Reals 0))
+               (shen-jit.native.labels Body) Window]
        (do (if (shen-jit.check.distinct? (append Params Captures))
                skip
                (simple-error (make-string "native code, ~A: a name given twice: ~R" Name [Params Captures])))
@@ -426,6 +536,10 @@
   [return O] -> [O]
   [closure D _ Captures | _] -> [D | Captures]
   [exception D] -> [D]
+  [real-number _ O] -> [O]
+  [real-box D _] -> [D]
+  [real-load _ M I] -> [M I]
+  [real-store M I _] -> [M I]
   _ -> [])
 
 (define shen-jit.native.labels
@@ -485,7 +599,133 @@
   C [push-handler L] -> (shen-jit.native.emit C [push-handler (shen-jit.native.label C L)])
   C [pop-handler] -> (shen-jit.native.emit C [pop-handler])
   C [exception D] -> (shen-jit.native.emit C [exception (shen-jit.native.slot C D)])
+  C [loop] -> (shen-jit.native.emit C [loop])
+  C [real-number F O] -> (shen-jit.native.emit C [real-number (shen-jit.native.slot C F) (shen-jit.native.operand C O)])
+  C [real-box D F] -> (shen-jit.native.emit C [real-box (shen-jit.native.slot C D) (shen-jit.native.slot C F)])
+  C [real-load F M I] -> (shen-jit.native.emit C [real-load (shen-jit.native.slot C F) (shen-jit.native.operand C M)
+                                                            (shen-jit.native.operand C I)])
+  C [real-store M I F] -> (shen-jit.native.emit C [real-store (shen-jit.native.operand C M) (shen-jit.native.operand C I)
+                                                              (shen-jit.native.slot C F)])
+  C [Op D A] -> (shen-jit.native.emit C [Op (shen-jit.native.slot C D) (shen-jit.native.slot C A)])
+      where (element? Op (shen-jit.check.real-unary))
+  C [Op D A B] -> (shen-jit.native.emit C [Op (shen-jit.native.slot C D) (shen-jit.native.slot C A) (shen-jit.native.slot C B)])
+      where (element? Op (shen-jit.check.real-binary))
+  C [Op A B L] -> (shen-jit.native.emit C [Op (shen-jit.native.slot C A) (shen-jit.native.slot C B) (shen-jit.native.label C L)])
+      where (element? Op (shen-jit.check.real-tests))
   _ I -> (simple-error (make-string "native code: unknown instruction: ~R" I)))
+
+\\ ---------------------------------------------------------------------------
+\\ Real expressions, as flat instructions. A variable given a value by real is a register,
+\\ in a namespace of its own; any other variable in an expression is a slot, whose number
+\\ is read with a check. Intermediate values take registers of their own, named by depth.
+
+(define shen-jit.real.expand
+  Body -> (let Reals (shen-jit.native.add-names (mapcan (/. I (shen-jit.real.named I)) Body) [])
+            (mapcan (/. I (shen-jit.real.statement Reals I)) Body)))
+
+(define shen-jit.real.named
+  [real X _] -> [X]
+  _ -> [])
+
+(define shen-jit.real.statement
+  Rs [real X E] -> (shen-jit.real.into Rs 0 X E)
+  Rs [f64! M I E] -> (let Value (shen-jit.real.operand Rs 0 E)
+                          Index (shen-jit.real.index 0 I)
+                       (append (tl Value) (tl Index) [[real-store M (hd Index) (hd Value)]]))
+  Rs [real-box D E] -> (let Value (shen-jit.real.operand Rs 0 E)
+                         (append (tl Value) [[real-box D (hd Value)]]))
+  Rs [return-real E] -> (append (shen-jit.real.statement Rs [real-box (intern "Real.Result") E])
+                                [[return (intern "Real.Result")]])
+  Rs [jump-unless [Op A B] L]
+  -> (let First (shen-jit.real.operand Rs 0 A)
+          Second (shen-jit.real.operand Rs (shen-jit.real.after Rs 0 A) B)
+       (append (tl First) (tl Second) [[(shen-jit.real.test Op) (hd First) (hd Second) L]]))
+  _ I -> [I])
+
+(define shen-jit.real.test
+  < -> real-unless<
+  > -> real-unless>
+  <= -> real-unless<=
+  >= -> real-unless>=
+  = -> real-unless=
+  Op -> (simple-error (make-string "native code: not a comparison of reals: ~R" Op)))
+
+\\ The temporary after the one operand E takes, if it takes one.
+(define shen-jit.real.after
+  Rs N E -> (if (element? E Rs) N (+ N 1)))
+
+(define shen-jit.real.temporary
+  N -> (intern (cn "Real." (str N))))
+
+\\ [the register that holds E | the instructions that put it there]. E's own first operand
+\\ can share its temporary, as that is written last.
+(define shen-jit.real.operand
+  Rs N E -> [E] where (element? E Rs)
+  Rs N E -> (let T (shen-jit.real.temporary N)
+              [T | (shen-jit.real.into Rs N T E)]))
+
+\\ What puts E in register D. D is written last, so E may read it.
+(define shen-jit.real.into
+  Rs _ D E -> [[real-move D E]] where (element? E Rs)
+  _ _ D [const K] -> [[real-number D [const K]]]
+  _ _ D [f64 M I] -> (let Index (shen-jit.real.index 0 I)
+                       (append (tl Index) [[real-load D M (hd Index)]]))
+  Rs N D [neg A] -> (shen-jit.real.unary Rs N D real-neg A)
+  Rs N D [abs A] -> (shen-jit.real.unary Rs N D real-abs A)
+  Rs N D [sqrt A] -> (shen-jit.real.unary Rs N D real-sqrt A)
+  Rs N D [+ A B] -> (shen-jit.real.binary Rs N D real+ A B)
+  Rs N D [- A B] -> (shen-jit.real.binary Rs N D real- A B)
+  Rs N D [* A B] -> (shen-jit.real.binary Rs N D real* A B)
+  Rs N D [/ A B] -> (shen-jit.real.binary Rs N D real/ A B)
+  Rs N D [Op A B C | More] -> (shen-jit.real.into Rs N D [Op A [Op B C | More]]) where (element? Op [+ *])
+  _ _ _ [Op | X] -> (simple-error (make-string "native code: not a real expression: ~R" [Op | X]))
+  _ _ D O -> [[real-number D O]])
+
+(define shen-jit.real.unary
+  Rs N D Op A -> (let Value (shen-jit.real.operand Rs N A)
+                   (append (tl Value) [[Op D (hd Value)]])))
+
+(define shen-jit.real.binary
+  Rs N D Op A B -> (let First (shen-jit.real.operand Rs N A)
+                        Second (shen-jit.real.operand Rs (shen-jit.real.after Rs N A) B)
+                     (append (tl First) (tl Second) [[Op D (hd First) (hd Second)]])))
+
+\\ An index is an operand, or integer arithmetic through prim: [what holds it | instructions].
+\\ Its slots are read at once, so that each statement can use them again.
+(define shen-jit.real.index
+  _ [const K] -> [[const K]]
+  N [Op | Args] -> (let T (intern (cn "Real.Index." (str N)))
+                        Values (shen-jit.real.indices (+ N 1) Args)
+                     [T | (append (tl Values) [[prim T Op | (hd Values)]])])
+  _ I -> [I])
+
+(define shen-jit.real.indices
+  _ [] -> [[]]
+  N [A | As] -> (let Value (shen-jit.real.index N A)
+                     Rest (shen-jit.real.indices (+ N 1) As)
+                  [[(hd Value) | (hd Rest)] | (append (tl Value) (tl Rest))]))
+
+\\ The registers that flat instructions name, which are not slots, and fit.
+(define shen-jit.real.registers
+  Name Slots Body
+  -> (let Reals (shen-jit.native.add-names (mapcan (/. I (shen-jit.real.reads I)) Body) [])
+       (do (map (/. X (if (element? X Slots)
+                          (simple-error (make-string "native code, ~A: ~R is a real register, and is used as a slot" Name X))
+                          skip))
+                Reals)
+           (if (> (length Reals) 12)
+               (simple-error (make-string "native code, ~A: more than 12 real registers: ~R" Name Reals))
+               Reals))))
+
+(define shen-jit.real.reads
+  [real-number F _] -> [F]
+  [real-box _ F] -> [F]
+  [real-load F _ _] -> [F]
+  [real-store _ _ F] -> [F]
+  [Op D A] -> [D A] where (element? Op (shen-jit.check.real-unary))
+  [Op D A B] -> [D A B] where (element? Op (shen-jit.check.real-binary))
+  [Op A B _] -> [A B] where (element? Op (shen-jit.check.real-tests))
+  _ -> [])
 
 \\ Puts operands in the call window's argument slots, from T.
 (define shen-jit.native.arguments

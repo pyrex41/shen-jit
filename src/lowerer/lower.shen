@@ -245,7 +245,8 @@
                             shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
                             shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.thread
                             shen-jit.pointer? shen-jit.pointer-kind shen-jit.pointer-address
-                            shen-jit.pointer->string shen-jit.pointer-kill shen-jit.pointer-owner])
+                            shen-jit.pointer->string shen-jit.pointer-kill shen-jit.pointer-owner
+                            shen-jit.pointer-read-only])
   F -> 2 where (element? F [+ - * / < > <= >= = cons cn pos <-address set open write-byte
                             write-string shen-jit.hash shen-jit.filled-vector
                             shen-jit.save-executable shen-jit.foreign

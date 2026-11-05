@@ -56,7 +56,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -347,6 +347,14 @@ INDEPENDENT_ROUNDS ?= 7
 bench-independent: all
 	python3 tests/bench/independent.py --rounds $(INDEPENDENT_ROUNDS) --kernel $(KERNEL_DIR) \
 	  $(if $(STLIB_DIR),--stlib $(STLIB_DIR)) --scheme $(SHEN_SCHEME) $(SHEN_JIT)
+
+# Numeric programs in C, in Shen with boxed reals, and in Shen with real registers.
+NUMERIC_RESULT := grep -a '^[a-z]* [0-9.e-]* s check'
+bench-numeric: $(BUILD)/shen-jit
+	$(CC) -O2 -ffp-contract=off -o $(BUILD)/numeric-c tests/bench/numeric.c -lm
+	$(BUILD)/numeric-c
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l tests/bench/numeric.shen | $(NUMERIC_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/native.shen -l lib/memory.shen -l tests/bench/numeric-raw.shen | $(NUMERIC_RESULT)
 
 measure: $(BUILD)/test_jit $(BUILD)/bench/programs.sbc
 	cd $(BUILD) && ./test_jit bench/programs.sbc --measure

@@ -63,6 +63,8 @@
 (mmap-test.raises "over its end" "bytes: 9" (freeze (shen-jit.u32 (value m) 9)))
 (mmap-test.check "copied out" "ell"
                  (freeze (shen-jit.bytes->string (shen-jit.copy-bytes (shen-jit.bytes 3) 0 (value m) 1 3) 0 3)))
+(mmap-test.raises "a store raises" (make-string "bytes: ~S is read only" (value m)) (freeze (shen-jit.u8! (value m) 0 1)))
+(mmap-test.check "and changes nothing" 104 (freeze (shen-jit.u8 (value m) 0)))
 (mmap-test.check "close" true (freeze (mmap.close (value m))))
 (mmap-test.raises "used after it" "bytes: 0" (freeze (shen-jit.u8 (value m) 0)))
 (mmap-test.check "and has no length" 0 (freeze (shen-jit.bytes-length (value m))))
@@ -138,6 +140,7 @@
 
 (set handle (mmap-test.handle (value path)))
 (mmap-test.check "a handle reads the file" 72 (freeze (shen-jit.u8 (value handle) 0)))
+(mmap-test.raises "and stays read only" "bytes: " (freeze (shen-jit.u8! (value handle) 0 1)))
 (mmap-test.check "closing it" true (freeze (handle.close (value handle))))
 (mmap-test.check "unmaps it" 1 (freeze (value unmapped)))
 

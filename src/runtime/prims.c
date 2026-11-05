@@ -121,6 +121,7 @@ const Primitive primitive_table[] = {
     {"shen-jit.pointer-guard", 2, NULL},
     {"shen-jit.pointer-owner", 1, NULL},
     {"shen-jit.pointers-dead", 0, NULL},
+    {"shen-jit.pointer-read-only", 1, NULL},
     {"shen-jit.collect", 0, NULL},
 };
 
@@ -312,7 +313,8 @@ bool sj_equal(V a, V b)
             return true;
         }
         if (is_type(a, T_POINTER) && is_type(b, T_POINTER))
-            return ptr(a)[POINTER_KIND] == ptr(b)[POINTER_KIND] && ptr(a)[POINTER_ADDRESS] == ptr(b)[POINTER_ADDRESS];
+            return ptr(a)[0] == ptr(b)[0] && ptr(a)[POINTER_KIND] == ptr(b)[POINTER_KIND] &&
+                   ptr(a)[POINTER_ADDRESS] == ptr(b)[POINTER_ADDRESS];
         return false;
     }
 }
@@ -1202,6 +1204,8 @@ static V bytes_access(VM *vm, unsigned prim)
         memcpy(&n, base + fixval(i), width);
         return fix((int64_t)n);
     }
+    if (is_read_only(b))
+        return sj_raise_value(vm, "bytes: ~S is read only", b);
     if (!is_fix(x) || fixval(x) < 0 || (uint64_t)fixval(x) >> (8 * width))
         return sj_raise_value(vm, "bytes: ~S does not fit", x);
     n = (uint64_t)fixval(x);
@@ -1221,6 +1225,8 @@ static V wide_access(VM *vm, unsigned prim)
     if (!is_fix(i) || fixval(i) < 0 || (uint64_t)fixval(i) + width > length)
         return sj_raise_value(vm, "bytes: ~S is not a valid index", i);
     char *at = base + fixval(i);
+    if (prim >= P_SET_S32 && is_read_only(b))
+        return sj_raise_value(vm, "bytes: ~S is read only", b);
     switch (prim) {
     case P_S32: {
         int32_t n;
@@ -1343,6 +1349,8 @@ static V bytes_primitive(VM *vm, unsigned prim)
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", a);
         if (!memory_of(c, &from, &from_length))
             return sj_raise_value(vm, "bytes: ~S is not a byte buffer", c);
+        if (is_read_only(a))
+            return sj_raise_value(vm, "bytes: ~S is read only", a);
         if (!bytes_range(length, b, n) || !bytes_range(from_length, d, n))
             return sj_raise_value(vm, "shen-jit.copy-bytes: ~S is not a valid count", n);
         memmove(base + fixval(b), from + fixval(d), (size_t)fixval(n));
@@ -1616,6 +1624,7 @@ V sj_primitive(VM *vm, size_t index)
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
     case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:
+    case P_POINTER_READ_ONLY:
         return ffi_primitive(vm, (unsigned)index);
     case P_COLLECT:
         vm_collect(vm, 0);

@@ -392,7 +392,8 @@ Windows in `GetLastError`, where `(shen-jit.c-errno)` is the C library's.
 
 #### Pointers
 
-A pointer has a kind, a symbol, for reading and for messages. `=` compares kind and address, and one prints as
+A pointer has a kind, a symbol, for reading and for messages. `=` compares kind, address and whether it is read only,
+and one prints as
 `#<pointer sqlite3 0x...>`. One saved in an image is dead there, and raises when given to C.
 
 | Function | What it does |
@@ -404,6 +405,7 @@ A pointer has a kind, a symbol, for reading and for messages. `=` compares kind 
 | `(shen-jit.pointer->bytes P I N)` | Copies N bytes from offset I. It cannot check them |
 | `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C or read |
 | `(shen-jit.pointer-sized P N)` | A new pointer to the same address, whose N bytes can be read and written, and which keeps P alive: see [Memory outside the heap](#memory-outside-the-heap) |
+| `(shen-jit.pointer-read-only P)` | A new pointer to the same memory, which raises when stored to, as any copy of it does |
 | `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
 
 In typed code, a declaration whose types are all plain Shen types, and whose result cannot be NULL, can be called at
@@ -451,8 +453,8 @@ shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l program.shen
   crash. Kill a pointer once its memory is gone, so that using it raises.
 - **Each sized pointer stands alone.** Killing one kills no other, nor the pointer it came from.
 - **A saved image holds it dead,** and the memory itself is not saved: a byte buffer is what lasts in an image.
-- **The same code works on both.** `u8`, `u16`, `u32`, `s32` and `f64` compile inline for a buffer and for a pointer.
-  `s64` and `f32` call C for both.
+- **The same code works on both.** `u8`, `u16`, `u32`, `s32` and `f64`, and the stores `u8!`, `u16!`, `u32!` and `f64!`,
+  compile inline for a buffer and for a pointer. The others call C for both.
 
 #### Files as memory
 
@@ -475,8 +477,8 @@ shen-jit eval -l lib/ffi.shen -l lib/mmap.shen -l program.shen
 | `(mmap.create Path N)` | A new file of N zero bytes, replacing any there, as `mmap.read-write` |
 | `(mmap.close M)` | Unmaps it and kills M |
 
-An empty file cannot be mapped, and raises. Two things the length cannot check end the process: a store into the memory
-of `mmap.read`, and an access past the end of a file that something has since made shorter.
+An empty file cannot be mapped, and raises, and so does a store into what `mmap.read` gives. One thing no check can catch
+ends the process: an access past the end of a file that something has since made shorter.
 
 #### Memory that releases itself
 
@@ -653,9 +655,28 @@ shen-jit eval -l lib/native.shen -l sum.shen
 
 A variable is a slot, a symbol is itself, and `[1 2]` is a list. The code is checked first, by the rules the lowerer's
 own output is held to, so wrong code is refused instead of crashing. A program generating code at run time passes
-lists to `shen-jit.assemble` and `shen-jit.install-code`. Values stay tagged, as in all Shen code: untagged data is not
-there yet, and [bytes and bits](#bytes-and-bits) and [memory outside the heap](#memory-outside-the-heap) are primitives
-here as anywhere.
+lists to `shen-jit.assemble` and `shen-jit.install-code`. Slots hold tagged values, as in all Shen code, and
+[bytes and bits](#bytes-and-bits) and [memory outside the heap](#memory-outside-the-heap) are primitives here as anywhere.
+
+For numeric work, `real` keeps doubles unboxed in registers, in code that calls nothing. It reads an expression, and a
+`loop` instruction lets a self tail call skip what should run once:
+
+```shen
+(define-native dot (A B I End Start)
+  (real Acc Start)
+  (loop)
+  (prim T >= I End)
+  (jump-if-false T more)
+  (return-real Acc)
+  (label more)
+  (real Acc (+ Acc (* (f64 A I) (f64 B I))))
+  (prim I + I 8)
+  (tail-call dot A B I End Start))
+```
+
+Every read and store is still checked against its memory's length, and nothing in these loops allocates until
+`return-real` boxes the result.
+
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Native code written by hand", has
 the instructions.
 
@@ -779,6 +800,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-linux` | Every suite on Linux arm64 and x86-64, in Docker, from a source tarball. Needs pandoc, as `make dist` does |
 | `make deps` | Fetches the kernel and the earlier release of Shen/JIT that makes the generated files |
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
+| `make bench-numeric` | Numeric programs in C, in Shen with boxed reals, and in Shen with real registers |
 | `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library), to check that gains are not fitted to the benchmarks |
 | `make guide` | Renders this guide and its documents' pages to `build/guide/`, with [pandoc](https://pandoc.org) |
 | `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |
