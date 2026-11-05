@@ -147,7 +147,8 @@ plus:
   no instruction is new. `shen-jit.pointer?`, `shen-jit.pointer-kind`, `shen-jit.pointer-address`,
   `shen-jit.pointer->string`, `shen-jit.pointer-kill` (arity 1), `shen-jit.bytes->pointer`, `shen-jit.pointer->bytes` (arity 3)
   handle the pointers such functions pass around, and `shen-jit.errno`, `shen-jit.c-errno` (arity 0) what
-  the last one left. [ffi.md](ffi.md) has their use.
+  the last one left. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
+  tell Shen when a pointer has died, and `shen-jit.collect` (arity 0) collects. [ffi.md](ffi.md) has their use.
 - `shen-jit.vector?`: arity 1, the kernel's `vector?` without its
   `trap-error`: true for an absvector with at least one element whose element
   0 is a number at least 0. The port's `vector?` and `shen.+vector?` use it.
@@ -199,8 +200,9 @@ does not scan. It lives in the heap like a string, so:
 
 A pointer with a length is memory outside the heap ([ffi.md](ffi.md)), and all of these except
 `bytes?` and `string->bytes` take one in place of a buffer, with the same checks against its
-length. `u8`, `u16`, `u32`, `s32`, `bytes-length` and the stores `u8!`, `u16!` and `u32!` compile inline
-for both; the others call C for both.
+length. `u8`, `u16`, `u32`, `s32`, `f64`, `bytes-length` and the stores `u8!`, `u16!` and `u32!` compile
+inline for both; the others call C for both. `f64` allocates where it reads, and its real holds the word as it
+is in memory, so it takes no floating point.
 
 | Form | Result |
 | --- | --- |

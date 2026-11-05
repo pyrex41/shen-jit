@@ -800,7 +800,7 @@ static uint32_t inline_chain(Emit *e)
 static Slow *slow_path(Emit *e, SlowKind kind, struct sljit_jump *from)
 {
     Slow *s = &e->slow[e->nslow++];
-    *s = (Slow){kind, {from}, NULL, NULL, 0, UINT32_MAX, NONE, NONE, NULL, inline_chain(e), NULL};
+    *s = (Slow){kind, {from}, NULL, NULL, 0, UINT32_MAX, NONE, NONE, NULL, inline_chain(e), NULL, NULL};
     return s;
 }
 
@@ -1878,7 +1878,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         }
         break;
     case P_BYTES_LENGTH:
-    case P_U8: case P_U16: case P_U32: case P_S32:
+    case P_U8: case P_U16: case P_U32: case P_S32: case P_F64:
     case P_SET_U8: case P_SET_U16: case P_SET_U32: {
         /* A byte buffer and a fixnum index with room for the width: anything
            else leaves this path. A pointer with a length comes back to it from
@@ -1900,14 +1900,25 @@ static void emit_prim(Emit *e, const uint32_t *p)
             break;
         }
         static const sljit_s32 mov[] = {SLJIT_MOV_U8, SLJIT_MOV_U16, SLJIT_MOV_U32};
-        unsigned size = prim == P_S32 ? 2 : (prim - P_U8) % 3;
+        unsigned size = prim == P_F64 ? 3 : prim == P_S32 ? 2 : (prim - P_U8) % 3;
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R1, IMM(3));
         slow->from[2] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
         sljit_emit_op2(c, SLJIT_LSHR, R1, R1, IMM(2)); /* a negative index becomes huge */
         sljit_emit_op2(c, SLJIT_ADD, R3, R1, IMM(((sljit_sw)1 << size) - 1));
         slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R3, R2);
-        if (prim <= P_U32 || prim == P_S32) {
+        if (prim == P_F64) {
+            /* A real holds the word as it is in memory, so this takes no floating point. With
+               no room for one, the slow path reads it again and collects. */
+            sljit_emit_op2(c, SLJIT_ADD, R3, HP, IMM(REAL_WORDS * sizeof(V)));
+            slow->from[4] = sljit_emit_cmp(c, SLJIT_GREATER, R3, VMF(hlimit));
+            sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0);
+            sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_S3), 0, IMM(HEADER(T_REAL, 0)));
+            sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_S3), REAL_VALUE * sizeof(V), R1);
+            sljit_emit_op2(c, SLJIT_ADD, R0, HP, IMM(TAG_OBJECT));
+            sljit_emit_op1(c, SLJIT_MOV, HP, R3);
+            store_result(e, dst);
+        } else if (prim <= P_U32 || prim == P_S32) {
             sljit_emit_op1(c, prim == P_S32 ? SLJIT_MOV_S32 : mov[size], R0, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 0);
             sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(2));
             store_result(e, dst);

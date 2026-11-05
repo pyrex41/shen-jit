@@ -90,6 +90,7 @@ static void clear_raw(VM *vm, uint64_t *o)
         o[FOREIGN_ADDRESS] = 0;
         break;
     case T_POINTER:
+        o[POINTER_OWNER] = V_NIL;
         o[POINTER_ADDRESS] = 0;
         o[POINTER_LENGTH] = 0;
         break;

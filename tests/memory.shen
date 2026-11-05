@@ -104,6 +104,24 @@
 (shen-jit.s32! (value b) 0 -4)
 (memory-test.check "compiled, s32 on a buffer" -4 (freeze (memory-test.read-s32 (value b) 0)))
 
+\\ f64 allocates where it reads: on each, with room and without, for which GC stress leaves little.
+(define memory-test.sum-f64
+  M I N Acc -> Acc where (>= I N)
+  M I N Acc -> (memory-test.sum-f64 M (+ I 8) N (+ Acc (shen-jit.f64 M I))))
+
+(define memory-test.sum-f64-times
+  0 _ _ Acc -> Acc
+  R M N Acc -> (memory-test.sum-f64-times (- R 1) M N (memory-test.sum-f64 M 0 N Acc)))
+
+(set reals (memory.alloc 16))
+(shen-jit.f64! (value reals) 0 1.5)
+(shen-jit.f64! (value reals) 8 2.5)
+(set breals (shen-jit.bytes 16))
+(shen-jit.f64! (value breals) 0 0.5)
+(shen-jit.f64! (value breals) 8 1.5)
+(memory-test.check "f64 across collections, on a pointer" 40000 (freeze (memory-test.sum-f64-times 10000 (value reals) 16 0)))
+(memory-test.check "f64 across collections, on a buffer" 20000 (freeze (memory-test.sum-f64-times 10000 (value breals) 16 0)))
+
 \\ Native code written by hand reads it as it reads a buffer.
 (define-native memory-test.sum-u32 (M I N Acc)
   (prim Done >= I N)
@@ -254,5 +272,6 @@
 (memory.free (value shared))
 (memory.free (value fields))
 (memory.free (value kept))
+(memory.free (value reals))
 
 (output "~A passed, ~A failed~%" (value memory-test.*passed*) (value memory-test.*failed*))

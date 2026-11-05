@@ -11,7 +11,8 @@
 \\   (memory.free M)     frees M and kills it, so that using it again raises. A copy of M from
 \\                       shen-jit.pointer-sized is not killed with it, and must not be used.
 \\
-\\ For memory from C, see shen-jit.pointer-sized in docs/ffi.md.
+\\ For memory from C, see shen-jit.pointer-sized in docs/ffi.md. For memory released once nothing
+\\ reaches it, see lib/handle.shen.
 
 (shen-jit.library memory.lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
 

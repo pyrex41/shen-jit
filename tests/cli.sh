@@ -743,6 +743,18 @@ EOF
         -e '(output "~A ~A~%" (shen-jit.bytes-length (value mem.kept)) (trap-error (shen-jit.u8 (value mem.kept) 0) (/. E (error-to-string E))))' \
         > "$dir/mem2.out" 2>&1 < /dev/null
     check memory-dead-in-image "$dir/mem2.out" "0 bytes: 0 is not a valid index"
+    # A handle is dead there too, with nothing left to release it.
+    cat > "$dir/handle.shen" <<'EOF'
+(set handle.kept (handle.wrap (memory.alloc 8) (/. M (memory.free M))))
+(shen-jit.u8! (value handle.kept) 0 9)
+(output "before saving ~A~%" (shen-jit.u8 (value handle.kept) 0))
+EOF
+    "$SHEN" --save "$dir/handle.img" eval -l lib/ffi.shen -l lib/memory.shen -l lib/handle.shen -l "$dir/handle.shen" > "$dir/handle.out" 2>&1 < /dev/null
+    check handle-before-saving "$dir/handle.out" "before saving 9"
+    SHEN_JIT_IMAGE="$dir/handle.img" "$SHEN" eval \
+        -e '(let K (value handle.kept) (do (set handle.kept []) (shen-jit.collect) (output "~A ~A ~A~%" (shen-jit.bytes-length K) (handle.sweep) (trap-error (handle.close K) (/. E (error-to-string E))))))' \
+        > "$dir/handle2.out" 2>&1 < /dev/null
+    check handle-dead-in-image "$dir/handle2.out" "0 0 handle.close: #<pointer pointer 0x0> is not a handle"
     cat > "$dir/ffi3.shen" <<EOF
 (shen-jit.library ffi.libc ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
 (define-foreign ffi.strlen ffi.libc "strlen" (string) --> int64)

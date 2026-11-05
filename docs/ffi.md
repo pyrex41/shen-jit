@@ -67,8 +67,12 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 | `(shen-jit.pointer->string P)` | Copies the NUL-terminated string it points to |
 | `(shen-jit.pointer->bytes P I N)` | Copies N bytes from offset I. Unchecked by nature |
 | `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C or read |
-| `(shen-jit.pointer-sized P N)` | A new pointer to the same address and of the same kind, whose N bytes can be read and written in place |
+| `(shen-jit.pointer-sized P N)` | A new pointer to the same address and of the same kind, whose N bytes can be read and written in place, and which keeps P alive |
 | `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
+| `(shen-jit.pointer-guard P V)` | A new pointer like P, with the same length, whose V is handed back once nothing reaches it: see below |
+| `(shen-jit.pointer-owner P)` | The pointer that P was sized from, the V it was guarded with, or `[]` |
+| `(shen-jit.pointers-dead)` | The values of the guarded pointers that have died since it was last called, as a list |
+| `(shen-jit.collect)` | Collects now |
 
 `=` compares kind and address, and a pointer prints as `#<pointer sqlite3 0x...>`. One saved in an image loads dead.
 
@@ -92,9 +96,21 @@ what works on a byte buffer works on the pointer, checked against that length: `
 - **It stays where it is,** so C may keep the address, and a `blocking` call passes it as a `pointer` with no copy. The collector neither copies nor scans it.
 - **The length is trusted.** It is the one thing not checked, and a wrong one, or memory C has freed, can crash. Kill a pointer once its memory is gone: address and length become
   0, so the ordinary bounds check refuses it.
-- **Each sized pointer stands alone.** Killing one kills no other, nor the pointer it came from.
+- **Each sized pointer stands alone.** Killing one kills no other, nor the pointer it came from. It does keep that pointer reachable, which matters if that one is guarded.
 - **Nothing frees it for you.** `lib/memory.shen` has `(memory.alloc N)`, which gives N zero bytes, and `(memory.free M)`, over `calloc` and `free`. A saved image holds such a pointer dead, and the
   memory itself is not saved: a byte buffer is what lasts in an image.
+
+`lib/mmap.shen` maps files the same way, on each system: `(mmap.read Path)`, `(mmap.read-write Path)`, `(mmap.create Path N)` and `(mmap.close M)`, over `mmap` and `lseek`, or `CreateFileMappingA` and
+`MapViewOfFile`. A store into the memory of `mmap.read` ends the process, and so does an access past the end of a file that something has since made shorter, neither of which a length can check.
+
+**Guarded pointers** let Shen release such memory once nothing uses it. `(shen-jit.pointer-guard P V)` makes a copy of P, the guarded pointer, and holds V strongly. Once nothing else reaches the guarded pointer, a
+collection puts V on the list that `(shen-jit.pointers-dead)` gives, and Shen does the rest: nothing runs during a collection, and whatever releases the memory can be any Shen function.
+`lib/handle.shen` does it in Shen alone, as `(handle.wrap M Release)`, `(handle.close H)` and `(handle.sweep)`, and counts what handles hold to bring a collection, since memory outside the heap brings none by itself.
+
+- **V must not refer to the guarded pointer,** or it stays reached. V may refer to another guarded pointer, which then outlives this one, so what uses another is released first.
+- **It says nothing of when.** It needs a collection to be seen at all, and a frame can hold, in a slot it has not written yet, what an earlier frame left there, so a pointer may outlast its last use.
+- **A call keeps its arguments.** A guarded pointer given to C stays reached until the call returns, even a `blocking` one. C that keeps the address after that must keep the pointer too.
+- **A saved image holds it dead,** with no owner and no guard, and its value is never handed back.
 
 **Typed code:** a declaration whose types are all plain Shen types, and whose result cannot be NULL, also emits a `declare`, with `int64`, `int32`,
 `uint32` and `double` as `number`, `bool` as `boolean`, and `string` for an argument. Others leave the declaring to the program, under `(tc -)`, since

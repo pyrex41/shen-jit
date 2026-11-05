@@ -108,6 +108,7 @@ VM *vm_create(size_t semispace_words, size_t stack_words)
     vm->chars = V_NIL;
     vm->messages = V_NIL;
     vm->trace = V_NIL;
+    vm->dead = V_NIL;
     vm->trace_floor = SIZE_MAX;
     return vm;
 }
@@ -145,6 +146,7 @@ void vm_destroy(VM *vm)
     free(vm->foreign_roots);
     free(vm->files);
     free(vm->natives);
+    free(vm->guards);
     free(vm->free_cells);
     free(vm->owned);
     free(vm->free_consts);
@@ -191,6 +193,20 @@ static bool weak_push(V **list, size_t *n, size_t *cap, V v)
 bool vm_track_file(VM *vm, V stream) { return weak_push(&vm->files, &vm->nfiles, &vm->files_cap, stream); }
 
 bool vm_track_native(VM *vm, V code) { return weak_push(&vm->natives, &vm->nnatives, &vm->natives_cap, code); }
+
+bool vm_guard(VM *vm, V pointer, V value)
+{
+    if (vm->nguards == vm->guards_cap) {
+        size_t cap = vm->guards_cap ? 2 * vm->guards_cap : 16;
+        Guard *guards = realloc(vm->guards, cap * sizeof *guards);
+        if (!guards)
+            return false;
+        vm->guards = guards;
+        vm->guards_cap = cap;
+    }
+    vm->guards[vm->nguards++] = (Guard){pointer, value};
+    return true;
+}
 
 /* Constant slots. A code object owns the range [cbase, cbase + nconst +
    ncode) of vm->consts: the collector copies those slots when it scans the
@@ -637,7 +653,29 @@ static void collect_into(VM *vm, uint64_t *to)
     copy_slot(&c, &vm->chars);
     copy_slot(&c, &vm->messages);
     copy_slot(&c, &vm->trace);
+    copy_slot(&c, &vm->dead);
+    /* A guard's value counts as reached whether or not its pointer is, so what one pointer's
+       value uses stays alive until that value has been taken. */
+    for (size_t i = 0; i < vm->nguards; i++)
+        copy_slot(&c, &vm->guards[i].value);
     drain(&c, to);
+    /* The values of pointers that nothing reached go on the list. Each pair fits in the space
+       its pointer, which is not copied, leaves in to-space, and holds only what is copied. */
+    size_t guarded = 0;
+    for (size_t i = 0; i < vm->nguards; i++) {
+        uint64_t *o = ptr(vm->guards[i].pointer);
+        if (o[0] == V_FORWARD) {
+            vm->guards[guarded].pointer = o[1];
+            vm->guards[guarded++].value = vm->guards[i].value;
+        } else {
+            uint64_t *pair = c.next;
+            c.next += 2;
+            pair[0] = vm->guards[i].value;
+            pair[1] = vm->dead;
+            vm->dead = tagged(pair, TAG_PAIR);
+        }
+    }
+    vm->nguards = guarded;
     if (vm->intern != V_NIL)
         sweep_symbols(vm, &c);
     free(c.pending);

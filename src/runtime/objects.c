@@ -116,6 +116,7 @@ V make_pointer(VM *vm, uint64_t address, V kind)
         return FAILED;
     p[0] = HEADER(T_POINTER, 0);
     p[POINTER_KIND] = kind;
+    p[POINTER_OWNER] = V_NIL;
     p[POINTER_ADDRESS] = address;
     p[POINTER_LENGTH] = 0;
     return tagged(p, TAG_OBJECT);

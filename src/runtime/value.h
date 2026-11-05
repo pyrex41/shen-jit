@@ -75,7 +75,7 @@ enum {
                      then [name][bytecode] */
     T_EXCEPTION,  /* [message][value]: the value goes before the message */
     T_STREAM,     /* [flags raw][handle raw] */
-    T_POINTER,    /* [kind][address raw][length raw]: a C pointer; an image zeroes the address and length */
+    T_POINTER,    /* [kind][owner][address raw][length raw]: a C pointer; an image clears all but the kind */
     T_LIMIT
 };
 
@@ -99,7 +99,7 @@ enum {
     CODE_WORDS = 10,
     EXC_MESSAGE = 1, EXC_VALUE = 2, EXC_WORDS = 3,
     STREAM_FLAGS = 1, STREAM_HANDLE = 2, STREAM_WORDS = 3,
-    POINTER_KIND = 1, POINTER_ADDRESS = 2, POINTER_LENGTH = 3, POINTER_WORDS = 4
+    POINTER_KIND = 1, POINTER_OWNER = 2, POINTER_ADDRESS = 3, POINTER_LENGTH = 4, POINTER_WORDS = 5
 };
 
 /* Every object is at least two words, so a copied object always has room
@@ -138,7 +138,7 @@ static inline void obj_values(uint64_t h, size_t *first, size_t *count)
     case T_CODE: *first = CODE_NAME; *count = 3; break;
     case T_EXCEPTION: *first = EXC_MESSAGE; *count = 2; break;
     case T_FOREIGN: *first = FOREIGN_DESC; *count = 1; break;
-    case T_POINTER: *first = POINTER_KIND; *count = 1; break;
+    case T_POINTER: *first = POINTER_KIND; *count = 2; break;
     default: break;
     }
 }

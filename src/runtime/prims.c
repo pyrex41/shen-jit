@@ -118,6 +118,10 @@ const Primitive primitive_table[] = {
     {"shen-jit.pointer-kill", 1, NULL},
     {"shen-jit.pointer-sized", 2, NULL},
     {"shen-jit.pointer!", 3, NULL},
+    {"shen-jit.pointer-guard", 2, NULL},
+    {"shen-jit.pointer-owner", 1, NULL},
+    {"shen-jit.pointers-dead", 0, NULL},
+    {"shen-jit.collect", 0, NULL},
 };
 
 const size_t primitive_count = sizeof primitive_table / sizeof primitive_table[0];
@@ -1611,8 +1615,11 @@ V sj_primitive(VM *vm, size_t index)
     case P_THREAD: return thread_start(vm);
     case P_FOREIGN: case P_POINTERP: case P_POINTER_KIND: case P_POINTER_ADDRESS: case P_BYTES_POINTER:
     case P_POINTER_STRING: case P_POINTER_BYTES: case P_ERRNO: case P_C_ERRNO: case P_POINTER_KILL:
-    case P_POINTER_SIZED: case P_SET_POINTER:
+    case P_POINTER_SIZED: case P_SET_POINTER: case P_POINTER_GUARD: case P_POINTER_OWNER: case P_POINTERS_DEAD:
         return ffi_primitive(vm, (unsigned)index);
+    case P_COLLECT:
+        vm_collect(vm, 0);
+        return V_TRUE;
     case P_DEREF: {
         /* What X is bound to in the vector b, along a chain of variables; the
            third argument marks a variable with no binding. */

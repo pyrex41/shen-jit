@@ -403,7 +403,7 @@ A pointer has a kind, a symbol, for reading and for messages. `=` compares kind 
 | `(shen-jit.pointer->string P)` | Copies the NUL-terminated string it points to |
 | `(shen-jit.pointer->bytes P I N)` | Copies N bytes from offset I. It cannot check them |
 | `(shen-jit.pointer-kill P)` | For a library, once C has freed what P points to: P then raises when given to C or read |
-| `(shen-jit.pointer-sized P N)` | A new pointer to the same address, whose N bytes can be read and written: see [Memory outside the heap](#memory-outside-the-heap) |
+| `(shen-jit.pointer-sized P N)` | A new pointer to the same address, whose N bytes can be read and written, and which keeps P alive: see [Memory outside the heap](#memory-outside-the-heap) |
 | `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
 
 In typed code, a declaration whose types are all plain Shen types, and whose result cannot be NULL, can be called at
@@ -445,13 +445,64 @@ Then it works with what works on a byte buffer, in place, each access checked ag
 shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l program.shen
 ```
 
-- **Nothing frees it for you.** `memory.free` frees and kills it, and forgetting to leaks, as in C.
+- **Nothing frees it for you,** unless you ask for that below. `memory.free` frees and kills it, and forgetting to leaks,
+  as in C.
 - **The length you state is trusted,** and it is the one thing not checked. A wrong one, or memory C has freed, can
   crash. Kill a pointer once its memory is gone, so that using it raises.
 - **Each sized pointer stands alone.** Killing one kills no other, nor the pointer it came from.
 - **A saved image holds it dead,** and the memory itself is not saved: a byte buffer is what lasts in an image.
-- **The same code works on both.** `u8`, `u16`, `u32` and `s32` compile inline for a buffer and for a pointer. `s64`,
-  `f32` and `f64` call C for both.
+- **The same code works on both.** `u8`, `u16`, `u32`, `s32` and `f64` compile inline for a buffer and for a pointer.
+  `s64` and `f32` call C for both.
+
+#### Files as memory
+
+`lib/mmap.shen` gives all of a file as such a pointer, on each system, in Shen alone. Nothing is read until it is touched:
+
+```shen
+(let M (mmap.read "data.bin")
+  (do (output "~A bytes, starting ~A~%" (shen-jit.bytes-length M) (shen-jit.u8 M 0))
+      (mmap.close M)))
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/mmap.shen -l program.shen
+```
+
+| Function | What it does |
+| --- | --- |
+| `(mmap.read Path)` | All of a file, read only |
+| `(mmap.read-write Path)` | All of a file, where what is written reaches the file |
+| `(mmap.create Path N)` | A new file of N zero bytes, replacing any there, as `mmap.read-write` |
+| `(mmap.close M)` | Unmaps it and kills M |
+
+An empty file cannot be mapped, and raises. Two things the length cannot check end the process: a store into the memory
+of `mmap.read`, and an access past the end of a file that something has since made shorter.
+
+#### Memory that releases itself
+
+`lib/handle.shen` wraps such memory in a handle, which reads and writes the same bytes, and releases it once nothing
+reaches the handle:
+
+```shen
+(define buffer
+  N -> (handle.wrap (memory.alloc N) (/. M (memory.free M))))
+
+(define mapped
+  Path -> (handle.wrap (mmap.read Path) (/. M (mmap.close M))))
+```
+
+```sh
+shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/mmap.shen -l lib/handle.shen -l program.shen
+```
+
+- **It is released some time later:** in the next `handle.wrap` or `(handle.sweep)` after a collection finds it dead, and
+  not at all if the program ends first, which leaves it to the system. Handles count what they hold, so that memory
+  outside the heap brings collections too.
+- **`(handle.close H)` releases it now,** for what should not wait: on Windows, a mapped file cannot be deleted. H then
+  raises when used, and closing it again does nothing.
+- **A copy from `shen-jit.pointer-sized` keeps its handle alive,** until the handle is closed, after which it must not be
+  used.
+- **The function that releases it must not refer to the handle,** or the handle will never die.
 
 ### SQLite
 

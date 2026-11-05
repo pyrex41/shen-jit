@@ -27,6 +27,10 @@ typedef struct ForeignRoot {
     struct ForeignRoot *next;
 } ForeignRoot;
 
+typedef struct Guard {
+    V pointer, value;
+} Guard;
+
 /* What a thread keeps of its own (thread.c). The running thread's stack and
    handlers are in the VM's fields; these hold them while it waits. */
 typedef struct Thread {
@@ -139,6 +143,12 @@ typedef struct VM {
     V *natives;
     size_t nnatives, natives_cap;
     void (*free_native)(struct VM *vm, uint64_t *code);
+    /* Guarded pointers (shen-jit.pointer-guard), held weakly, each with a value held strongly.
+       Once nothing else reaches the pointer, a collection puts its value on the list `dead`,
+       for Shen to take. */
+    Guard *guards;
+    size_t nguards, guards_cap;
+    V dead;
     /* Where native code inside an inlined body called the C helper now
        running, for backtraces; NULL outside such a call. */
     void *site;
@@ -228,6 +238,7 @@ uint64_t *vm_alloc(VM *vm, size_t words);
 enum { LARGE_WORDS = 1 << 15 }; /* 256 KB */
 uint64_t *vm_alloc_object(VM *vm, size_t words); /* a vector or string, maybe large */
 bool vm_collect(VM *vm, size_t need_words);
+bool vm_guard(VM *vm, V pointer, V value);
 bool vm_in_heap(const VM *vm, const void *at);
 void vm_census(VM *vm, size_t count[T_LIMIT], size_t words[T_LIMIT]);
 bool vm_stack_grow(VM *vm, size_t need_words);

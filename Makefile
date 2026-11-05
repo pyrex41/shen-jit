@@ -297,7 +297,9 @@ FFI_SUITES = $(1) eval -l ../lib/ffi.shen -l ../tests/ffi.shen | $(FFI_RESULT) &
 	  $(1) eval -l ../lib/ffi.shen -l ../tests/ffi_c.shen | $(FFI_RESULT) && \
 	  $(1) eval -l ../lib/ffi.shen -l ../lib/sqlite.shen -l ../tests/sqlite.shen | $(FFI_RESULT) && \
 	  $(1) eval -l ../lib/ffi.shen -l ../lib/socket.shen -l ../tests/socket.shen | $(FFI_RESULT) && \
-	  $(1) eval -l ../lib/ffi.shen -l ../lib/native.shen -l ../lib/memory.shen -l ../tests/memory.shen | $(FFI_RESULT)
+	  $(1) eval -l ../lib/ffi.shen -l ../lib/native.shen -l ../lib/memory.shen -l ../tests/memory.shen | $(FFI_RESULT) && \
+	  $(1) eval -l ../lib/ffi.shen -l ../lib/memory.shen -l ../lib/handle.shen -l ../tests/handle.shen | $(FFI_RESULT) && \
+	  $(1) eval -l ../lib/ffi.shen -l ../lib/mmap.shen -l ../lib/handle.shen -l ../tests/mmap.shen | $(FFI_RESULT)
 
 $(FFI_TEST_LIB): tests/ffi_lib.c include/shen.h | $(BUILD)
 	$(CC) -std=c11 -O1 -g -Wall -Wextra -Wno-unused-parameter -Iinclude -shared -fPIC -pthread -o $@ $<

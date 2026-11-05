@@ -549,7 +549,25 @@ V ffi_primitive(VM *vm, unsigned prim)
         if (p == V_CLEARED)
             return sj_raise(vm, "out of memory");
         ptr(p)[POINTER_LENGTH] = (uint64_t)fixval(b);
+        ptr(p)[POINTER_OWNER] = vm->args[0]; /* it may be guarded, and must outlive this copy */
         return p;
+    }
+    case P_POINTER_GUARD: { /* a copy with the same length, whose value is taken once it dies */
+        if (!is_pointer(a) || !ptr(a)[POINTER_ADDRESS])
+            return sj_raise_value(vm, "shen-jit.pointer-guard: ~S is not a live pointer", a);
+        V p = make_pointer(vm, ptr(a)[POINTER_ADDRESS], ptr(a)[POINTER_KIND]);
+        if (p == V_CLEARED)
+            return sj_raise(vm, "out of memory");
+        ptr(p)[POINTER_LENGTH] = ptr(vm->args[0])[POINTER_LENGTH];
+        ptr(p)[POINTER_OWNER] = vm->args[1];
+        return vm_guard(vm, p, vm->args[1]) ? p : sj_raise(vm, "out of memory");
+    }
+    case P_POINTER_OWNER:
+        return is_pointer(a) ? ptr(a)[POINTER_OWNER] : sj_raise_value(vm, "shen-jit.pointer-owner: ~S is not a pointer", a);
+    case P_POINTERS_DEAD: {
+        V dead = vm->dead;
+        vm->dead = V_NIL;
+        return dead;
     }
     case P_SET_POINTER: { /* a pointer field: the buffer or memory, the offset, a pointer or [] */
         char *base;
