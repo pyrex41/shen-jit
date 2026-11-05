@@ -78,8 +78,8 @@ tests it with a C compiler alone. Moving the kernel or Shen/Scheme updates the h
 
 ## Releasing
 
-Move what is under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) to a heading with the version and the date, then push a tag `vM.N` that matches `VERSION`. CI builds and tests Linux x86-64 and arm64 (dynamic, in a container with an old glibc, and static, which cannot load libraries), macOS arm64 and Windows
-x86-64, then publishes those archives (`tools/package.sh`), each with the rendered guide, the source tarball and `SHA256SUMS`. A tag with a hyphen is a prerelease.
+Move what is under "Unreleased" in [CHANGELOG.md](CHANGELOG.md) to a heading with the version and the date, push `main`, and once its CI has passed push a tag `vM.N` that matches `VERSION`. CI builds Linux x86-64 and arm64 (dynamic, in a container with an old glibc, and static, which cannot load libraries), macOS arm64 and Windows
+x86-64, and runs the fast suites on them. GC stress, the sanitizers and the mutated code objects ran on `main`, so a tag leaves them out, and it refuses to publish a commit that has not passed there: if it was tagged too early, re-run its release job once `main` is green. It then publishes those archives (`tools/package.sh`), each with the rendered guide, the source tarball and `SHA256SUMS`. A tag with a hyphen is a prerelease.
 
 ## Measuring performance
 

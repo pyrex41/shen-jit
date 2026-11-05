@@ -1,6 +1,7 @@
 # Every platform builds and tests the same release tarball, with a C compiler
 # alone, as tests/linux.sh does. One job makes the tarball, since only it runs
-# Shen/Scheme and pandoc. A tag vM.N publishes what those jobs built and tested.
+# Shen/Scheme and pandoc. A tag vM.N publishes what those jobs built, after the
+# fast suites only: its commit must have passed the heavy ones on main.
 name: CI
 
 on:
@@ -83,15 +84,16 @@ jobs:
             echo "::endgroup::"
           done
       - name: GC stress
+        if: github.ref_type != 'tag'
         run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress
       # Ubuntu's address space layout has more random bits than AddressSanitizer accepts.
       - name: Sanitizers
-        if: matrix.heavy
+        if: matrix.heavy && github.ref_type != 'tag'
         run: |
           if [ "$RUNNER_OS" = Linux ]; then sudo sysctl -q vm.mmap_rnd_bits=28; fi
           make test-san
       - name: Mutated code objects
-        if: matrix.platform == 'linux-x86_64-static'
+        if: matrix.platform == 'linux-x86_64-static' && github.ref_type != 'tag'
         run: make fuzz-native
       - name: Package
         run: sh tools/package.sh ${{ matrix.platform }}
@@ -108,8 +110,20 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     permissions:
+      actions: read
       contents: write
     steps:
+      # If main's run has not finished, re-run this job once it has passed.
+      - name: Check that the commit passed on main
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          passed=$(gh run list --workflow CI --branch main --commit "$GITHUB_SHA" --status success --limit 1 --json databaseId --jq length)
+          if [ "$passed" = 0 ]; then
+            echo "::error::$GITHUB_SHA has not passed CI on main"
+            exit 1
+          fi
       - uses: actions/download-artifact@v8
         with:
           path: assets

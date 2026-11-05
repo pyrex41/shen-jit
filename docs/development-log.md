@@ -737,6 +737,10 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
   `save-executable` bug below, and stray `\r` in five extensions' strings in the KLambda in use, unlike the 43.2 release and a
   fresh build of its tag.
 - **Found later (2026-11-05):** release archives left out `lib/` and `include/`, so a binary could not have loaded `lib/ffi.shen`.
+- **Tag runs leave out the heavy suites (2026-11-05).** In a run on `main`, GC stress took 176 to 312 s per job, the sanitizers 43 to
+  59 s and the mutated code objects 69 s, and a tag repeated them on the same commit. A tag's run now builds and runs the fast suites,
+  10 to 19 s, on what it publishes, and the release job refuses a commit that has not passed on `main`. From those step times, a
+  release should take about 2.5 minutes against 8.
 - **bullseye moved to Debian's archive (2026-11-05).** The first run on GitHub failed both dynamic Linux jobs at `apt-get install`:
   `deb.debian.org` still lists bullseye's security updates but answers 404 for their files, which `archive.debian.org` has. The jobs
   use the archive rather than a newer Debian, to keep the executables needing only glibc 2.17, on both architectures.
