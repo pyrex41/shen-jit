@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>$pagetitle$</title>
-<meta name="description" content="How to install and use Shen/JIT, a JIT implementation of the Shen language: running programs, saving executables, threads, calling C, SQLite and sockets.">
+$if(doc)$$else$<meta name="description" content="How to install and use Shen/JIT, a JIT implementation of the Shen language: running programs, saving executables, threads, calling C, SQLite and sockets.">$endif$
 <link rel="icon" type="image/png" href="assets/shen-jit-icon-light.png" media="(prefers-color-scheme: light)">
 <link rel="icon" type="image/png" href="assets/shen-jit-icon-dark.png" media="(prefers-color-scheme: dark)">
 <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -48,7 +48,7 @@ img { max-width: 100%; height: auto; display: block; }
 a { color: var(--link); text-underline-offset: 0.15em; }
 a:focus-visible, summary:focus-visible { outline: 2px solid var(--slash); outline-offset: 2px; border-radius: 2px; }
 
-/* The contents rail: the guide's groups, and the sections in each. */
+/* The contents rail: the guide's groups, and the sections in each. A document's page has only sections. */
 .rail { position: sticky; top: 0; align-self: start; max-height: 100vh; overflow-y: auto; padding-block: 1.75rem; padding-right: 1.25rem; }
 .rail .brand { display: block; width: 10.5rem; margin-left: -0.6rem; }
 .logo-dark { display: none; }
@@ -60,17 +60,18 @@ a:focus-visible, summary:focus-visible { outline: 2px solid var(--slash); outlin
 :root[data-theme="dark"] .logo-light { display: none; }
 .rail summary { display: none; font: 600 0.875rem var(--mono); cursor: pointer; padding-block: 0.5rem; }
 .rail ul { list-style: none; margin: 0; padding: 0; }
-.rail nav > ul > li > a, section.level1 > h1 { font: 400 0.8125rem var(--mono); color: var(--muted); text-transform: lowercase; }
-.rail nav > ul > li > a { display: block; margin: 1.5rem 0 0.35rem; text-decoration: none; }
-.rail nav > ul > li > a::before, section.level1 > h1::before { content: "["; }
-.rail nav > ul > li > a::after, section.level1 > h1::after { content: "]"; }
-.rail ul ul a { display: block; padding: 0.16rem 0 0.16rem 0.75rem; border-left: 2px solid var(--rule); color: var(--ink); text-decoration: none; font-size: 0.9375rem; line-height: 1.4; }
-.rail ul ul a:hover { color: var(--link); }
-.rail ul ul a.here { border-left-color: var(--slash); font-weight: 600; }
+.rail li > a:not(:only-child), section.level1 > h1 { font: 400 0.8125rem var(--mono); color: var(--muted); text-transform: lowercase; }
+.rail li > a:not(:only-child) { display: block; margin: 1.5rem 0 0.35rem; text-decoration: none; }
+.rail li > a:not(:only-child)::before, section.level1 > h1::before { content: "["; }
+.rail li > a:not(:only-child)::after, section.level1 > h1::after { content: "]"; }
+.rail li > a:only-child { display: block; padding: 0.16rem 0 0.16rem 0.75rem; border-left: 2px solid var(--rule); color: var(--ink); text-decoration: none; font-size: 0.9375rem; line-height: 1.4; }
+.rail li > a:only-child:hover { color: var(--link); }
+.rail li > a.here { border-left-color: var(--slash); font-weight: 600; }
+.rail .back { margin: 1.5rem 0 0.75rem; font: 400 0.8125rem var(--mono); }
 
 /* The reading column */
 main { min-width: 0; max-width: 47rem; padding-block: 2.5rem 5rem; padding-left: 2.5rem; }
-main > p:first-of-type { font-size: 1.25rem; line-height: 1.5; margin: 0 0 1rem; text-wrap: balance; }
+body:not(.doc) main > p:first-of-type { font-size: 1.25rem; line-height: 1.5; margin: 0 0 1rem; text-wrap: balance; }
 main > h1 { font: 600 2.125rem/1.2 var(--mono); margin: 0 0 1rem; letter-spacing: -0.02em; }
 main > h1 i { color: var(--slash); font-style: normal; }
 section.level1 > h1 { margin: 3.5rem 0 -1.25rem; }
@@ -103,27 +104,30 @@ footer { margin-top: 3.5rem; padding-top: 1.25rem; border-top: 1px solid var(--r
   .rail summary { display: block; }
   main { padding-left: 0; padding-block: 1rem 3rem; }
   main > h1 { font-size: 1.75rem; }
-  main > p:first-of-type { font-size: 1.125rem; }
+  body:not(.doc) main > p:first-of-type { font-size: 1.125rem; }
 }
 </style>
 </head>
-<body>
+<body$if(doc)$ class="doc"$endif$>
 
 <aside class="rail">
-  <a class="brand" href="#top" aria-label="Shen/JIT, top of the guide">
+  <a class="brand" href="$if(doc)$index.html$else$#top$endif$" aria-label="Shen/JIT, $if(doc)$the guide$else$top of the guide$endif$">
     <img class="logo-light" src="assets/shen-jit-logo-light.png" alt="Shen/JIT" width="1600" height="400">
     <img class="logo-dark" src="assets/shen-jit-logo-dark.png" alt="Shen/JIT" width="1600" height="400">
   </a>
   <details id="toc" open>
     <summary>Contents</summary>
     <nav aria-label="Contents">
+$if(doc)$
+<p class="back"><a href="index.html">The guide</a></p>
+$endif$
 $table-of-contents$
     </nav>
   </details>
 </aside>
 
 <main id="top">
-<h1>Shen<i>/</i>JIT guide</h1>
+<h1>$title$</h1>
 $body$
 <footer>
   Shen/JIT is under the <a href="https://github.com/tizoc/shen-jit/blob/main/LICENSE">BSD 3-clause license</a>. It carries the Shen kernel, under <a href="https://github.com/tizoc/shen-jit/blob/main/LICENSE-shen-kernel.txt">its own license</a>, and SLJIT and xxHash. <a href="https://github.com/tizoc/shen-jit">Source on GitHub</a>.
@@ -139,7 +143,7 @@ $body$
   fit();
   narrow.addEventListener('change', fit);
   var links = {};
-  document.querySelectorAll('.rail ul ul a').forEach(function (a) {
+  document.querySelectorAll('.rail li > a:only-child').forEach(function (a) {
     links[a.getAttribute('href').slice(1)] = a;
     a.addEventListener('click', function () { if (narrow.matches) toc.open = false; });
   });

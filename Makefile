@@ -190,11 +190,15 @@ check-generated: generated
 	  if diff -u ../generated.sha256 generated.sha256; then echo "generated files match generated.sha256"; \
 	  else echo "generated files differ from generated.sha256 (make update-generated with the change that made them)"; exit 1; fi
 
-# The guide, docs/guide.md, as GitHub Pages serves it and release archives carry it.
+# The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
+# serves them and release archives carry them.
+GUIDE_PAGES := design semantics bytecode ffi
+GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
+  --template=site/template.html --lua-filter=site/guide.lua
 guide:
 	rm -rf $(BUILD)/guide && mkdir -p $(BUILD)/guide/assets
-	pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --shift-heading-level-by=-1 --wrap=none \
-	  --template=site/template.html --lua-filter=site/guide.lua -o $(BUILD)/guide/index.html docs/guide.md
+	$(GUIDE_PANDOC) --shift-heading-level-by=-1 -o $(BUILD)/guide/index.html docs/guide.md
+	for page in $(GUIDE_PAGES); do $(GUIDE_PANDOC) -M doc -o $(BUILD)/guide/$$page.html docs/$$page.md || exit 1; done
 	cp assets/*.png $(BUILD)/guide/assets/
 
 # A release tarball: the tracked files, generated/, which builds without a host,

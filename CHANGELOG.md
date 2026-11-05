@@ -11,6 +11,8 @@ All notable changes to this project are documented in this file. The format is b
   the same functions as a byte buffer, each access checked against the length stated. `lib/memory.shen`
   allocates and frees such memory.
 - `shen-jit.s32`, `s64`, `f32` and `f64` and their stores, on byte buffers too, and `shen-jit.pointer!`.
+- The rendered guide now has how Shen/JIT works, its semantics, its instructions and calling C as pages of
+  their own.
 
 ### Fixed
 

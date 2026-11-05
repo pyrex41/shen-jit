@@ -5,8 +5,7 @@ lowerer written in Shen, every function is compiled to native code by a whole-fu
 SLJIT, memory is managed by a copying collector, and the system starts from a heap image.
 
 Small and simple come first, and it must still perform well. A mechanism that makes it noticeably
-larger or harder to follow needs clear evidence that it is worth the cost, and
-[development-log.md](development-log.md) records what was measured, and what was tried and rejected.
+larger or harder to follow needs clear evidence that it is worth the cost.
 
 | Area | Decision |
 | --- | --- |

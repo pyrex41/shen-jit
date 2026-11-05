@@ -1,11 +1,20 @@
-# Renders the guide, docs/guide.md, and publishes it to GitHub Pages whenever it or what renders
-# it changes. Pages must have "GitHub Actions" as its source in the repository's settings.
+# Renders the guide, docs/guide.md, with the documents that have a page of their own, and publishes
+# them to GitHub Pages whenever they or what renders them change. Pages must have "GitHub Actions"
+# as its source in the repository's settings.
 name: Guide
 
 on:
   push:
     branches: [main]
-    paths: ['docs/guide.md', 'site/**', 'assets/**', '.github/workflows/pages.yml']
+    paths:
+      - docs/guide.md
+      - docs/design.md
+      - docs/semantics.md
+      - docs/bytecode.md
+      - docs/ffi.md
+      - site/**
+      - assets/**
+      - .github/workflows/pages.yml
   workflow_dispatch:
 
 permissions:

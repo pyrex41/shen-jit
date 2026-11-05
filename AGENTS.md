@@ -105,7 +105,7 @@ Keep these current with each change:
 - [docs/semantics.md](docs/semantics.md): the behaviour, with the contract examples.
 - [docs/overrides.md](docs/overrides.md): overrides in the port.
 - [docs/ffi.md](docs/ffi.md) and `include/shen.h`: calling C.
-- [docs/guide.md](docs/guide.md): what a user sees. `make guide` renders it with pandoc, `site/template.html` and `site/guide.lua`; `.github/workflows/pages.yml` publishes it when any of those change, and release archives carry it. Run its examples when you change them.
+- [docs/guide.md](docs/guide.md): what a user sees. `make guide` renders it with pandoc, `site/template.html` and `site/guide.lua`, with design, semantics, bytecode and ffi as pages of their own, whose links `site/guide.lua` points at those pages; `.github/workflows/pages.yml` publishes them when any of those change, and release archives carry them. Don't mention the development log or the overrides in a rendered document. Run the guide's examples when you change them.
 - The README stays minimal and points to the guide, so that they don't say the same things twice. What a user should know goes in the guide.
 - [CHANGELOG.md](CHANGELOG.md), in the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format: what a user would notice, under "Unreleased" until a release.
 

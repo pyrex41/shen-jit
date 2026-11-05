@@ -388,7 +388,7 @@ Functions are found at their first call, so a saved program finds them again. On
 `foreign: cannot find cos in libm`. `(shen-jit.errno)` is what the last call on this thread left in `errno`, or on
 Windows in `GetLastError`, where `(shen-jit.c-errno)` is the C library's.
 
-[docs/ffi.md](https://github.com/tizoc/shen-jit/blob/main/docs/ffi.md) has the rest, and how it works.
+[Calling C in full](https://github.com/tizoc/shen-jit/blob/main/docs/ffi.md) has the rest, and how it works.
 
 #### Pointers
 
@@ -729,7 +729,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make deps` | Fetches the kernel and the earlier release of Shen/JIT that makes the generated files |
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
 | `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library), to check that gains are not fitted to the benchmarks |
-| `make guide` | Renders this guide to `build/guide/`, with [pandoc](https://pandoc.org) |
+| `make guide` | Renders this guide and its documents' pages to `build/guide/`, with [pandoc](https://pandoc.org) |
 | `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |
 
 To run the test suites from a source tarball, point `KERNEL_DIR` at a directory with the kernel's `tests` and
@@ -746,12 +746,11 @@ send a signal, which `make test-ctrlc-windows` covers, or use the profiler. The 
 
 ### More
 
-- [docs/design.md](https://github.com/tizoc/shen-jit/blob/main/docs/design.md): how it works.
-- [docs/semantics.md](https://github.com/tizoc/shen-jit/blob/main/docs/semantics.md): the behaviour it implements.
-- [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md): the instruction set and the
-  lowering rules.
-- [docs/ffi.md](https://github.com/tizoc/shen-jit/blob/main/docs/ffi.md): calling C, in full, and how it works.
-- [docs/overrides.md](https://github.com/tizoc/shen-jit/blob/main/docs/overrides.md): the kernel functions it replaces,
-  and why.
-- [docs/development-log.md](https://github.com/tizoc/shen-jit/blob/main/docs/development-log.md): what was tried or
-  rejected, why, and the numbers.
+- [How Shen/JIT works](https://github.com/tizoc/shen-jit/blob/main/docs/design.md): the build, frames and calls, values
+  and the collector.
+- [Shen/JIT semantics](https://github.com/tizoc/shen-jit/blob/main/docs/semantics.md): the behaviour it implements, and
+  where that differs from Shen/Scheme.
+- [Shen/JIT instructions and frames](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md): the instruction set
+  and the lowering rules.
+- [Calling C in full](https://github.com/tizoc/shen-jit/blob/main/docs/ffi.md): plain C, C written for Shen, and how it
+  works.
