@@ -29,6 +29,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Arithmetic and comparisons on reals, and division, compile inline.
 - A loop that calls nothing works out the memory it reads and stores through once, on the way in.
+- In native code, machine registers go to what the deepest loops use most, whatever the order of the names, and
+  an access to memory reached at one width takes one comparison.
 
 ### Fixed
 

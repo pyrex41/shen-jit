@@ -1120,6 +1120,216 @@
   (freeze (native-test.kept-four
             (/. A B C D (native-test.kept-equal-registers A B C D (native-test.kept-list 200 1) (native-test.kept-list 200 2) 64)))))
 
+\\ One width through memory makes its length a limit on the index: every width, reading and storing,
+\\ up to the last index with room and not one past it, at lengths down to less than the width.
+(define-native native-test.limit-u8 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (u8 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-u16 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (u16 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-u32 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (u32 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-s32 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (s32 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-u64 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (word X (u64 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-f64 (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (real X (f64 M I)) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-u8! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (u8! M I 7) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-u16! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (u16! M I 7) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-u32! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (u32! M I 7) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-u64! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (u64! M I N) (word N (- N 1)) (again top) (label done) (return-word N))
+(define-native native-test.limit-f64! (M I0 N0) (word I I0) (word N N0) (loop top) (jump-unless-word (> N 0) done) (f64! M I 1.5) (word N (- N 1)) (again top) (label done) (return-word N))
+
+(define native-test.limit-wrong
+  F Width Length I -> (let Fits (and (>= I 0) (<= (+ I Width) Length))
+                           Did (trap-error (do (F (shen-jit.bytes Length) I 2) true) (/. E false))
+                        (if (= Fits Did) [] [[Width Length I Fits]])))
+
+(define native-test.limit-indices
+  Width Length -> [0 1 (- Length Width) (+ 1 (- Length Width)) (- Length 1) Length (+ Length 1) -1 -8 1152921504606846975])
+
+(define native-test.limit-all
+  [F Width] -> (mapcan (/. Length (mapcan (/. I (native-test.limit-wrong F Width Length I))
+                                          (native-test.limit-indices Width Length)))
+                       [0 1 2 3 4 7 8 9 15 16 17 1024]))
+
+(native-test.check "one width: what fits, and nothing else" []
+  (freeze (mapcan (function native-test.limit-all)
+                  [[(fn native-test.limit-u8) 1] [(fn native-test.limit-u16) 2] [(fn native-test.limit-u32) 4]
+                   [(fn native-test.limit-s32) 4] [(fn native-test.limit-u64) 8] [(fn native-test.limit-f64) 8]
+                   [(fn native-test.limit-u8!) 1] [(fn native-test.limit-u16!) 2] [(fn native-test.limit-u32!) 4]
+                   [(fn native-test.limit-u64!) 8] [(fn native-test.limit-f64!) 8]])))
+(native-test.check "one width, not memory, and not reached" 0 (freeze (native-test.limit-f64 a 0 0)))
+(native-test.check "one width, not memory, and reached" error (freeze (hd (native-test.result (freeze (native-test.limit-f64 a 0 1))))))
+(native-test.check "one width, what it says past the end" [error "bytes: 9 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.limit-f64 (shen-jit.bytes 16) 9 1)))))
+
+\\ An integer as an index is one more word index, and keeps memory at one width.
+(define-native native-test.literal-index (M N0)
+  (word N N0)
+  (real Acc 0)
+  (loop top)
+  (jump-unless-word (> N 0) done)
+  (f64! M 8 (+ Acc (f64 M 0)))
+  (real Acc (+ Acc (f64 M 8)))
+  (word N (- N 1))
+  (again top)
+  (label done)
+  (return-real Acc))
+(native-test.check "an integer as an index" 10.5 (freeze (native-test.literal-index (shen-jit.f64! (shen-jit.bytes 16) 0 1.5) 3)))
+(native-test.check "and past the end" [error "bytes: 8 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.literal-index (shen-jit.f64! (shen-jit.bytes 8) 0 1.5) 3)))))
+(define-native native-test.literal-below (M) (real X (f64 M -1)) (return-real X))
+(native-test.check "and before the start" [error "bytes: -1 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.literal-below (shen-jit.bytes 8))))))
+
+\\ More than one width, or an index in a slot, leaves the length a length.
+(define-native native-test.mixed-widths (M I0 N0)
+  (word I I0)
+  (word N N0)
+  (word Acc 0)
+  (loop top)
+  (jump-unless-word (> N 0) done)
+  (word Acc (+ Acc (u8 M I)))
+  (real X (f64 M 0))
+  (word N (- N 1))
+  (again top)
+  (label done)
+  (return-word Acc))
+(native-test.check "a byte past where 8 would fit" 30 (freeze (native-test.mixed-widths (native-test.counting-bytes 16) 15 2)))
+(native-test.check "and past the end" [error "bytes: 16 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.mixed-widths (native-test.counting-bytes 16) 16 2)))))
+
+(define-native native-test.slot-and-word (M S I0 N0)
+  (word I I0)
+  (word N N0)
+  (loop top)
+  (jump-unless-word (> N 0) done)
+  (real X (f64 M S))
+  (real Y (f64 M I))
+  (word N (- N 1))
+  (again top)
+  (label done)
+  (return-word N))
+(native-test.check "a slot and a word as indices" 0 (freeze (native-test.slot-and-word (shen-jit.bytes 16) 8 8 2)))
+(native-test.check "the slot past the end" error (freeze (hd (native-test.result (freeze (native-test.slot-and-word (shen-jit.bytes 16) 9 8 2))))))
+(native-test.check "the word past the end" [error "bytes: 9 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.slot-and-word (shen-jit.bytes 16) 8 9 2)))))
+
+\\ A loop runs to its last jump back, and an inner loop can jump back to an outer one.
+(define-native native-test.back-jumps (M N0)
+  (word N N0)
+  (word I 0)
+  (word Acc 0)
+  (loop outer)
+  (jump-unless-word (< I N) done)
+  (word I (+ I 1))
+  (word J 0)
+  (loop inner)
+  (jump-unless-word (< J 4) next)
+  (word Acc (+ Acc (u8 M J)))
+  (word J (+ J 1))
+  (jump-unless-word (< Acc 10) skip)
+  (again outer)
+  (label skip)
+  (again inner)
+  (label next)
+  (again outer)
+  (label done)
+  (return-word Acc))
+(native-test.check "jumps back, several and from within" 63
+  (freeze (native-test.back-jumps (native-test.cached-store (shen-jit.bytes 64) 0 64 []) 3)))
+
+\\ More than fits in registers: the deepest loop's names get them, with kept memory among them, and
+\\ what is used least stays in the native frame, where a narrow load must still replace all of a
+\\ word. Calls to C, collecting or not, leave it all as it was, and a buffer can move. The numbers
+\\ were worked out apart from this.
+(define-native native-test.places (M1 M2 M3 M4 N0 X Y Junk)
+  (word Low1 -1)
+  (word Low1 (u8 M1 15))
+  (word Low2 0)
+  (word Low2 (s32 M3 0))
+  (word N N0)
+  (word A 1)
+  (word B 2)
+  (word C 3)
+  (word D 4)
+  (word E 5)
+  (word F 6)
+  (word H 7)
+  (word K 8)
+  (word I 0)
+  (loop outer)
+  (jump-unless-word (< I N) finished)
+  (word Z (* 4 (bit-and I 3)))
+  (word B (+ B (s32 M3 Z)))
+  (word-box Boxed I)
+  (prim Junk cons Boxed Junk)
+  (prim T = X Y)
+  (word J 0)
+  (loop inner)
+  (jump-unless-word (< J 8) next)
+  (word A (+ A (u8 M1 J)))
+  (word C (bit-xor C (+ A B)))
+  (word D (+ D (u64 M4 (* J 8))))
+  (u64! M4 (* J 8) (+ D C))
+  (word E (+ E (bit-and C 255)))
+  (word F (bit-xor F (shift-left E 3)))
+  (word H (bit-xor H (shift-right F 5)))
+  (word K (+ K (bit-and H 15)))
+  (f64! M2 (* J 8) (+ (f64 M2 (* J 8)) K))
+  (word J (+ J 1))
+  (again inner)
+  (label next)
+  (word I (+ I 1))
+  (again outer)
+  (label finished)
+  (word A (+ A B))
+  (word A (+ A C))
+  (word A (+ A D))
+  (word A (bit-xor A E))
+  (word A (+ A F))
+  (word A (+ A H))
+  (word A (+ A K))
+  (word A (+ A Low1))
+  (word A (+ A Low2))
+  (word-box Count (bit-and A 1048575))
+  (prim R cons Count Junk)
+  (return R))
+
+(define native-test.run-places
+  M1Length M4Length N
+  -> (let M1 (native-test.counting-bytes M1Length)
+          M2 (shen-jit.bytes 64)
+          M3 (shen-jit.u32! (shen-jit.u32! (shen-jit.u32! (shen-jit.u32! (shen-jit.bytes 16) 0 4294967295) 4 5) 8 6) 12 7)
+          M4 (shen-jit.bytes M4Length)
+          R (native-test.places M1 M2 M3 M4 N (native-test.kept-list 20 1) (native-test.kept-list 20 2) [])
+       [R (shen-jit.f64 M2 0) (shen-jit.f64 M2 56) (shen-jit.u32 M4 0)]))
+
+(native-test.check "more than fits in registers" [[33461 4 3 2 1 0] 685 976 6092] (freeze (native-test.run-places 16 64 5)))
+(native-test.check "what it says of memory used least" [error "bytes: 15 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.run-places 8 64 5)))))
+(native-test.check "and of memory used most" [error "bytes: 8 is not a valid index"]
+  (freeze (native-test.result (freeze (native-test.run-places 16 8 5)))))
+
+\\ And reals: two used once, outside the loop, and more in it than there are float registers.
+(define-native native-test.real-places (A N0)
+  (real Low 16)
+  (real Root (sqrt Low))
+  (real R0 A) (real R1 A) (real R2 A) (real R3 A) (real R4 A) (real R5 A) (real R6 A) (real R7 A)
+  (real R8 A) (real R9 A) (real R10 A) (real R11 A) (real R12 A) (real R13 A) (real R14 A) (real R15 A)
+  (real R16 A) (real R17 A) (real R18 A) (real R19 A) (real R20 A) (real R21 A) (real R22 A) (real R23 A)
+  (real R24 A) (real R25 A) (real R26 A) (real R27 A) (real R28 A) (real R29 A) (real R30 A) (real R31 A)
+  (word N N0)
+  (loop top)
+  (jump-unless-word (> N 0) done)
+  (real R0 (+ R0 R1)) (real R1 (+ R1 R2)) (real R2 (+ R2 R3)) (real R3 (+ R3 R4)) (real R4 (+ R4 R5))
+  (real R5 (+ R5 R6)) (real R6 (+ R6 R7)) (real R7 (+ R7 R8)) (real R8 (+ R8 R9)) (real R9 (+ R9 R10))
+  (real R10 (+ R10 R11)) (real R11 (+ R11 R12)) (real R12 (+ R12 R13)) (real R13 (+ R13 R14)) (real R14 (+ R14 R15))
+  (real R15 (+ R15 R16)) (real R16 (+ R16 R17)) (real R17 (+ R17 R18)) (real R18 (+ R18 R19)) (real R19 (+ R19 R20))
+  (real R20 (+ R20 R21)) (real R21 (+ R21 R22)) (real R22 (+ R22 R23)) (real R23 (+ R23 R24)) (real R24 (+ R24 R25))
+  (real R25 (+ R25 R26)) (real R26 (+ R26 R27)) (real R27 (+ R27 R28)) (real R28 (+ R28 R29)) (real R29 (+ R29 R30))
+  (real R30 (+ R30 R31))
+  (word N (- N 1))
+  (again top)
+  (label done)
+  (return-real (+ Root (+ R0 R31))))
+(native-test.check "more reals than fit" 13 (freeze (native-test.real-places 1.0 3)))
+
 \\ What must be refused.
 (native-test.refused "a word unset" (freeze (define-native native-test.bad (A) (word X (+ Y 1)) (word Y 1) (return-word X))))
 (native-test.refused "a word as a slot" (freeze (define-native native-test.bad (A) (word X A) (prim Y + X 1) (return Y))))

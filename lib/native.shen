@@ -882,13 +882,17 @@
 
 \\ Whether an index mentions a word register, and so is worked out in words.
 (define shen-jit.word.index?
+  _ I -> true where (integer? I)
+  Regs I -> (shen-jit.word.mentioned? Regs I))
+
+(define shen-jit.word.mentioned?
   Regs [const _] -> false
-  Regs [_ | Args] -> (shen-jit.word.any-index? Regs Args)
+  Regs [_ | Args] -> (shen-jit.word.any-mentioned? Regs Args)
   Regs I -> (shen-jit.real.word? Regs I))
 
-(define shen-jit.word.any-index?
+(define shen-jit.word.any-mentioned?
   _ [] -> false
-  Regs [A | As] -> (or (shen-jit.word.index? Regs A) (shen-jit.word.any-index? Regs As)))
+  Regs [A | As] -> (or (shen-jit.word.mentioned? Regs A) (shen-jit.word.any-mentioned? Regs As)))
 
 \\ An index in slots is integer arithmetic through prim: [what holds it | instructions]. Its slots
 \\ are read at once, so that each statement can use them again.
@@ -905,14 +909,14 @@
                      Rest (shen-jit.real.indices (+ N 1) As)
                   [[(hd Value) | (hd Rest)] | (append (tl Value) (tl Rest))]))
 
-\\ What flat instructions name as registers, the most used first, as those get machine registers:
-\\ the names and numbers, for the slots' table. They are not slots, nor both kinds, and they fit.
+\\ What flat instructions name as registers: the names and numbers, for the slots' table. They are
+\\ not slots, nor both kinds, and they fit. The JIT chooses which get machine registers.
 (define shen-jit.real.registers
   Name Slots Body
   -> (let Reals (mapcan (/. I (shen-jit.real.reads [real real!] I)) Body)
           Words (mapcan (/. I (shen-jit.real.reads [word word!] I)) Body)
-          RealNames (shen-jit.real.by-use (shen-jit.native.add-names Reals []) Reals)
-          WordNames (shen-jit.real.by-use (shen-jit.native.add-names Words []) Words)
+          RealNames (shen-jit.native.add-names Reals [])
+          WordNames (shen-jit.native.add-names Words [])
        (do (map (/. X (if (or (element? X Slots) (element? X WordNames))
                           (simple-error (make-string "native code, ~A: ~R is a register, and is used as something else" Name X))
                           skip))
@@ -935,23 +939,6 @@
   Kinds [K | Ks] [A | As] -> [A | (shen-jit.real.reads-h Kinds Ks As)] where (element? K Kinds)
   Kinds [_ | Ks] [_ | As] -> (shen-jit.real.reads-h Kinds Ks As)
   _ _ _ -> [])
-
-(define shen-jit.real.count
-  _ [] N -> N
-  X [X | Ys] N -> (shen-jit.real.count X Ys (+ N 1))
-  X [_ | Ys] N -> (shen-jit.real.count X Ys N))
-
-(define shen-jit.real.by-use
-  Names All -> (shen-jit.real.sorted (map (/. X [(shen-jit.real.count X All 0) X]) Names) []))
-
-(define shen-jit.real.sorted
-  [] Sorted -> (map (/. P (hd (tl P))) Sorted)
-  [P | Ps] Sorted -> (shen-jit.real.sorted Ps (shen-jit.real.insert P Sorted)))
-
-(define shen-jit.real.insert
-  P [] -> [P]
-  P [Q | Qs] -> [P Q | Qs] where (> (hd P) (hd Q))
-  P [Q | Qs] -> [Q | (shen-jit.real.insert P Qs)])
 
 \\ ---------------------------------------------------------------------------
 \\ Checking and installing.

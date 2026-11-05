@@ -676,7 +676,9 @@ check. `(loop L)` marks the head of a loop and `(again L)` goes back to it, and 
 ```
 
 Every read and store is still checked against its memory's length, and nothing in these loops allocates until
-`return-real` boxes the result. An FNV-1a hash, say, is a loop of wrapping multiplications:
+`return-real` boxes the result. Machine registers go to what the deepest loops use most, whatever the order of the names.
+Nothing is moved out of a loop for you, nor is a repeated expression noticed, so a literal or a conversion that a loop
+uses each time round is worth a name before it, and a value a statement uses twice is worth a name too. An FNV-1a hash, say, is a loop of wrapping multiplications:
 
 ```shen
 (define-native fnv (Bytes End)
