@@ -1258,6 +1258,26 @@ and Prolog comparisons used harnesses and recorded data that are not published: 
 - **Behind both, open, 2026-11-04:** list patterns with several clauses that match (1.19 and 1.25), a nested list pattern's late mismatch
   (1.21 and 1.08), the recursive list rebuild (1.04 and 1.01), `kernel-interpreter` (1.04 and 1.08).
 
+### Shen/Scheme sealed (2026-11-06, Apple M3 Max, 0.54)
+
+Never run until now: every "Sealed / Scheme" above is against its normal mode. `compile --mode sealed` binds calls within one file, so the 14 files of `tests/bench/suite.shen` were joined into one, with `(factorise +)` set while compiling, and run at 10 times the suite's run counts, 2 rounds of 3 samples, best sample, in alternation, load about 2. Results match on every row. Sealing Shen/Scheme gives 0.92 of its normal time over 95 rows, and it is a compile step with a different program unit, where `--seal` needs neither.
+
+| Group | Rows | Scheme sealed / normal | Shen/JIT open / Scheme sealed | Shen/JIT sealed / Scheme sealed |
+| --- | ---: | ---: | ---: | ---: |
+| compile pipeline | 3 | 0.93 | 1.16 | 1.08 |
+| bytecode VM | 2 | 0.68 | 1.36 | 1.43 |
+| data | 22 | 0.92 | 0.47 | 0.47 |
+| control flow | 23 | 0.97 | 0.11 | 0.11 |
+| Shen compilation | 9 | 0.91 | 0.26 | 0.26 |
+| pattern matching | 17 | 0.90 | 0.42 | 0.42 |
+| equality | 19 | 0.90 | 0.35 | 0.36 |
+| all | 95 | 0.92 | 0.30 | 0.30 |
+
+- **`bytecode VM` is where it gains:** depth 9 610 to 413 ms. It is the only group behind by much once both are sealed.
+- **`--seal` makes `bytecode VM` slower on the M3, and not on x86-64.** Alone, 10^6 runs at depth 9, best of 7: M3 open 0.552 to 0.566 s and sealed 0.585 to 0.594, at each of 6 shifts by unrelated definitions; Ryzen 5 5600X VM open 0.852 to 0.861 and sealed 0.828 to 0.842, where sealing gains 2%. It helps `compile pipeline` on the M3, 68 to 62 ms at depth 5. Rejected as a target: nothing is wrong in the code.
+  - **What it is not.** The sealed bytecode is the open one less its guards, and in native code the same sequences, with fewer jumps. Self time by function is the same, and sealing `vm.shen` alone gives all of it, so it is in `exec`. 0 to 12 nops before the loop's aligned body, which run only on entry, move neither mode much, and sealed stays behind at each.
+  - **What moves it.** A taken jump added before each `cons` and each `+`, `-` and `*`, the jumps open code has between its inlined bodies, takes sealed from about 0.590 to 0.572 and open from about 0.555 to 0.581. So it depends on how the M3 fetches or schedules straight-line code that reloads slots stored a few instructions before; which, its counters would have to say. Adding jumps for one machine's sake is not worth it, and sealed stays behind open even so.
+
 ### x86-64 Linux
 
 A Hyper-V VM with 4 cores of a Ryzen 5 5600X, Ubuntu 20.04, gcc 9.4. Against Shen/Scheme 0.52 run alongside on each machine, six
