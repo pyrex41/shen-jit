@@ -37,7 +37,7 @@ PASS handler-in-tail-loop
 PASS handler-returns-closure
 PASS error-non-string
 PASS error-to-string-non-exception (deviation)
-PASS eq-int-real-literal (deviation)
+PASS eq-int-real-literal
 PASS eq-int-real-variables
 PASS eq-signed-zero
 PASS hash-int-real (deviation)
@@ -86,7 +86,7 @@ PASS ctl-and-second-non-boolean
 PASS ctl-or-short-circuit
 PASS ctl-or-second-non-boolean
 PASS ctl-cond
-PASS ctl-cond-no-match (deviation)
+PASS ctl-cond-no-match
 PASS ctl-type
 PASS mut-address
 PASS mut-closure-sees-store

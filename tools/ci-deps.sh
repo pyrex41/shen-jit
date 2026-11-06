@@ -15,7 +15,7 @@ KERNEL=43.4
 KERNEL_SHA256=15e7972e6bf0cd65d37c2eba85750b8839d2dbadda41027eae0c88e5017a2756
 BOOTSTRAP=0.1
 BOOTSTRAP_URL=https://github.com/tizoc/shen-jit/releases/download/v$BOOTSTRAP/shen-jit-$BOOTSTRAP
-SCHEME=0.53
+SCHEME=0.54
 SCHEME_URL=https://github.com/tizoc/shen-scheme/releases/download/v$SCHEME/shen-scheme-v$SCHEME
 
 fetch() { # url, hash, directory
@@ -66,13 +66,13 @@ shen-jit)
 shen-scheme)
     case "$(uname -s)-$(uname -m)" in
     Linux-x86_64)
-        fetch "$SCHEME_URL-linux-x64-bin.tar.gz" 235e03fac3143f5b2a1a3529c27f626d20d9fbc8548dd1729a9afe3f8d45ac4b "$2" ;;
+        fetch "$SCHEME_URL-linux-x64-bin.tar.gz" 4a3805e24ddf7ea1edc8eb78a12ecf80c3ecd7133b9ab98a39e5c015f7f657ef "$2" ;;
     Linux-aarch64)
-        fetch "$SCHEME_URL-linux-arm64-bin.tar.gz" 1ddc812eb6be81a12857c7399f3964e0e9e9d17a2a2a0b2107773805e40f8fd4 "$2" ;;
+        fetch "$SCHEME_URL-linux-arm64-bin.tar.gz" 9b87c8fd5a9997e6221893b88f657fe5438fcfde089ec647d469dd5a472afa7d "$2" ;;
     Darwin-arm64)
-        fetch "$SCHEME_URL-macOS-arm64-bin.tar.gz" e3ce2175c1786a285628dc95558c7ebc9decf1063a55f38d104061f491e53a77 "$2" ;;
+        fetch "$SCHEME_URL-macOS-arm64-bin.tar.gz" 65cc2d42cbcbf7f8149df1a5bfb9614ca3f278bac70bb475f30252bfee22ab19 "$2" ;;
     MINGW*-x86_64 | MSYS*-x86_64)
-        fetch "$SCHEME_URL-windows-x64-bin.zip" a56cd765d9c960f1cdcfc4c5192c14c48e0658fbf113670f7ffe819007a36e68 "$2" ;;
+        fetch "$SCHEME_URL-windows-x64-bin.zip" eb13a40592b620e766763ec5c10af0b9b8558a92feb59af99569576932591fc2 "$2" ;;
     *)
         echo "Shen/Scheme $SCHEME has no release for $(uname -s) $(uname -m)" >&2
         exit 1 ;;
@@ -80,7 +80,7 @@ shen-scheme)
     echo "$2/bin/shen-scheme"
     ;;
 shen-scheme-src)
-    fetch "$SCHEME_URL-src.tar.gz" 3032e3ee0780c58a64780ed842eee9f24e3145e9928b39977261c3aad5c02052 "$2"
+    fetch "$SCHEME_URL-src.tar.gz" 1de4a013690e204c5f3d61abd52f8adf1ecb2d2ebfa6bfdda184b312fd9bd007 "$2"
     echo "$2"
     ;;
 *)

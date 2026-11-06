@@ -94,7 +94,7 @@
     [deviation [error] [value "Exception occurred with non-condition value 1"]]]
 
   \\ Equality and hashing
-  [eq-int-real-literal [= 8 [+ 0.5 7.5]] [deviation [value true] [value false]]]
+  [eq-int-real-literal [= 8 [+ 0.5 7.5]] [value true]]
   [eq-int-real-variables [let x [+ 0.5 7.5] [let y 8 [= x y]]] [value true]]
   [eq-signed-zero [let z [* -1 [+ 0.5 -0.5]] [let w 0.5 [= z [- w w]]]] [value true]]
   [hash-int-real [= [hash 8 1000] [hash [+ 0.5 7.5] 1000]] [deviation [value true] [value false]]]
@@ -149,7 +149,7 @@
   [ctl-or-short-circuit [or true 1] [value true]]
   [ctl-or-second-non-boolean [or false 1] [error]]
   [ctl-cond [cond [false 1] [true 2]] [value 2]]
-  [ctl-cond-no-match [cond [false 1]] [deviation [error] [any]]]
+  [ctl-cond-no-match [cond [false 1]] [error]]
   [ctl-type [type 1 [list a]] [value 1]]
 
   \\ Mutation and globals

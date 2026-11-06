@@ -1,7 +1,7 @@
 # Shen/JIT semantics
 
 The behaviour Shen/JIT implements. The executable [contract examples](../contract/examples.shen) check every rule below that has an observable
-result, and their output under Shen/Scheme is recorded in [contract/shen-scheme-0.53.txt](../contract/shen-scheme-0.53.txt).
+result, and their output under Shen/Scheme is recorded in [contract/shen-scheme-0.54.txt](../contract/shen-scheme-0.54.txt).
 
 Where Shen/JIT deliberately differs from Shen/Scheme, the rule says so and the example is marked as a deviation. Shen/Scheme's behaviour was observed by
 running KLambda through `eval-kl`, not inferred from its source.
@@ -87,10 +87,8 @@ collector copies them with it, and reuses them once it is dead (heap.c).
   operand raises an error.
 - **Equality:** `=` compares numbers by mathematical value, so `(= 8 8.0)` and
   `(= 0.0 -0.0)` are true, and NaN equals no other value, itself included unless
-  both sides are the same object. *Deviation:* Shen/Scheme
-  compiles `=` against a numeric literal to `eqv?`, so `(= 8.0 8)` with a
-  computed real is false there, and its `hash` gives 8 and 8.0 different
-  values.
+  both sides are the same object. *Deviation:* Shen/Scheme's `hash` gives 8 and
+  8.0 different values.
 - **Literals** are computed by the kernel reader with integer arithmetic
   (`shen.compute-integer`, and `shen.expt` for exponents), so a literal beyond
   the fixnum range, such as `1e300`, would overflow. Small overrides of
@@ -187,8 +185,7 @@ error; a non-symbol raises an error.
 - `if`, `cond`, `and` and `or` require Boolean conditions and raise an error
   otherwise. `and` and `or` short-circuit, and the second operand must also be
   a Boolean, as in Shen/Scheme.
-- `cond` with no true clause raises an error. *Deviation:* Shen/Scheme returns
-  an unspecified value.
+- `cond` with no true clause raises an error.
 - `let` binds one variable; `lambda` takes exactly one parameter; `freeze`
   creates a thunk; `type` returns its first argument and does not evaluate the
   second.
