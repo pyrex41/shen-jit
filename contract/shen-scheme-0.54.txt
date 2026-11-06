@@ -57,6 +57,7 @@ PASS num-divide-exact-integer
 PASS num-divide-inexact
 PASS num-divide-zero
 PASS num-divide-real-zero
+PASS num-divide-by-real-zero (deviation)
 PASS num-overflow-add (deviation)
 PASS num-overflow-multiply (deviation)
 PASS num-non-number
@@ -156,4 +157,4 @@ PASS seal-redefine-kernel (deviation)
 PASS seal-open-call (deviation)
 PASS seal-kernel-call
 
-157 passed, 0 failed (shen-scheme)
+158 passed, 0 failed (shen-scheme)

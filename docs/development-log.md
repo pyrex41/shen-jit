@@ -886,6 +886,33 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
 - **Found in its tests:** the first "typed code" test checked nothing. `load` decides whether to type check when it starts, so
   `(tc +)` inside a file does not apply to the rest of it.
 
+### Differential testing of the primitives (2026-11-06, Apple M3 Max)
+
+Nobody had tried it, and an outside report had just found bugs past 1,062 eval cases. `tests/differential.shen` runs 73
+primitives over 107 values, with up to 18 ways to compile a call: constants, captures, a function value, a loop, handlers, as a
+branch's test, after a type test. `SHEN_JIT_SLOW_PRIMS` sends every primitive to `sj_primitive`, a few lines in the JIT,
+and the results must match; under it the 1,062 eval cases, the 154 of the kernel and the 157 contract examples pass.
+Then properties: `=` an equivalence that `hash` respects, the comparisons agreeing, and so on. 10.6 million checks, about 25 s.
+
+- **Found, in the first full run:** `absvector` at the heap limit gave handlers `[]`, as the C case returned without
+  raising, which `cons` also did there. A length from 2^56 lost its top bits in the header, a crash, in `absvector` and
+  `filled-vector`. `pvar` and `pvar-offset` count as allowed under a handler that is never pushed, and their errors went past it.
+  All three in paths the eval cases never took. Compiled code and C otherwise agreed on every check, on arm64 and
+  on x86-64 under Rosetta, whose results differ only in NaN's sign, and under `SHEN_JIT_GC_STRESS=1000`.
+- **Does it notice?** Planted: inline `<=` as `<`, `hd` without its jump to a quiet handler, and the 2^53 bug in `=`
+  (compared as doubles). All three failed, the last as "`=` is not transitive" and a differing hash, with nobody having
+  chosen those values.
+- **Against Shen/Scheme 0.54** (`make differential-scheme`, a report, as either may be wrong). The comparisons, `pos`, `<-address`,
+  `address->`, `cn` and the type tests match. Left: bignums against `integer overflow`, how numbers and opaque values print, `hash`.
+  Also `(/ 1 r)` with a real zero, an infinity there and an error here, which the semantics wrongly gave as the same,
+  now a contract deviation; `(* 0 r)` is an exact 0 there, as in Chez, even for an infinity or NaN, and a real here; and `(+ 0 -0.0)` is
+  -0.0 there. Its reader makes `1e200` an exact integer, so a value meant to be NaN or an infinity must be built from a real, or the differences are in the test: `(= 0 nan)` looked true there at first for that reason.
+- **Left as it is: integer division past 2^53.** Both operands round to doubles first, so `(/ 9007199254740992 9007199254740993)` gives
+  1.0, where Shen/Scheme gives the nearest double, 0.9999999999999999. Comparisons are exact because `=` broke without it; a
+  quotient 1 unit in the last place off breaks nothing that was found, and exact division needs 128-bit arithmetic.
+- **Not covered:** what needs a whole program around a call, as generated calls don't reach register allocation across a long function, and `copy-bytes`, with five
+  arguments, and the pointers.
+
 ### The REPL and small decisions
 
 - **End of input ends the process, status 0 (2026-11-01).** The kernel's REPL, and so Shen/Scheme, prints "empty stream" at every

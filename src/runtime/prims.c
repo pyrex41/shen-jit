@@ -1532,18 +1532,21 @@ V sj_primitive(VM *vm, size_t index)
         return comparison(vm, (unsigned)index, a, b);
     case P_EQ: return boolean(sj_equal(a, b));
     case P_NUMBERP: return boolean(is_number(a));
-    case P_CONS: return make_pair(vm, a, b);
+    case P_CONS: {
+        V pair = make_pair(vm, a, b);
+        return pair == V_CLEARED ? sj_raise(vm, "out of memory") : pair;
+    }
     case P_HD: return is_pair(a) ? ptr(a)[0] : sj_raise_value(vm, "hd: ~S is not a pair", a);
     case P_TL: return is_pair(a) ? ptr(a)[1] : sj_raise_value(vm, "tl: ~S is not a pair", a);
     case P_CONSP: return boolean(is_pair(a));
     case P_STRINGP: return boolean(is_type(a, T_STRING));
     case P_ABSVECTOR:
-        if (!is_fix(a) || fixval(a) < 0)
+        if (!is_fix(a) || fixval(a) < 0 || fixval(a) >> 48)
             return sj_raise_value(vm, "absvector: ~S is not a valid length", a);
         else {
             V fail = fail_symbol(vm);
-            return fail == V_CLEARED ? sj_raise(vm, "out of memory")
-                                     : make_vector(vm, (size_t)fixval(vm->args[0]), fail);
+            V v = fail == V_CLEARED ? V_CLEARED : make_vector(vm, (size_t)fixval(vm->args[0]), fail);
+            return v == V_CLEARED ? sj_raise(vm, "out of memory") : v;
         }
     case P_ABSVECTORP: return boolean(is_type(a, T_VECTOR));
     case P_GET_ADDRESS:
@@ -1694,7 +1697,7 @@ V sj_primitive(VM *vm, size_t index)
     case P_DICT_REMOVE: return sj_dict_remove(vm);
     case P_DICT_ENTRIES: return sj_dict_entries(vm);
     case P_FILLED_VECTOR:
-        if (!is_fix(a) || fixval(a) < 0)
+        if (!is_fix(a) || fixval(a) < 0 || fixval(a) >> 48)
             return sj_raise_value(vm, "shen-jit.filled-vector: ~S is not a valid length", a);
         else {
             V v = make_vector(vm, (size_t)fixval(a), b);

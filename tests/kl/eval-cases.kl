@@ -1078,3 +1078,8 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value (one two) (ic-i true b))
 (value "8.0" (str (hd (tl ((eval-kl (cons lambda (cons Y (cons (cons cons (cons 8 (cons (cons cons (cons (+ 0.5 7.5) (cons Y ()))) ()))) ())))) ())))))
 (value "8" (str (hd (tl ((eval-kl (cons lambda (cons Y (cons (cons cons (cons (+ 0.5 7.5) (cons (cons cons (cons 8 (cons Y ()))) ()))) ())))) ())))))
+(error "absvector: " (absvector 72057594037927936))
+(error "absvector: " (absvector 2305843009213693951))
+(error "shen-jit.filled-vector: " (shen-jit.filled-vector 72057594037927936 0))
+(value none (trap-error (shen-jit.pvar-offset 0) (lambda E none)))
+(value none (trap-error (shen-jit.pvar -1) (lambda E none)))

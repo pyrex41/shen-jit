@@ -884,6 +884,10 @@ static Slow *slow_path(Emit *e, SlowKind kind, struct sljit_jump *from)
 
 static bool reads_slot(const uint32_t *p, uint32_t s);
 static bool writes_slot(const uint32_t *p, uint32_t s);
+/* SHEN_JIT_SLOW_PRIMS sends every primitive to C, so that make test-differential can compare
+   what the JIT inlines with sj_primitive. */
+static bool slow_prims;
+
 static bool fusable(uint32_t prim);
 
 /* A tail call to the running code reuses the frame as it is, so it can skip
@@ -1287,7 +1291,7 @@ static bool dead_store(const Emit *e, uint32_t dst)
 {
     const uint32_t *w = e->words;
     size_t n = e->nwords, i = e->next;
-    if (slot_kind(e, dst) != SLJIT_MEM1(FP) || i >= n)
+    if (slow_prims || slot_kind(e, dst) != SLJIT_MEM1(FP) || i >= n)
         return false;
     const uint32_t *test = w + i, *branch = test + insn_length(test);
     if (test[0] != OP_PRIM || (size_t)(branch - w) >= n || branch[0] != OP_JUMP_IF_FALSE ||
@@ -2118,6 +2122,12 @@ static void emit_prim(Emit *e, const uint32_t *p)
     Slow *slow = NULL;
     struct sljit_label *restart = sljit_emit_label(c);
 
+    if (slow_prims) {
+        slow = slow_path(e, SLOW_PRIM, sljit_emit_jump(c, SLJIT_JUMP));
+        slow->insn = p;
+        slow->back = sljit_emit_label(c);
+        return;
+    }
     switch (prim) {
     case P_ADD:
     case P_SUB:
@@ -2579,6 +2589,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
         sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM((sljit_sw)~(PVAR_MAX_OFFSET << 2)));
         slow = slow_path(e, SLOW_PRIM, sljit_emit_jump(c, SLJIT_NOT_ZERO));
+        slow->catch_label = quiet_catch(e); /* C raises wherever this fails */
         sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(6));
         sljit_emit_op2(c, SLJIT_OR, R0, R0, IMM(PVAR_TAG));
         store_result(e, dst);
@@ -2587,6 +2598,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
         sljit_emit_op2(c, SLJIT_AND, R1, R0, IMM(0xFF));
         slow = slow_path(e, SLOW_PRIM, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(PVAR_TAG)));
+        slow->catch_label = quiet_catch(e); /* C raises wherever this fails */
         sljit_emit_op2(c, SLJIT_LSHR, R0, R0, IMM(8));
         sljit_emit_op2(c, SLJIT_SHL, R0, R0, IMM(2));
         store_result(e, dst);
@@ -2777,8 +2789,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
    testing a Boolean. */
 static bool fusable(uint32_t prim)
 {
-    return prim == P_LT || prim == P_GT || prim == P_LE || prim == P_GE ||
-           prim == P_EQ || prim == P_VECTORP || prim == P_ARITYP || prim == P_INLINEDP || type_test(prim);
+    return !slow_prims && (prim == P_LT || prim == P_GT || prim == P_LE || prim == P_GE ||
+           prim == P_EQ || prim == P_VECTORP || prim == P_ARITYP || prim == P_INLINEDP || type_test(prim));
 }
 
 /* An exit test: = with a constant, fused with its branch, whose true branch
@@ -3035,8 +3047,8 @@ static void emit_slow_paths(Emit *e)
                 break;
             }
             struct sljit_jump *differ[3] = {NULL, NULL, NULL}, *same[2] = {NULL, NULL};
-            bool compare = p[2] == P_LT || p[2] == P_GT || p[2] == P_LE || p[2] == P_GE;
-            if (compare || p[2] == P_ADD || p[2] == P_SUB || p[2] == P_MUL || p[2] == P_DIV) {
+            bool compare = !slow_prims && (p[2] == P_LT || p[2] == P_GT || p[2] == P_LE || p[2] == P_GE);
+            if (compare || (!slow_prims && (p[2] == P_ADD || p[2] == P_SUB || p[2] == P_MUL || p[2] == P_DIV))) {
                 /* With a real among the operands, the work is done here. What is left is for
                    the dispatcher: what is not a number, division by zero, no room for the
                    result, two fixnums, which overflowed or divide exactly, and comparing a
@@ -3076,7 +3088,7 @@ static void emit_slow_paths(Emit *e)
                 for (int j = 0; j < 9; j++)
                     sljit_set_label(other[j], dispatch);
             }
-            if (p[2] == P_EQ && (fixnum_operand(e, p[4]) || fixnum_operand(e, p[5]))) {
+            if (!slow_prims && p[2] == P_EQ && (fixnum_operand(e, p[4]) || fixnum_operand(e, p[5]))) {
                 /* Against a fixnum constant the value here is an object,
                    which can be equal only as a real. */
                 uint32_t k = fixnum_operand(e, p[4]) ? 0 : 1;
@@ -3092,7 +3104,7 @@ static void emit_slow_paths(Emit *e)
                 }
                 sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, p[4 + k]));
                 call_leaf(e, SLJIT_ARGS2(W, W, W), (void *)h_equal);
-            } else if (p[2] == P_EQ) {
+            } else if (!slow_prims && p[2] == P_EQ) {
                 /* Before calling C: two objects with different headers
                    (types or lengths), or a fixnum and an object that is not
                    a real, are not equal. Here the values are two pairs, two
@@ -3620,7 +3632,7 @@ static void *compile_code(VM *vm, V code)
             const uint32_t *h = words + label_pos[p[1]];
             h += insn_length(h);
             size_t quiet = h >= words + nwords || h[0] != OP_EXCEPTION;
-            if (quiet && virtual_handler(words, i, nwords, label_pos)) {
+            if (quiet && !slow_prims && virtual_handler(words, i, nwords, label_pos)) {
                 e.handlers[e.nhandlers++] = p[1] | VIRTUAL;
                 e.at_label[p[1]].seen = true;
                 e.at_label[p[1]].cached = NONE; /* reached by jumps from slow paths */
@@ -3891,6 +3903,7 @@ void jit_attach(VM *vm, Jit *jit)
         snprintf(path, sizeof path, "/tmp/perf-%d.map", (int)getpid());
         jit->perf_map = fopen(path, "w");
     }
+    slow_prims = getenv("SHEN_JIT_SLOW_PRIMS") != NULL;
     vm->jit = jit;
     vm->compile_stub = jit->compile;
     vm->foreign_stub = jit->foreign;

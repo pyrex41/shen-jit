@@ -15,6 +15,12 @@ All notable changes to this project are documented in this file. The format is b
 
 - `define` no longer fails on a `cond` with no true clause. The definition compiles, and raises an error when no
   clause applies.
+- `absvector` too large for `SHEN_JIT_MAX_HEAP` gave a handler `[]`, on which `error-to-string` failed, instead of
+  an "out of memory" error.
+- `absvector` and `shen-jit.filled-vector` with a length of 2^56 or more crashed. They now raise an error from 2^48
+  up, as `shen-jit.bytes` does.
+- `shen-jit.pvar` and `shen-jit.pvar-offset` raised past a `trap-error` in the same function whose handler ignores
+  the error.
 - Compiling a long literal list of numbers takes far less: 4000 elements about a tenth of what it did.
 
 ## [0.3] - 2026-11-06

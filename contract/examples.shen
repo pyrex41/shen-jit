@@ -116,6 +116,7 @@
   [num-divide-inexact [/ 5 2] [value 2.5]]
   [num-divide-zero [/ 1 0] [error]]
   [num-divide-real-zero [/ [+ 0.5 0.5] 0] [error]]
+  [num-divide-by-real-zero [/ 1 [+ 0.5 -0.5]] [deviation [error] [value [let b [* [+ 0.5 0.5] 1e200] [* b b]]]]]
   [num-overflow-add [+ 2305843009213693951 1] [deviation [error] [value 2305843009213693952]]]
   [num-overflow-multiply [* 2305843009213693951 2] [deviation [error] [value 4611686018427387902]]]
   [num-non-number [+ 1 a] [error]]

@@ -319,6 +319,10 @@ printf '(define mk N Acc -> (if (= N 0) Acc (mk (- N 1) [N | Acc])))\n(trap-erro
 SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" < "$dir/heap.in" > "$dir/heap.out" 2>&1
 check heap-limit "$dir/heap.out" '(1-) "out of memory"'
 check heap-after "$dir/heap.out" "(2-) 100000"
+# So does a single vector too large for the limit, with an exception for the handler to read.
+printf '(trap-error (absvector 100000000) (/. E (error-to-string E)))\n' > "$dir/big.in"
+SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" < "$dir/big.in" > "$dir/big.out" 2>&1
+check heap-limit-vector "$dir/big.out" '(0-) "out of memory"'
 # SHEN_JIT_SEMISPACE: where each semispace starts, or what the image needs if
 # that is more. It still grows, and SHEN_JIT_MAX_HEAP can now be below 32 MB.
 SHEN_JIT_GC_STRESS= SHEN_JIT_STATS=1 SHEN_JIT_SEMISPACE=8M "$SHEN" eval -e '(+ 1 2)' > "$dir/semi.out" 2>&1
