@@ -597,8 +597,8 @@ typedef struct {
     uint32_t cached, post;
     /* Two more registers the same way, for code that keeps no slots in registers and has no raw
        values: the slot each holds before this instruction and after it, or NONE. Slots are still
-       written, as for CACHE. A label or a call drops them. A slow path that may have collected loads
-       them again, and reads operands from their slots. */
+       written, as for CACHE. A label keeps what all the ways into it agree on, and a call drops them. A
+       slow path that may have collected loads them again, and reads operands from their slots. */
     uint32_t kept[KEPT], kept_post[KEPT];
     bool keeps;
     /* Callers leave the first argument in CACHE too; the body starts with
@@ -622,6 +622,7 @@ typedef struct {
     struct {
         bool seen;
         uint32_t cached;
+        uint32_t kept[KEPT];
         uint64_t pairs;
     } *at_label;
     const size_t *label_pos; /* each label's offset in the bytecode */
@@ -695,9 +696,14 @@ static void reach_label(Emit *e, uint32_t label)
         e->at_label[label].seen = true;
         e->at_label[label].cached = e->cached;
         e->at_label[label].pairs = e->pairs;
+        for (int k = 0; k < KEPT; k++)
+            e->at_label[label].kept[k] = e->kept[k];
     } else {
         if (e->at_label[label].cached != e->cached)
             e->at_label[label].cached = NONE;
+        for (int k = 0; k < KEPT; k++)
+            if (e->at_label[label].kept[k] != e->kept[k])
+                e->at_label[label].kept[k] = NONE;
         e->at_label[label].pairs &= e->pairs;
     }
 }
@@ -715,6 +721,9 @@ static void load_for_label(Emit *e, uint32_t label)
 {
     if (e->at_label[label].cached != NONE)
         sljit_emit_op1(e->c, SLJIT_MOV, CACHE, SLJIT_MEM1(FP), (sljit_sw)e->at_label[label].cached * WORD);
+    for (int k = 0; k < KEPT; k++)
+        if (e->at_label[label].kept[k] != NONE)
+            sljit_emit_op1(e->c, SLJIT_MOV, KEPT_REG(k), 0, SLJIT_MEM1(FP), (sljit_sw)e->at_label[label].kept[k] * WORD);
 }
 
 static void to_unwind(Emit *e, struct sljit_jump *jump)
@@ -1285,7 +1294,7 @@ static bool read_soon(const Emit *e, uint32_t s, bool past_branches)
 static bool read_later(const Emit *e, uint32_t s)
 {
     size_t j = e->next;
-    for (int k = 0; k < 8 && j < e->nwords; k++, j += insn_length(e->words + j)) {
+    for (int k = 0; k < 8 && j < e->nwords; k++) {
         const uint32_t *q = e->words + j;
         bool operand = q[0] == OP_MOVE || q[0] == OP_PRIM || q[0] == OP_JUMP_IF_FALSE || q[0] == OP_RETURN;
         if (operand && reads_slot(q, s))
@@ -1293,6 +1302,7 @@ static bool read_later(const Emit *e, uint32_t s)
         if (writes_slot(q, s) || !(q[0] == OP_MOVE || q[0] == OP_CONST || q[0] == OP_PRIM || q[0] == OP_JUMP_IF_FALSE ||
                                    q[0] == OP_POP_HANDLER || q[0] == OP_INLINE))
             return false;
+        j += insn_length(q);
     }
     return false;
 }
@@ -3646,6 +3656,8 @@ static void *compile_code(VM *vm, V code)
             if (falls)
                 reach_label(&e, p[1]);
             e.post = e.at_label[p[1]].seen ? e.at_label[p[1]].cached : NONE;
+            for (int k = 0; k < KEPT; k++)
+                e.kept_post[k] = e.at_label[p[1]].seen ? e.at_label[p[1]].kept[k] : NONE;
             break;
         case OP_JUMP:
             to_label(&e, sljit_emit_jump(c, SLJIT_JUMP), p[1]);
@@ -3711,6 +3723,7 @@ static void *compile_code(VM *vm, V code)
                 e.handlers[e.nhandlers++] = p[1] | VIRTUAL;
                 e.at_label[p[1]].seen = true;
                 e.at_label[p[1]].cached = NONE; /* reached by jumps from slow paths */
+                e.at_label[p[1]].kept[0] = e.at_label[p[1]].kept[1] = NONE;
                 e.at_label[p[1]].pairs = 0;
                 break;
             }
@@ -3728,6 +3741,7 @@ static void *compile_code(VM *vm, V code)
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), offsetof(Handler, fp_offset), R1);
             to_label(&e, sljit_emit_op_addr(c, SLJIT_MOV_ADDR, R1), p[1]);
             e.at_label[p[1]].cached = NONE; /* reached by unwinding */
+            e.at_label[p[1]].kept[0] = e.at_label[p[1]].kept[1] = NONE;
             e.at_label[p[1]].pairs = 0;
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), offsetof(Handler, catch_addr), R1);
             struct sljit_jump *done = sljit_emit_jump(c, SLJIT_JUMP);

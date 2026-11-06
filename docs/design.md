@@ -140,8 +140,8 @@ Some refinements are built on that:
   valid and the collector never sees a stale pointer.
 - **Two more registers hold results read again soon.** Code with no slots in registers and no raw values keeps up to two
   slots besides CACHE's, when an instruction a little further on reads them, or when CACHE is about to change. Each is still
-  written to its slot, so the collector and the slow paths see nothing new. A label or a call drops them, and a slow
-  path that may have collected loads them again before going back.
+  written to its slot, so the collector and the slow paths see nothing new. A label keeps what all the ways into it agree on,
+  a call drops them, and a slow path that may have collected loads them again before going back.
 - **Loops exit out of line.** A test that ends a loop, an `=` with a constant whose true branch only returns, jumps
   to a return placed with the slow paths, so a turn of the loop takes one jump, back, instead of two.
 - **Small functions are inlined,** by the lowerer, sealed or open. An open one sits behind a test of the callee's

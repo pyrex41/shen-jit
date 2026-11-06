@@ -163,6 +163,12 @@ Lowering rules, the collector and the kernel port have their own sections.
   - **Slower rows, on the Ryzen.** `match list (single clause, not matching)` 1.33 is placement: its hot path is the same instructions, and with the code moved by nops that run only on entry it reads 64.8 or 86.4 ms by offset, 64.8 before. `shen.<-dict` with a missing key 12.5 to about 13.4 ms, 12.7 to 13.9 by offset, may be a small real cost on a path that raises.
   - **Two bugs on the way, which the eval cases caught at once.** A result loaded through a kept register that CACHE was about to move into, and a call's result moving CACHE, which by then is the callee's. Passed after: fast tier, `make test-differential` also under `SHEN_JIT_GC_STRESS=1000`, the stress suites, `make test-x86`.
 
+- **Kept registers across labels** (2026-11-06, Apple M3 Max and Ryzen 5 5600X VM, A/B against the commit before, alternating). A label keeps what all the ways into it agree on, as CACHE does, instead of dropping them.
+  - **Alone.** `bytecode VM` depth 9: M3 open 0.536 to 0.516 s, sealed 0.532 to 0.494, so sealed now leads open as it should; Ryzen open 0.777 to 0.739, sealed 0.766 to 0.722. `compile pipeline` depth 7, M3: open 0.1307 to 0.1293, sealed 0.1288 to 0.1256.
+  - **Suite.** M3, 3 rounds: 1.00 open and sealed, VM 0.98 and 0.95, pipeline 1.00, results the same. Ryzen, 2 rounds: 0.99, VM 0.96, pipeline 0.96. Independent: M3 0.93 to 1.02, the kernel suite 1.00; Ryzen 0.96 to 1.02, the kernel suite 1.00, THORN 1.01 to 1.02.
+  - **Rejected: reading past labels and jumps too, when deciding what to keep.** More to choose from, but no better alone (VM sealed 0.500 against 0.494, pipeline sealed 0.1273 against 0.1256), and in the suite on the M3 `compile pipeline` read 1.04 open and 1.06 sealed, which alone it did not.
+  - **Against Shen/Scheme 0.54, normal mode, after this.** Ryzen: `bytecode VM` 0.91, from 1.05 before these two changes, and `compile pipeline` 1.05. M3, before this one: `bytecode VM` 0.88 and `compile pipeline` 1.06.
+
 ### Branch shapes and code placement
 
 - **Comparisons fused with branches** (2026-11-01, M3 Max). With other changes, `fib` 30 6.0 to 5.2 ms. Fused only
