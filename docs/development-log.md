@@ -352,6 +352,12 @@ Nothing in the runtime changes for it alone.
   kernel-suite runs in one process, before, with the fix and with the table: symbols 86.4K, 61.1K, 16.5K; live heap 12.1, 9.3,
   6.7 MB; time collecting 22.8%, 19.2%, 15.7%; longest pause 10.2, 4.5, 3.2 ms. It keeps symbols with a value or function, or
   called by name from compiled code, which holds only a cell index.
+- **Free cells leave the array that collections walk** (2026-11-05, M3 Max, load 2 to 3, against the build before). After 10M `gensym`s, 1,544 symbols were alive and the array had 511,952 cells, walked by every
+  collection for the rest of the process: 150 to 1,400 us each, about 2.4 ns a cell, up to what one 32 MB cycle can make. Every cell in use has a symbol in the table, so those above the last one kept now leave it. 12 lines. Back to 150 us, and `gensym` itself no slower.
+  A name made during a burst, before its collection, keeps the array that long while it lives: at 101,550 cells 430 to 510 us, against 1,400 to 1,500. Real workloads do not reach this: cells are 1.1 to 1.3 times live symbols on the kernel suite, extension tests, stlib install and
+  realistic programs, and workloads never used for tuning read 0.92 to 1.01. So it removes a trap and gains nothing on them.
+  - **A bug on the way:** `intern_name` took a cell and then allocated, and a collection there trimmed the array below a cell whose symbol was not yet in the table, so the next new symbol got the same one. `save-exe-stress` caught it. The cell is now taken after the allocation.
+  - **Rejected: the lowest free cell first,** a bitmap in place of the list, about 30 lines. The same on every row tried, as a trim leaves few holes, and a name made during a burst keeps the array either way.
 - **A bug this allows** (2026-11-04). `save-executable` interned a symbol and kept only its cell across more allocation. A
   collection freed both, and the saved binary ran as the launcher. It showed at stress 1 and 10, and at 1000 on a release
   build.

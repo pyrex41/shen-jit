@@ -595,6 +595,7 @@ static void sweep_symbols(VM *vm, Copy *c)
     t[0] = HEADER(T_VECTOR, m);
     for (size_t i = 0; i < m; i++)
         t[1 + i] = V_NIL;
+    size_t top = 0; /* one past the highest cell kept */
     for (size_t k = 0; k < n; k++) {
         V s = old[1 + (start + k) % n];
         if (s == V_NIL)
@@ -611,11 +612,22 @@ static void sweep_symbols(VM *vm, Copy *c)
             vm->free_cells[vm->nfree_cells++] = symbol_cell(s);
             continue;
         }
+        if (symbol_cell(s) >= top)
+            top = symbol_cell(s) + 1;
         size_t j = ptr(s)[SYM_HASH] & (m - 1);
         while (t[1 + j] != V_NIL)
             j = (j + 1) & (m - 1);
         t[1 + j] = s;
     }
+    /* Every cell in use has a symbol in the table, so those above the last one kept are free, and
+       they leave the array: every collection walks it, and a burst of new symbols would
+       otherwise slow them all for good. */
+    size_t free_kept = 0;
+    for (size_t i = 0; i < vm->nfree_cells; i++)
+        if (vm->free_cells[i] < top)
+            vm->free_cells[free_kept++] = vm->free_cells[i];
+    vm->nfree_cells = free_kept;
+    vm->cells.count = 2 * top;
     uint64_t *mark = c->next;
     for (size_t i = 0; i < m; i++)
         if (in_from(c, t[1 + i]))

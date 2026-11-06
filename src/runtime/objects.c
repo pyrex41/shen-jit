@@ -287,15 +287,17 @@ static V intern_name(VM *vm, V name)
     if (*slot != V_NIL)
         return *slot;
 
-    size_t cell, cell2;
-    if (vm->nfree_cells)
-        cell = 2 * vm->free_cells[--vm->nfree_cells]; /* both entries are cleared */
-    else if (!ra_push(&vm->cells, V_CLEARED, &cell) || !ra_push(&vm->cells, V_CLEARED, &cell2))
-        return FAILED;
     vm_root(vm, &name);
     uint64_t *p = vm_alloc(vm, SYM_WORDS);
     vm_unroot(vm, 1);
     if (!p)
+        return FAILED;
+    /* After the allocation: a collection frees the cells of symbols not in the table,
+       and this one is not in it yet. */
+    size_t cell, cell2;
+    if (vm->nfree_cells)
+        cell = 2 * vm->free_cells[--vm->nfree_cells]; /* both entries are cleared */
+    else if (!ra_push(&vm->cells, V_CLEARED, &cell) || !ra_push(&vm->cells, V_CLEARED, &cell2))
         return FAILED;
     p[0] = HEADER(T_SYMBOL, 0);
     p[SYM_NAME] = name;

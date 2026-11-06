@@ -205,7 +205,7 @@ collection copies at most a word for every four allocated. With its own area the
   copied, the pairs of its tail are copied right after it.
 - **Large objects:** vectors and strings of 32K words or more are allocated apart and never copied. Collections mark
   them, scan them in place and free the dead ones.
-- **Weak things:** the intern table holds symbols weakly, and symbols nothing needs are dropped; streams nothing reaches are closed; the
+- **Weak things:** the intern table holds symbols weakly, and symbols nothing needs are dropped, their global cells reused, and those above the last one kept taken out of the array that collections walk; streams nothing reaches are closed; the
   constant slots of dead code are reused; and a guarded pointer nothing reaches has its value put on a list for Shen. That value is a root until then, so nothing has to come back
   from the dead, and what one value uses outlasts it. The list's pair takes less to-space than the pointer, which is not copied, leaves free.
 - **Repeated pointers** are skipped while scanning, which matters for the Prolog engine's big vectors.

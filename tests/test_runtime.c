@@ -285,6 +285,63 @@ static void test_symbols(void)
     vm_destroy(vm);
 }
 
+/* Cells above the last one kept leave the array, which every collection walks. A name kept above
+   dead ones holds them in it, for new symbols to reuse. */
+static void test_symbol_cells_trimmed(void)
+{
+    VM *vm = vm_create(1 << 20, 1024);
+    V *s = slots(vm, 1);
+    s[0] = intern_cstr(vm, "kept");
+    vm_collect(vm, 0);
+    size_t base = vm->cells.count;
+    char name[32];
+    for (int i = 0; i < 5000; i++) {
+        snprintf(name, sizeof name, "dies-%d", i);
+        intern_cstr(vm, name);
+    }
+    CHECK(vm->cells.count == base + 2 * 5000);
+    vm_collect(vm, 0);
+    CHECK(vm->cells.count == base);
+    CHECK(vm->nfree_cells == 0);
+    CHECK(intern_cstr(vm, "kept") == s[0]);
+    for (int i = 0; i < 5000; i++) {
+        snprintf(name, sizeof name, "dies-%d", i);
+        intern_cstr(vm, name);
+    }
+    V high = intern_cstr(vm, "high");
+    size_t cell = symbol_cell(high);
+    CHECK(2 * cell >= base + 2 * 5000);
+    *cell_value(vm, cell) = fix(7);
+    vm_collect(vm, 0);
+    CHECK(vm->cells.count == 2 * (cell + 1));
+    CHECK(vm->nfree_cells == 5000);
+    CHECK(*cell_value(vm, symbol_cell(intern_cstr(vm, "high"))) == fix(7));
+    V reused = intern_cstr(vm, "reused");
+    CHECK(symbol_cell(reused) < cell);
+    CHECK(*cell_value(vm, symbol_cell(reused)) == V_CLEARED);
+    vm_destroy(vm);
+}
+
+/* A collection while a symbol is being made leaves its cell its own. The names exist already, as
+   an allocation between the two symbols would repair the array, and there are no free cells. */
+static void test_symbol_cell_while_collecting(void)
+{
+    VM *vm = vm_create(1 << 20, 1024);
+    V *s = slots(vm, 2);
+    s[0] = make_string(vm, "stress-a", 8);
+    s[1] = make_string(vm, "stress-b", 8);
+    vm_collect(vm, 0);
+    CHECK(vm->nfree_cells == 0);
+    vm->stress = 1;
+    size_t a = symbol_cell(intern_string(vm, s[0]));
+    *cell_value(vm, a) = fix(1);
+    size_t b = symbol_cell(intern_string(vm, s[1]));
+    *cell_value(vm, b) = fix(2);
+    CHECK(a != b);
+    CHECK(*cell_value(vm, a) == fix(1));
+    vm_destroy(vm);
+}
+
 static bool same_file(const char *a, const char *b)
 {
     FILE *fa = fopen(a, "rb"), *fb = fopen(b, "rb");
@@ -434,6 +491,8 @@ int main(void)
     test_clear_above_top();
     test_stack_growth();
     test_symbols();
+    test_symbol_cells_trimmed();
+    test_symbol_cell_while_collecting();
     test_image_round_trip();
     if (failures) {
         fprintf(stderr, "%d check(s) failed\n", failures);
