@@ -272,6 +272,25 @@ static bool distinct_atoms(V a, V b)
     return (!is_ptr(a) || is_symbol(a)) && (!is_ptr(b) || is_symbol(b));
 }
 
+/* Where fixnum i lies against real d, exactly: a double cannot hold every
+   fixnum from 2^53 up, so converting i would round it. -1, 0 or 1, as i is
+   below, equal to or above d, and 2 if d is NaN. The truncated part of a d in
+   range is exact, and what it drops, if anything, says which way a tie goes. */
+static int compare_fix_real(int64_t i, double d)
+{
+    if (d != d)
+        return 2;
+    if (d >= 0x1p63)
+        return -1;
+    if (d < -0x1p63)
+        return 1;
+    int64_t t = (int64_t)d;
+    if (i != t)
+        return i < t ? -1 : 1;
+    double rest = d - (double)t;
+    return rest > 0 ? -1 : rest < 0 ? 1 : 0;
+}
+
 /* = (docs/semantics.md, section 6). Lists are walked along their tails, and a
    head identical to the other is not compared further, nor are two distinct
    atoms. Strings compare whole words: equal headers mean equal lengths, and
@@ -292,7 +311,9 @@ bool sj_equal(V a, V b)
             continue;
         }
         if (is_number(a) && is_number(b))
-            return !(is_fix(a) && is_fix(b)) && number(a) == number(b);
+            return is_fix(a) ? is_real(b) && compare_fix_real(fixval(a), real_value(b)) == 0
+                   : is_fix(b) ? compare_fix_real(fixval(b), real_value(a)) == 0
+                               : real_value(a) == real_value(b);
         if ((is_type(a, T_STRING) && is_type(b, T_STRING)) || (is_type(a, T_BYTES) && is_type(b, T_BYTES))) {
             if (ptr(a)[0] != ptr(b)[0])
                 return false;
@@ -360,12 +381,19 @@ static V comparison(VM *vm, unsigned prim, V a, V b)
         return sj_raise_value(vm, "~S is not a number", a);
     if (!is_number(b))
         return sj_raise_value(vm, "~S is not a number", b);
-    /* Fixnums compare exactly; anything else compares as doubles. */
-    int64_t ix = is_fix(a) ? fixval(a) : 0, iy = is_fix(b) ? fixval(b) : 0;
-    double x = number(a), y = number(b);
+    /* Reduced to a comparison of doubles that is exact, and false for NaN. */
+    double x, y = 0;
     if (is_fix(a) && is_fix(b)) {
-        x = (double)((ix > iy) - (ix < iy));
-        y = 0;
+        x = (double)((fixval(a) > fixval(b)) - (fixval(a) < fixval(b)));
+    } else if (is_fix(a)) {
+        int order = compare_fix_real(fixval(a), real_value(b));
+        x = order == 2 ? NAN : order;
+    } else if (is_fix(b)) {
+        int order = compare_fix_real(fixval(b), real_value(a));
+        x = order == 2 ? NAN : -order;
+    } else {
+        x = real_value(a);
+        y = real_value(b);
     }
     switch (prim) {
     case P_LT: return boolean(x < y);

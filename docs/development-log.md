@@ -215,6 +215,13 @@ Lowering rules, the collector and the kernel port have their own sections.
 - **`=` on two variables** (2026-11-03, M3 Max). A fused test settles two values with tag bit 0 clear (fixnums,
   specials, symbols) with one test. **Rejected:** that test in every `=`, where differing took an extra jump
   (membership 1.06-1.10 times as slow).
+- **Integers against reals, exactly** (2026-11-05, Apple M5, load about 25, against the build before). `=` and the
+  comparisons turned the fixnum into a double, so from 2^53 up `=` was not transitive: `(= 2^53+1 r)` held for the real
+  2^53, unification of `[X X X]` with `[2^53 r 2^53+1]` depended on the order, and keys that were `=` hashed apart. Now
+  the real is truncated and the integers compared, in C, and the inline comparison of a real with a fixnum leaves for
+  that when the fixnum is past 2^53. `(< fixnum real)` in a loop 0.18 s to about 0.20 s per 10^8 in the runs it moved, in
+  noise; only a real with a fixnum takes the new test. THORN's steamroller, thm13 and rcc10: 3.69, 27.9 and 20.4 G
+  instructions before and after, and the same inferences.
 
 ### Allocation, lists, vectors and strings
 
