@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.4] - 2026-11-06
+
 ### Changed
 
 - Moved to the Shen kernel 43.4, from 43.2.
@@ -12,6 +14,8 @@ All notable changes to this project are documented in this file. The format is b
   against.
 - Compiled code keeps more values in registers between instructions, which speeds up small interpreters and other code
   that works on values it has just taken apart.
+- Compiling a long literal list takes far less, and with constant elements the list uses one frame slot instead of one
+  per element.
 
 ### Fixed
 
@@ -24,9 +28,6 @@ All notable changes to this project are documented in this file. The format is b
 - `shen-jit.pvar` and `shen-jit.pvar-offset` raised past a `trap-error` in the same function whose handler ignores
   the error.
 - `write-byte` and `close` raise an error when the write fails, as on a full disk, instead of losing the data silently.
-- Compiling a long literal list of numbers takes far less: 4000 elements about a tenth of what it did.
-- Compiling a long literal list now takes about half of what it did, and with constant elements the list uses one
-  frame slot instead of one per element.
 
 ## [0.3] - 2026-11-06
 
@@ -92,7 +93,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.3...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.4...HEAD
+[0.4]: https://github.com/tizoc/shen-jit/compare/v0.3...v0.4
 [0.3]: https://github.com/tizoc/shen-jit/compare/v0.2...v0.3
 [0.2]: https://github.com/tizoc/shen-jit/compare/v0.1...v0.2
 [0.1]: https://github.com/tizoc/shen-jit/releases/tag/v0.1
