@@ -466,8 +466,9 @@ These decide what a loop costs:
 - A tail call's arguments go straight to slots 2.., and one already there costs
   nothing. So a loop is a tail call of the function's own name with its arguments in
   place, as above, which the JIT compiles to a jump.
-- Call-free loops keep their first slots in registers (HOMES in `jit.c`: 6 on arm64,
-  2 on x86-64), so the variables a loop uses most should come first.
+- Call-free loops keep their slots in registers when all of them fit (HOMES in `jit.c`:
+  6 on arm64 and 4 on x86-64, or 2 outside Windows in code that also keeps raw integers
+  in registers). One slot too many and none is kept there, so a loop should use few.
 
 Code a program generates is data, not forms:
 

@@ -148,6 +148,10 @@ Lowering rules, the collector and the kernel port have their own sections.
   of Shen/Scheme 0.53, others 0.930. `reverse (32 items)` 0.77, level with Shen/Scheme, `list traversal` 0.74, `list membership` 0.67 to 0.71, many literal and type tests 0.75, `compile pipeline` 0.978,
   `bytecode VM` 1.00, as `exec` makes real calls. Workloads never used for tuning 0.94 to 1.00. The slower rows checked were placement. Alone, with the code shifted by 0 to 8 definitions: `match list (single
   clause, not matching)` 1.00 (1.33 in the suite), `allocating recursive call` 0.93 to 0.96 (1.06), `recursive list rebuild` 0.92 to 1.13 (1.10), and `reverse` 0.74 to 0.76. `literal float equality (false)`, 1.24, was not timed alone.
+- **Rejected: registers for only some of a loop's slots** (2026-11-05, Ryzen VM, one binary switching policy, in alternation, against all or nothing, best of 3 to 5). Of the kernel suite's 30 loops that call nothing, 18 miss the four registers,
+  13 of them by one slot; of the benchmarks' 55, 18 miss. Any slot could take a register, about 50 lines. Slots used most, by count of instructions: kernel rows 1.000, others 1.002, `match list (single clause, matching)` 1.55, as such code keeps nothing in CACHE. The first
+  slots: 1.011 and 1.010, `match list (multiple clauses, matching)` 2.02. Those used most, only in frames of up to 6 slots, to leave big patterns alone: 0.995 and 0.996, `bytecode VM` 0.95, its `env-lookup`, but `compile pipeline` 1.04. Up to 5 slots: 0.999 and 0.999, `bytecode VM` 1.00, `compile pipeline` 1.04. Workloads
+  never used for tuning 0.97 to 1.00. No net gain for the code.
 - **Slots are not slow on Zen 3** (2026-11-05, Ryzen VM, hand-written chains). A store and a reload of the same slot add nothing to
   a chain of additions at any base register, 0.216 ns a link with or without them, and about one cycle when the frame pointer
   moves between them, as across a call, 0.432 ns. So `rbx` as the frame pointer costs nothing against `rbp`.
@@ -1208,8 +1212,16 @@ the recorded 0.50's time on the M3 Max. The earlier prototype has no x86-64 numb
   is false. Its next commit compiles it to `(kl:= X 5)`. With that emulated by shadowing `eqv?` in user code, `match list` reads 0.26, `literal integer equality (false)` 0.30 and all rows 0.27,
   control loops taking Shen/Scheme about 2.2 ns more a turn; `compile pipeline` 0.85 to 0.89 and `bytecode VM` 0.94 to 0.96. That charges a whole call per test, which an inline sound test would not, so these are bounds.
 - **What x86-64 costs, 2026-11-05, Ryzen VM over M3 Max, 103 rows:** Shen/JIT 1.30, Shen/Scheme 1.14. `bytecode VM` 1.48 and 1.12, on Shen/JIT with 78% of its samples in `exec` and 3.1% of its time collecting. Not memory, slots, constant loads
-  or padding (each above). `exec` makes real calls, so loop registers would not apply. Times on this machine come in whole cycles a turn, which suggests the front end or dispatch, as Zen 3 is narrower than the M3, but that is a guess: `perf` is
-  blocked there by `kernel.perf_event_paranoid`, so nothing counted instructions.
+  or padding (each above). `exec` makes real calls, so loop registers would not apply. Counted below.
+- **`bytecode VM` counted, 2026-11-05,** per run, by the difference of two run counts: on the M3 Max from `time -l`, and on the Ryzen VM under Valgrind's callgrind in a container, as `perf` is blocked there, with IPC taken at 4.6 GHz.
+  | Per run | Instructions, M3 Max | IPC | Instructions, Ryzen VM | Loads, stores | Time | IPC |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+  | Shen/JIT | 14,284 | 6.6 | 13,981 | 4,230, 2,018 | 859 ns | 3.5 |
+  | Shen/Scheme 0.53 | 20,814 | 7.1 | 17,226 | 4,169, 1,659 | 895 ns | 4.2 |
+  - **Instructions explain most of the gap between the machines.** Cycles on the VM over the M3 are 1.83 for Shen/JIT and 1.40 for Shen/Scheme, 1.31 relatively. Shen/Scheme takes 17% fewer instructions on x86-64, and Shen/JIT 2% fewer: about 1.18 of that 1.31. The rest is IPC, with 45% of Shen/JIT's instructions touching memory against 34%.
+  - **Shen/JIT is still ahead on the count on both,** 0.69 and 0.81 of Shen/Scheme's instructions.
+  - **Not allocation.** Time outside collections stays 816 to 854 ns with a semispace from 512 MB down to the image's floor of about 3 MB, past and within the L3, and the M3 Max reads 554 to 568. A size that fits L2 could not be tried.
+  - **Not tried:** using x86-64's memory operands and addressing modes where the code moves a value to a register first, and registers in loops that make real calls, spilling around them, which `exec` is, and which outnumber loops that call nothing about 2.4 to 1 on the kernel suite.
 
 ### Native Windows (2026-11-04)
 
