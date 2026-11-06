@@ -226,6 +226,13 @@ Lowering rules, the collector and the kernel port have their own sections.
   that when the fixnum is past 2^53. `(< fixnum real)` in a loop 0.18 s to about 0.20 s per 10^8 in the runs it moved, in
   noise; only a real with a fixnum takes the new test. THORN's steamroller, thm13 and rcc10: 3.69, 27.9 and 20.4 G
   instructions before and after, and the same inferences.
+- **A fixnum constant loaded as a double** (2026-11-06, Apple M3 Max, load 3 to 5, best of 7, 2x10^8 iterations, against
+  the build before the entry above and the one after it). That test was not noise with a fixnum in a variable: 0.337 to
+  0.386 s, 1.16 times the cycles. With a constant it cost 1.12 times the instructions and no cycles. Reals meet constants
+  often, as `4.0` reads as 4, so a constant a double holds exactly is now loaded as one, with no tests: `(> X 4.0)` 0.369 to 0.312 s,
+  a boxed Mandelbrot of 1000 by 200 0.506 to 0.498 s and 14.57 to 13.85 G instructions, and `bench-numeric`'s boxed programs 4.34 to
+  4.28 G cycles, where they took 4.23 before the entry above. The variable case keeps its cost. Independent workloads:
+  the same. **Rejected:** only leaving out the range test for such a constant, which saved the instructions and no cycles.
 - **`=` on deep terms** (2026-11-05, Apple M5, load about 20, against the build before). `=` recursed on heads and
   elements, so a 300000-deep term overflowed the C stack past `trap-error`. It cannot raise, so past 256 levels of
   recursion it continues in `equal_deep`, with a list of its own on the heap. **Rejected:** deferring through one such list

@@ -1708,12 +1708,26 @@ static struct sljit_jump *fixnum_operands(Emit *e, uint32_t a, uint32_t b, sljit
     return sljit_emit_jump(c, SLJIT_NOT_ZERO);
 }
 
+/* Whether operand x is a fixnum constant that a double holds exactly. */
+static bool exact_constant(const Emit *e, uint32_t x)
+{
+    if (!fixnum_operand(e, x))
+        return false;
+    int64_t k = fixval(*operand_cell(e, x));
+    return k >= -(INT64_C(1) << 53) && k <= INT64_C(1) << 53;
+}
+
 /* The number at operand x in a float register: a real's value, or a fixnum's, converted. Anything
    else jumps away, through other[0] and other[1], and so does, if inexact is not NULL, through it, a
-   fixnum that a double may not hold exactly. Uses R0 and R1. */
+   fixnum that a double may not hold exactly. An exact constant is loaded as a double, with no tests
+   and no jumps set. Uses R0 and R1. */
 static void load_number(Emit *e, uint32_t x, sljit_s32 f, struct sljit_jump **other, struct sljit_jump **inexact)
 {
     struct sljit_compiler *c = e->c;
+    if (exact_constant(e, x)) {
+        sljit_emit_fset64(c, f, (double)fixval(*operand_cell(e, x)));
+        return;
+    }
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, x));
     struct sljit_jump *not_object = tag_cmp(c, SLJIT_NOT_EQUAL, R1, R0, TAG_OBJECT);
     sljit_emit_op1(c, SLJIT_MOV_U8, R1, SLJIT_MEM1(SLJIT_R0), -TAG_OBJECT);
