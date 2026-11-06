@@ -900,11 +900,11 @@ the Ryzen VM, in 214 s. macOS had hidden everything below. Timing is in the JIT 
 
 ### Differential testing of the primitives (2026-11-06, Apple M3 Max)
 
-Nobody had tried it, and an outside report had just found bugs past 1,062 eval cases. `tests/differential.shen` runs 74
-primitives over 108 values, with up to 18 ways to compile a call: constants, captures, a function value, a loop, handlers, as a
+Nobody had tried it, and an outside report had just found bugs past 1,062 eval cases. `tests/differential.shen` runs 81
+primitives over 114 values, with up to 18 ways to compile a call: constants, captures, a function value, a loop, handlers, as a
 branch's test, after a type test. `SHEN_JIT_SLOW_PRIMS` sends every primitive to `sj_primitive`, a few lines in the JIT,
 and the results must match; under it the 1,062 eval cases, the 154 of the kernel and the 157 contract examples pass.
-Then properties: `=` an equivalence that `hash` respects, the comparisons agreeing, and so on. 14 million checks, about 30 s. `copy-bytes` has its own arguments, as five positions of every value would be too many, and copies within and between buffers are checked byte by byte against a model; a forward loop in place of `memmove` and an unchecked source range, both planted, failed.
+Then properties: `=` an equivalence that `hash` respects, the comparisons agreeing, and so on. 20.6 million checks, about a minute. `copy-bytes` has its own arguments, as five positions of every value would be too many, and copies within and between buffers are checked byte by byte against a model; a forward loop in place of `memmove` and an unchecked source range, both planted, failed.
 
 - **Found, in the first full run:** `absvector` at the heap limit gave handlers `[]`, as the C case returned without
   raising, which `cons` also did there. A length from 2^56 lost its top bits in the header, a crash, in `absvector` and
@@ -922,7 +922,8 @@ Then properties: `=` an equivalence that `hash` respects, the comparisons agreei
 - **Left as it is: integer division past 2^53.** Both operands round to doubles first, so `(/ 9007199254740992 9007199254740993)` gives
   1.0, where Shen/Scheme gives the nearest double, 0.9999999999999999. Comparisons are exact because `=` broke without it; a
   quotient 1 unit in the last place off breaks nothing that was found, and exact division needs 128-bit arithmetic.
-- **Not covered:** what needs a whole program around a call, as generated calls don't reach register allocation across a long function, and the pointers.
+- **Pointers.** From `lib/memory.shen`, two blocks filled again for each value, so a call sees what the last one saw; a static build, which cannot load libraries, leaves them out. Each width at each offset of each length is checked against a model of the whole block, stores through read-only and killed pointers raise and change nothing, and copies go within and between blocks. `pointer->string` and `pointer->bytes` are unchecked by nature and `pointer-guard` holds what it is given, so those get a few checks in range and not the sweep. No bugs. An inline bound off by one, a dropped read-only check and `pointer-kill` leaving the address, all planted, failed.
+- **Not covered:** what needs a whole program around a call, as generated calls don't reach register allocation across a long function.
 
 ### The REPL and small decisions
 

@@ -294,7 +294,7 @@ test-native: $(BUILD)/shen-jit
 fuzz-native: $(BUILD)/shen-jit
 	python3 tests/native_fuzz.py
 
-# Each primitive over generated values, however it is compiled and through C (about 30 s).
+# Each primitive over generated values, however it is compiled and through C (about a minute).
 test-differential: $(BUILD)/shen-jit
 	sh tests/differential.sh $(SHEN_JIT) $(BUILD)/differential
 

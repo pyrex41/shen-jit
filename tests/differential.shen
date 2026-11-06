@@ -15,7 +15,27 @@
 (map (/. P (if (= (language) "Scheme") skip (eval-kl [shen-jit.primitive (hd P) (hd (tl P))])))
      [[shen-jit.integer? 1] [shen-jit.symbol? 1] [shen-jit.vector? 1] [shen-jit.pvar 1] [shen-jit.pvar? 1] [shen-jit.pvar-offset 1]
       [shen-jit.hash 2] [shen-jit.filled-vector 2] [shen-jit.tagged? 2] [shen-jit.same? 2] [shen-jit.append 2]
-      [shen-jit.decimal 2] [shen-jit.deref 3]])
+      [shen-jit.decimal 2] [shen-jit.deref 3]
+      [shen-jit.pointer-kill 1] [shen-jit.pointer-owner 1] [shen-jit.pointer-kind 1] [shen-jit.pointer-address 1]
+      [shen-jit.pointer-sized 2] [shen-jit.pointer-read-only 1] [shen-jit.pointer! 3] [shen-jit.bytes->pointer 3]])
+
+\\ Memory outside the heap, from lib/memory.shen beside this file, except where a static build cannot
+\\ load libraries or the implementation has none.
+(define d.dir
+  S -> (d.dir-h S "" ""))
+
+(define d.dir-h
+  "" Dir _ -> Dir
+  S Dir Part -> (d.dir-h (tlstr S) (cn Dir (cn Part "/")) "") where (= (pos S 0) "/")
+  S Dir Part -> (d.dir-h (tlstr S) Dir (cn Part (pos S 0))))
+
+(set *hush* true)
+(if (= (language) "Scheme")
+    skip
+    (let Dir (d.dir (hd (value *argv*)))
+      (do (load (cn Dir "../lib/ffi.shen"))
+          (load (cn Dir "../lib/memory.shen")))))
+(set *hush* false)
 
 (set d.*failures* 0)
 (set d.*checks* 0)
@@ -54,8 +74,14 @@
   V _ -> (cn "s" (make-string "~S" V)) where (string? V)
   V D -> (cn "(" (cn (d.show-to (hd V) (- D 1)) (cn " . " (cn (d.show-to (tl V) (- D 1)) ")")))) where (cons? V)
   V D -> (cn "#" (d.show-bytes V 0)) where (and (not (value d.*portable*)) (shen-jit.bytes? V))
+  V D -> (d.show-pointer V) where (and (not (value d.*portable*)) (shen-jit.pointer? V))
   V D -> (cn "[" (d.show-vector V 0 D)) where (absvector? V)
   V _ -> (str V))
+
+\\ Its kind and what it holds, not its address, which changes from run to run.
+(define d.show-pointer
+  P -> (trap-error (cn "@" (cn (str (shen-jit.pointer-kind P)) (cn " " (d.show-bytes P 0))))
+                   (/. E (cn "@dead " (str (shen-jit.pointer-kind P))))))
 
 (define d.show-bytes
   B I -> "" where (>= I (shen-jit.bytes-length B))
@@ -117,8 +143,26 @@
         [inf [* Big Big]] [-inf [* -1 [* Big Big]]]
         [nan [- [* Big Big] [* Big Big]]]]))
 
+\\ Two blocks, each filled again whenever a value needs it, so that a call sees what the one before it
+\\ saw. A value's length is at most a block's.
+(set d.*blocks* (trap-error [(memory.alloc 32) (memory.alloc 32)] (/. E [])))
+
+(define d.fill-block
+  M Base -> (do (d.for-each (/. K (shen-jit.u8! M K (+ Base K))) (d.range 0 32)) M))
+
+(define d.block
+  I Base N -> (shen-jit.pointer-sized (d.fill-block (if (= I 0) (hd (value d.*blocks*)) (hd (tl (value d.*blocks*)))) Base) N))
+
+(define d.pointer-values
+  -> [[p8 [d.block 0 1 8]] [p8b [d.block 1 101 8]] [p0 [d.block 0 1 0]] [p32 [d.block 0 1 32]]
+      [ro8 [shen-jit.pointer-read-only [d.block 0 1 8]]] [dead [shen-jit.pointer-kill [d.block 0 1 8]]]])
+
+(define d.pointer-names
+  -> (map (/. V (hd V)) (d.pointer-values)))
+
 (define d.values
   -> (append
+       (if (or (= (value d.*blocks*) []) (value d.*portable*)) [] (d.pointer-values))
        (map (/. N [(intern (make-string "n~A" N)) N]) (d.integers))
        (d.real-forms)
        [[empty ""] [a "a"] [abc "abc"] [abc2 [cn "ab" "c"]] [acute "é"] [kanji "日本語"]
@@ -138,7 +182,7 @@
 \\ The values for primitives of three arguments or more, where all of them would be too many.
 (define d.few
   -> [n0 n1 n-1 n2 n3 n7 n8 n255 n256 n-2147483648 n4294967296 half r1 inf nan empty abc s9 nil sym pair one-list
-      v0 v3 nv2b b1 b8 bs bs8 fn pvar0])
+      v0 v3 nv2b b1 b8 bs bs8 fn pvar0 p8 p8b ro8 dead])
 
 (define d.literal?
   V -> (or (number? V) (string? V) (symbol? V) (= V [])))
@@ -186,7 +230,9 @@
 
 \\ Those to run in a loop, or anywhere else they run more than once: not what fills memory.
 (define d.ways
-  P N -> (append [captured value-of let-bound nested rethrown quiet inlined loop]
+  P N -> (append [captured value-of let-bound nested rethrown quiet inlined]
+                 \\ It runs the call twice, and an overlapping copy does not give the same again.
+                 (if (= P shen-jit.copy-bytes) [] [loop])
                  (if (> N 0) [after-cons? after-number? after-string? after-vector? after-symbol?] [])
                  (if (d.boolean? P) [if-test if-not and-test loop-test] [])))
 
@@ -309,7 +355,7 @@
            (d.constants P N Lists Literals Plain))))
 
 (define d.lists
-  shen-jit.copy-bytes _ All -> (let Memory (d.filter-names [b0 b1 b8 b8b bs bs8 sym n0 abc nv2b] All)
+  shen-jit.copy-bytes _ All -> (let Memory (d.filter-names [b0 b1 b8 b8b bs bs8 sym n0 abc nv2b p8 p8b p0 ro8 dead] All)
                                     Index (d.filter-names [n0 n1 n2 n3 n7 n8 n-1 half r1 sym n9007199254740992
                                                            n2305843009213693951 n-2305843009213693952] All)
                                  [Memory Index Memory Index Index])
@@ -323,9 +369,22 @@
 (define d.one
   P Plain Ways Vs
   -> (let Base (d.outcome Plain (d.args Vs))
-       (do (d.log (make-string "(~A ~A) ~A" P (d.names Vs) Base))
+       (do (if (d.address-shows? P Vs) skip (d.log (make-string "(~A ~A) ~A" P (d.names Vs) Base)))
            (map (/. W (d.compare P (fst W) (snd W) Base Vs)) Ways)
            done)))
+
+\\ Whether a result depends on an address, and so does not compare with another run's. Within a run the
+\\ blocks stay where they are.
+(define d.address-shows?
+  shen-jit.pointer-address _ -> true
+  shen-jit.pointer! _ -> true
+  shen-jit.hash Vs -> (d.any-pointer? Vs)
+  hash Vs -> (d.any-pointer? Vs)
+  _ _ -> false)
+
+(define d.any-pointer?
+  [] -> false
+  [V | Vs] -> (or (element? (hd V) (d.pointer-names)) (d.any-pointer? Vs)))
 
 \\ The same object as both arguments: = and same? may take a shortcut.
 (define d.same-object
@@ -336,7 +395,7 @@
   P Plain V -> (let X (d.make V)
                     Base (d.outcome Plain [X X])
                     F (d.same-way P)
-                 (do (d.log (make-string "(~A ~A same) ~A" P (d.name V) Base))
+                 (do (if (d.address-shows? P [V]) skip (d.log (make-string "(~A ~A same) ~A" P (d.name V) Base)))
                      (d.check)
                      (let Got (d.outcome F [X])
                        (if (= Got Base)
@@ -592,6 +651,101 @@
            (d.prop (freeze (= (d.show To) Want)) Text)
            (d.prop (freeze (or Same (= (d.show From) (d.show (d.pattern 1))))) Text))))
 
+\\ Memory outside the heap: each width at each offset of each length, against a model of the whole block, so
+\\ a write past the length or to the wrong place shows. Reading past the length raises, storing through a
+\\ read-only or killed pointer raises and changes nothing, and each copy of a pointer sees the same memory.
+(define d.widths
+  -> [[1 shen-jit.u8 shen-jit.u8! 200 200]
+      [2 shen-jit.u16 shen-jit.u16! 51234 51234]
+      [4 shen-jit.u32 shen-jit.u32! 4000000000 4000000000]
+      [4 shen-jit.s32 shen-jit.s32! -5 -5]
+      [8 shen-jit.s64 shen-jit.s64! -7 -7]])
+
+(define d.whole
+  I Base -> (d.show-bytes (d.block I Base 16) 0))
+
+(define d.pointers
+  -> (do (d.for-each (/. L (d.for-each (/. I (d.for-each (/. W (d.pointer-access L I W)) (d.widths))) (d.range -1 18))) [0 1 2 3 4 7 8 12 16])
+         (d.pointer-copies)
+         (d.pointer-identity)))
+
+(define d.pointer-access
+  L I [W Read Store X Y]
+  -> (let Fits (and (>= I 0) (<= (+ I W) L))
+          Text (freeze (make-string "~A at ~A of ~A" Read I L))
+          M (d.block 0 1 L)
+          Before (d.show-bytes (shen-jit.pointer-sized M 16) 0)
+          RO (shen-jit.pointer-read-only M)
+          Dead (shen-jit.pointer-kill (shen-jit.pointer-sized M L))
+       (do (d.prop (freeze (= (d.raises? (freeze ((function Read) M I))) (not Fits))) Text)
+           (d.prop (freeze (d.raises? (freeze ((function Store) RO I X)))) Text)
+           (d.prop (freeze (d.raises? (freeze ((function Store) Dead I X)))) Text)
+           (d.prop (freeze (d.raises? (freeze ((function Read) Dead I)))) Text)
+           (d.prop (freeze (= Before (d.show-bytes (shen-jit.pointer-sized M 16) 0))) Text)
+           (d.prop (freeze (= (d.raises? (freeze ((function Store) M I X))) (not Fits))) Text)
+           (if Fits
+               (do (d.prop (freeze (= ((function Read) M I) Y)) Text)
+                   (d.prop (freeze (= ((function Read) RO I) Y)) Text))
+               (d.prop (freeze (= Before (d.show-bytes (shen-jit.pointer-sized M 16) 0))) Text))
+           (d.prop (freeze (d.outside-unchanged? (shen-jit.pointer-sized M 32) I W Fits)) Text))))
+
+\\ What a store did not reach still holds the block's filling.
+(define d.outside-unchanged?
+  M I W Fits -> (d.outside-h M 0 I W Fits))
+
+(define d.outside-h
+  _ 32 _ _ _ -> true
+  M K I W Fits -> (d.outside-h M (+ K 1) I W Fits) where (and Fits (and (>= K I) (< K (+ I W))))
+  M K I W Fits -> (and (= (shen-jit.u8 M K) (+ 1 K)) (d.outside-h M (+ K 1) I W Fits)))
+
+(define d.raises?
+  F -> (trap-error (do (thaw F) false) (/. E true)))
+
+(define d.pointer-copies
+  -> (let Range (d.range -1 10)
+       (d.for-each (/. I (d.for-each (/. J (d.for-each (/. N (do (d.pointer-copy true I J N) (d.pointer-copy false I J N))) Range)) Range)) Range)))
+
+\\ As d.copy-one, on two blocks or within one.
+(define d.pointer-copy
+  Same I J N
+  -> (let To (d.block 0 1 8)
+          From (if Same To (d.block 1 101 8))
+          FromBase (if Same 1 101)
+          Fits (d.copy-fits? I J N)
+          Want (d.show-bytes (if Fits
+                                 (d.fill (shen-jit.bytes 8) (/. K (if (and (>= K I) (< K (+ I N))) (+ FromBase (- (+ J K) I)) (+ 1 K))))
+                                 (d.pattern 1)) 0)
+          Raised (trap-error (do (shen-jit.copy-bytes To I From J N) false) (/. E true))
+          Text (freeze (make-string "pointer copy ~A ~A ~A, same ~A: raised ~A" I J N Same Raised))
+       (do (d.prop (freeze (= Raised (not Fits))) Text)
+           (d.prop (freeze (= (d.show-bytes To 0) Want)) Text))))
+
+\\ Copies of a pointer are = to it, hash the same, and name what they came from. Its address goes through memory
+\\ and back, what is unchecked reads what is there, and killing one kills no other.
+(define d.pointer-identity
+  -> (let M (d.block 0 1 8)
+          S (shen-jit.pointer-sized M 4)
+          K (shen-jit.pointer-kind M)
+          B (shen-jit.bytes 16)
+          T (freeze "pointers")
+       (do (d.prop (freeze (= M S)) T)
+           (d.prop (freeze (= (shen-jit.hash M 1000000) (shen-jit.hash S 1000000))) T)
+           (d.prop (freeze (not (= M (shen-jit.pointer-read-only M)))) T)
+           (d.prop (freeze (= (shen-jit.pointer-owner S) M)) T)
+           (d.prop (freeze (= (shen-jit.pointer-owner (shen-jit.pointer-guard M guarded)) guarded)) T)
+           (shen-jit.pointer! B 4 M)
+           (d.prop (freeze (= (shen-jit.bytes->pointer B 4 K) M)) T)
+           (d.prop (freeze (= (shen-jit.pointer-address (shen-jit.bytes->pointer B 4 K)) (shen-jit.pointer-address M))) T)
+           (shen-jit.pointer! B 4 [])
+           (d.prop (freeze (= (shen-jit.bytes->pointer B 4 K) [])) T)
+           (d.prop (freeze (= (d.show-bytes (shen-jit.pointer->bytes M 2 3) 0) "3 4 5 ")) T)
+           (shen-jit.u8! M 3 0)
+           (d.prop (freeze (= (string->n (shen-jit.pointer->string M)) 1)) T)
+           (shen-jit.pointer-kill S)
+           (d.prop (freeze (= (shen-jit.u8 M 0) 1)) T)
+           (d.prop (freeze (d.raises? (freeze (shen-jit.pointer->string S)))) T)
+           (d.prop (freeze (d.raises? (freeze (shen-jit.pointer-sized S 1)))) T))))
+
 \\ Bit operations against each other and against arithmetic.
 (define d.bits
   Xs -> (d.for-each (/. X (do (d.bits-one X) (d.for-each (/. Y (d.bits-pair X Y)) Xs))) Xs))
@@ -635,12 +789,14 @@
   -> [[1 number? cons? string? absvector? hd tl tlstr str n->string string->n intern absvector value error-to-string
          shen-jit.symbol? shen-jit.integer? shen-jit.vector? shen-jit.bytes? shen-jit.bytes shen-jit.bytes-length
          shen-jit.string->bytes shen-jit.bit-not shen-jit.bswap32 shen-jit.popcount shen-jit.clz shen-jit.ctz
-         shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.pointer? simple-error]
+         shen-jit.pvar shen-jit.pvar? shen-jit.pvar-offset shen-jit.pointer? simple-error
+         shen-jit.pointer-kind shen-jit.pointer-address shen-jit.pointer-kill shen-jit.pointer-owner shen-jit.pointer-read-only]
       [2 + - * / < > <= >= = cons cn pos <-address shen-jit.hash shen-jit.filled-vector shen-jit.tagged? shen-jit.same?
          shen-jit.append shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor shen-jit.shift-left shen-jit.shift-right
-         shen-jit.rotate32 shen-jit.decimal shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64]
+         shen-jit.rotate32 shen-jit.decimal shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64
+         shen-jit.pointer-sized]
       [3 address-> shen-jit.deref shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.s32! shen-jit.s64! shen-jit.f32!
-         shen-jit.f64! shen-jit.bytes->string]
+         shen-jit.f64! shen-jit.bytes->string shen-jit.bytes->pointer shen-jit.pointer!]
       [5 shen-jit.copy-bytes]])
 
 \\ Against another implementation: the primitives and values of the language alone, called plainly, with
@@ -682,6 +838,7 @@
                      (d.strings)
                      (d.stores)
                      (d.copies)
+                     (if (= (value d.*blocks*) []) skip (d.pointers))
                      (d.bits Few)))
                skip)
            (output "~A checks, ~A failed~%" (value d.*checks*) (value d.*failures*)))))

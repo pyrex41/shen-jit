@@ -26,13 +26,16 @@ for p in $prims properties; do
     [ "$rcc" = 0 ] && grep -aq ' checks, ' "$dir/$name.cout" || bad="$bad, through C exit $rcc"
     case $summary in *", 0 failed"*) ;; *) bad="$bad, $summary";; esac
     case $(grep -a ' checks, ' "$dir/$name.cout" | tail -1) in *", 0 failed"*) ;; *) bad="$bad, through C failures";; esac
-    cmp -s "$dir/$name.jit" "$dir/$name.c" || bad="$bad, compiled and C differ"
+    # Addresses change from run to run.
+    sed -E 's/0x[0-9a-f]+/0x/g' "$dir/$name.jit" > "$dir/$name.jit-a"
+    sed -E 's/0x[0-9a-f]+/0x/g' "$dir/$name.c" > "$dir/$name.c-a"
+    cmp -s "$dir/$name.jit-a" "$dir/$name.c-a" || bad="$bad, compiled and C differ"
     if [ -n "$bad" ]; then
         failed=$((failed + 1))
         echo "$p: $bad"
         grep -a '^FAIL' "$dir/$name.out" | head -5
         grep -a '^FAIL' "$dir/$name.cout" | head -5
-        cmp -s "$dir/$name.jit" "$dir/$name.c" || diff -a "$dir/$name.jit" "$dir/$name.c" | grep -a '^[<>]' | head -6
+        cmp -s "$dir/$name.jit-a" "$dir/$name.c-a" || diff -a "$dir/$name.jit-a" "$dir/$name.c-a" | grep -a '^[<>]' | head -6
     fi
     n=$(printf '%s\n' "$summary" | sed 's/ checks.*//')
     checks=$((checks + ${n:-0}))
