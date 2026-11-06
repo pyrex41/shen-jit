@@ -303,8 +303,10 @@ static V build_code(Loader *l, V form)
     size_t cbase = vm_consts_alloc(vm, nconst + ncode, &allocated);
     if (!allocated)
         goto done;
-    for (size_t i = 0; i < nconst; i++)
-        *ra_at(&vm->consts, cbase + i) = nth(nth(form, 4), i);
+    /* Nothing here allocates, so the list stays where it is. */
+    V consts = nth(form, 4);
+    for (size_t i = 0; i < nconst; i++, consts = ptr(consts)[1])
+        *ra_at(&vm->consts, cbase + i) = ptr(consts)[0];
     l->stats->constants += nconst;
     for (size_t i = 0; i < ncode; i++) {
         V nested = build_code(l, nth(nth(form, 6), i));
