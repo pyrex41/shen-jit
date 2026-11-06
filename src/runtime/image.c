@@ -259,10 +259,9 @@ VM *image_load(const char *path, size_t min_semispace_words, size_t stack_words,
         t.length != image_length(h.heap_words, h.cell_entries, h.const_entries))
         goto fail;
 
-    /* Start with live data at no more than 40% of a semispace. */
-    size_t words = min_semispace_words;
-    while (h.heap_words * 10 > words * 4)
-        words *= 2;
+    size_t words = vm_semispace_for(h.heap_words);
+    if (words < min_semispace_words)
+        words = min_semispace_words;
     if (!(vm = vm_create(words, stack_words)))
         goto fail;
     vm->compile_stub = compile_stub;

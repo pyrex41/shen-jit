@@ -34,6 +34,8 @@ All notable changes to this project are documented in this file. The format is b
 - New objects now always go in the same memory, so a program that allocates uses much less of it, and allocates
   faster where two semispaces taking turns outgrew the cache. A process that only starts takes about 2 MB more.
 - On x86-64 outside Windows, a loop that calls nothing keeps up to four values in registers, where it was two.
+- The heap grows with what is live, not by doubling, so a program holding a lot of data no longer slows down as it
+  nears the next doubling. Such a program can use more memory than before, at most about 1.7 times.
 
 ### Fixed
 

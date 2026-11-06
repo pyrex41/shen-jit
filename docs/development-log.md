@@ -406,6 +406,18 @@ Nothing in the runtime changes for it alone.
   - **M3 Max:** kernel rows 1.000, others 0.999, `vector create (big)` 0.94.
   - **`list equality (late mismatch)` read 1.32 and later 0.84, which is placement.** Timed alone at shifted heap positions, both builds take 31 or
     43 ns by where the two lists land.
+- **The heap's size follows what is live** (2026-11-05, Ryzen VM at load about 0, against the build before and Shen/Scheme 0.53, mean of 30 rounds of 640 MB; M3 Max at load 2 to 2.5). Doubling when live data
+  passed 40% of a semispace made its cost a sawtooth, in ns per `cons` with pairs alive: 5.25 at 1.5M, 3.18 at 1.8M, 5.12 at 3M, 2.98 at 3.4M, 5.52 at 6.4M, 2.98 at 6.8M. With its own area the heap needs no steps, so a
+  semispace is now five times what is live, and a collection copies at most a word per four allocated. About 10 lines net.
+  - **Ryzen VM:** about 2.9 ns at every size from 1M to 20M. Peak memory is that of a tooth's top, and 1.4 to 1.7 times at its bad points: 3.4M 314 to 321 MB, 3M 196 to 284, 6.4M 360 to 597, 20M 1335 to 1841.
+  - **M3 Max:** 1M 2.21 to 1.84 ns, 83 to 99 MB; 3M 3.26 to 1.84, 193 to 282 MB; 6.4M 3.52 to 1.93, 357 to 593 MB.
+  - **Below the threshold nothing changes.** Workloads never used for tuning 0.95 to 1.01 on the VM and 0.90 to 1.00 on the M3, and peak memory on the kernel suite and stlib install within 3%.
+  - **Rejected: doubling at 20%,** the one-constant change. 2.0 to 2.83 ns, as the teeth stay, at 1.7 to 1.8 times the memory at every size: 14M 1246 to 2268 MB.
+  - **Rejected: following live data at 30%.** About today's memory for 3.1 to 4.7 ns (best of 12 rounds, with less room than a round where it matters).
+  - **Not taken: more room.** Seven times what is live, 2.4 ns at about 1.3 times this memory, and ten times, 2.0 ns at about 1.8. It is the one number.
+  - **A bigger heap has a floor.** At 3M alive, `SHEN_JIT_SEMISPACE` of 256M, 512M, 1G, 2G and 4G: 2.73, 1.90, 1.56, 1.45 and 1.46 ns, as past the L3 every write misses however rarely collections come.
+  - **Chez stays ahead on live data.** Sealed 0.86 to 1.17 ns at 62 to 667 MB up to 20M, against 2.0 at best here at five times its memory. No growth policy closes that.
+  - **A best of a few rounds misled here.** Once the room passes what a round allocates, it picks a round with no collection: rows read 1.34 to 1.5 ns, and a first reading had Shen/JIT passing Chez from 14M, where the mean is 3.09 against 1.12. Hence the means.
 
 ### The guest stack
 

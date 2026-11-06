@@ -198,7 +198,8 @@ between two spaces. So the memory written to is the same each time and stays in 
 would be twice as much. Every collection still copies all that is live, as there are no generations. The area's room is what the
 kept data leaves of a semispace's size, so collections come as often as with two semispaces, and at worst as much memory is
 touched. The three lie in one reserved block of address space, with the area between the spaces, so that one range holds what a
-collection may move and not where it copies to, and they double in place when live data passes 40% of a semispace's size.
+collection may move and not where it copies to. They grow in place to keep a semispace's size at least five times what is live, so that a
+collection copies at most a word for every four allocated. With its own area the heap need not grow in steps, which would make the cost of what is live a sawtooth.
 
 - **Lists stay contiguous.** Cheney's breadth-first order scatters a list's pairs among everything else live, so when a pair is
   copied, the pairs of its tail are copied right after it.

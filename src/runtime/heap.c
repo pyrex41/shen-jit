@@ -78,6 +78,10 @@ static bool commit_space(uint64_t *space, size_t words)
 #endif
 }
 
+/* What holds this much live data: four times as much room for new objects. A collection then copies
+   a word for every four allocated, at most. */
+size_t vm_semispace_for(size_t live_words) { return live_words * 5; }
+
 /* Empties the area, whose room is what the space's contents leave of a semispace. */
 void vm_fresh_area(VM *vm)
 {
@@ -755,17 +759,21 @@ bool vm_collect(VM *vm, size_t need_words)
             *p = UINT64_C(0xDEADDEADDEADDEAD);
     }
 
-    /* Grow until live data and the request fit in 40% of a semispace, up to
-       the limit. Live large objects count: every collection scans them. */
+    /* Grow so that live data and the request are a fifth of a semispace at most, up to
+       the limit. Live large objects count: every collection scans them. With its own
+       area the heap need not grow in steps, which made the cost of what is live a
+       sawtooth: right after a doubling, half of what it is just before. */
     size_t kept = (size_t)(vm->live_end - vm->space);
     size_t live = kept;
     for (size_t i = 0; i < vm->nlarge; i++)
         if (!vm->large[i].spare)
             live += vm->large[i].words;
-    size_t want = vm->space_words;
-    while ((live + need_words) * 10 > want * 4 && want * 2 <= vm->reserved_words &&
-           (!vm->max_words || want * 2 <= vm->max_words))
-        want *= 2;
+    size_t want = vm_semispace_for(live + need_words);
+    size_t limit = vm->max_words && vm->max_words < vm->reserved_words ? vm->max_words : vm->reserved_words;
+    if (want > limit)
+        want = limit;
+    if (want < vm->space_words)
+        want = vm->space_words;
     if (want != vm->space_words && commit_space(vm->space, want) && commit_space(vm->area, want) &&
         commit_space(vm->other, want)) {
         vm->space_words = want;

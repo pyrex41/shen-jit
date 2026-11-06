@@ -206,6 +206,7 @@ V sj_raise_text_value(VM *vm, const char *text, V value);
 /* vm.c */
 VM *vm_create(size_t semispace_words, size_t stack_words);
 void vm_fresh_area(VM *vm);
+size_t vm_semispace_for(size_t live_words);
 V *vm_cleared_stack(size_t words);
 
 /* Threads (thread.c): real ones, of which one runs at a time. (thread F) starts

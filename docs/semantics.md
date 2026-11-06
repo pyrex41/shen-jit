@@ -303,11 +303,11 @@ Shen/Scheme also uses, so Shen/JIT needs no command-line parser in C.
   are always the same size. The process aborts only if the collector itself
   cannot complete.
 - **The heap's size,** what a collection keeps and the room for new objects
-  together, starts at 32 MiB and doubles after a collection that leaves live
-  data above 40% of it. It never shrinks in the first version.
+  together, starts at 32 MiB and grows after a collection to five times what
+  is live, if that is more. It never shrinks in the first version.
 - **Large objects:** vectors and strings of 32K words or more are allocated
   apart and never copied; collections mark them, scan them in place and
-  free the dead ones. They count as live data for the 40% rule, and once
+  free the dead ones. They count as live data for that rule, and once
   toward `SHEN_JIT_MAX_HEAP`. An image holds them inside its heap.
 - **Guest stack.** It starts at 64K slots, filled with the cleared value, and
   doubles on overflow up to a configurable maximum (default 1 GiB). Exceeding
@@ -333,7 +333,7 @@ An image is a header followed by sections and a trailer, all little-endian:
   reads it from the end of the file, so an image can be appended to another
   file: the executable carries its image this way.
 
-Loading reads the heap into a region at least twice its size, adds the base
+Loading reads the heap into a region at least five times its size, adds the base
 to every pointer in one linear pass over objects and pairs, does the same for
 the root arrays, and then applies the reconstruction rules in
 [design.md](design.md): native entries from each procedure's kind, the standard streams
