@@ -10,6 +10,8 @@ All notable changes to this project are documented in this file. The format is b
 - Moved to the Shen kernel 43.4, from 43.2.
 - Moved to Shen/Scheme 0.54, from 0.53, as the other host that can build a checkout, and what `make bench` compares
   against.
+- Compiled code keeps more values in registers between instructions, which speeds up small interpreters and other code
+  that works on values it has just taken apart.
 
 ### Fixed
 

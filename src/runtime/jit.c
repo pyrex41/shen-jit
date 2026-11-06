@@ -44,6 +44,9 @@
 #define SAVEDS (4 + SAVED_HOMES)
 #define HOMES (SAVED_HOMES + (WORD_GPRS < 6 - SAVED_HOMES ? WORD_GPRS : 6 - SAVED_HOMES))
 #define HOME_REG(k) ((k) < SAVED_HOMES ? SLJIT_S(4 + (k)) : SLJIT_R(5 + (k) - SAVED_HOMES))
+/* Where code without homes keeps results it reads again soon (Emit.kept). */
+#define KEPT 2
+#define KEPT_REG(k) SLJIT_S(4 + (k))
 /* Loop heads start on a 32-byte boundary: with 16, a 32-item list walk took
    12 or 17 ms depending on what was compiled before it. */
 #define LOOP_ALIGN SLJIT_LABEL_ALIGN_32
@@ -541,6 +544,7 @@ typedef struct Slow {
     struct Slow *prim;         /* for SLOW_POINTER: the slow path of the instruction, emitted before it */
     bool store;                /* for SLOW_POINTER and SLOW_MEMORY: the access is a store */
     uint32_t memory, index;    /* for SLOW_MEMORY: operands, the second a word */
+    uint32_t kept[KEPT];  /* what the kept registers hold again before going back */
 } Slow;
 
 typedef struct {
@@ -591,6 +595,12 @@ typedef struct {
        them, and it loads CACHE again before going back, since a collection
        may have moved the value. */
     uint32_t cached, post;
+    /* Two more registers the same way, for code that keeps no slots in registers and has no raw
+       values: the slot each holds before this instruction and after it, or NONE. Slots are still
+       written, as for CACHE. A label or a call drops them. A slow path that may have collected loads
+       them again, and reads operands from their slots. */
+    uint32_t kept[KEPT], kept_post[KEPT];
+    bool keeps;
     /* Callers leave the first argument in CACHE too; the body starts with
        slot 2 cached only if it reads it soon. Self tail calls skip the load
        when it does not. */
@@ -739,6 +749,9 @@ static sljit_s32 operand_kind(const Emit *e, uint32_t x)
 {
     if (x == e->cached)
         return SLJIT_S2;
+    for (int k = 0; k < KEPT; k++)
+        if (x == e->kept[k])
+            return KEPT_REG(k);
     if (!(x & OPERAND_CONST))
         return slot_kind(e, x);
     return is_ptr(*operand_cell(e, x)) ? SLJIT_MEM0() : SLJIT_IMM;
@@ -746,7 +759,7 @@ static sljit_s32 operand_kind(const Emit *e, uint32_t x)
 
 static sljit_sw operand_offset(const Emit *e, uint32_t x)
 {
-    if (x == e->cached)
+    if (x == e->cached || x == e->kept[0] || x == e->kept[1])
         return 0;
     if (!(x & OPERAND_CONST))
         return slot_offset(e, x);
@@ -878,7 +891,7 @@ static uint32_t inline_chain(Emit *e)
 static Slow *slow_path(Emit *e, SlowKind kind, struct sljit_jump *from)
 {
     Slow *s = &e->slow[e->nslow++];
-    *s = (Slow){kind, {from}, NULL, NULL, 0, UINT32_MAX, NONE, NONE, NULL, inline_chain(e), NULL, NULL, false, 0, 0};
+    *s = (Slow){kind, {from}, NULL, NULL, 0, UINT32_MAX, NONE, NONE, NULL, inline_chain(e), NULL, NULL, false, 0, 0, {NONE, NONE}};
     return s;
 }
 
@@ -1267,6 +1280,39 @@ static bool read_soon(const Emit *e, uint32_t s, bool past_branches)
     return false;
 }
 
+/* Whether slot s is read as an operand a little further on, along the fall-through of branches,
+   before anything that would drop the kept registers or write s. */
+static bool read_later(const Emit *e, uint32_t s)
+{
+    size_t j = e->next;
+    for (int k = 0; k < 8 && j < e->nwords; k++, j += insn_length(e->words + j)) {
+        const uint32_t *q = e->words + j;
+        bool operand = q[0] == OP_MOVE || q[0] == OP_PRIM || q[0] == OP_JUMP_IF_FALSE || q[0] == OP_RETURN;
+        if (operand && reads_slot(q, s))
+            return true;
+        if (writes_slot(q, s) || !(q[0] == OP_MOVE || q[0] == OP_CONST || q[0] == OP_PRIM || q[0] == OP_JUMP_IF_FALSE ||
+                                   q[0] == OP_POP_HANDLER || q[0] == OP_INLINE))
+            return false;
+    }
+    return false;
+}
+
+/* A kept register to hold slot s after this instruction, or -1: a free one, or one whose slot is not
+   read again soon. */
+static int kept_for(const Emit *e, uint32_t s)
+{
+    if (!e->keeps || !read_later(e, s))
+        return -1;
+    int free = -1;
+    for (int k = 0; k < KEPT; k++) {
+        if (e->kept_post[k] == s)
+            return k;
+        if (free < 0 && (e->kept_post[k] == NONE || !read_later(e, e->kept_post[k])))
+            free = k;
+    }
+    return free;
+}
+
 static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
                        size_t after, uint32_t target, uint32_t s);
 static bool type_test(uint32_t prim);
@@ -1338,8 +1384,28 @@ static bool to_home(const Emit *e, uint32_t dst)
 static void put_result(Emit *e, uint32_t dst, sljit_s32 k, sljit_sw w)
 {
     if (!read_soon(e, dst, true)) {
-        sljit_emit_op1(e->c, SLJIT_MOV, HOME(e, dst), k, w);
+        int to = kept_for(e, dst);
+        if (to < 0) {
+            sljit_emit_op1(e->c, SLJIT_MOV, HOME(e, dst), k, w);
+            return;
+        }
+        sljit_emit_op1(e->c, SLJIT_MOV, KEPT_REG(to), 0, k, w);
+        sljit_emit_op1(e->c, SLJIT_MOV, HOME(e, dst), KEPT_REG(to), 0);
+        e->kept_post[to] = dst;
         return;
+    }
+    /* CACHE is about to change: what it holds moves to a kept register if it is read again. */
+    if (e->cached != NONE && e->cached != dst) {
+        int to = kept_for(e, e->cached);
+        if (to >= 0 && e->kept_post[to] != e->cached) {
+            if (k == KEPT_REG(to) || k == SLJIT_MEM1(KEPT_REG(to))) { /* what this reads, before that goes */
+                sljit_emit_op1(e->c, SLJIT_MOV, R0, k, w);
+                k = SLJIT_R0;
+                w = 0;
+            }
+            sljit_emit_op1(e->c, SLJIT_MOV, KEPT_REG(to), 0, CACHE);
+            e->kept_post[to] = e->cached;
+        }
     }
     if (k == SLJIT_MEM1(SLJIT_S2)) {
         sljit_emit_op1(e->c, SLJIT_MOV, R0, k, w);
@@ -1549,6 +1615,7 @@ static void emit_call(Emit *e, const uint32_t *p)
     e->calls[e->ncalls].chain = inline_chain(e);
     e->calls[e->ncalls++].window = a;
     sljit_emit_op2(c, SLJIT_SUB, FP, 0, FP, 0, IMM(a * sizeof(V)));
+    e->cached = NONE; /* the callee's now */
     store_result(e, dst);
 }
 
@@ -3017,6 +3084,9 @@ static void go_back(Emit *e, const Slow *s)
     }
     if (s->restore != NONE)
         sljit_emit_op1(e->c, SLJIT_MOV, CACHE, SLOT(s->restore));
+    for (int k = 0; k < KEPT; k++)
+        if (s->kept[k] != NONE)
+            sljit_emit_op1(e->c, SLJIT_MOV, KEPT_REG(k), 0, SLOT(s->kept[k]));
     sljit_set_label(sljit_emit_jump(e->c, SLJIT_JUMP), s->back);
 }
 
@@ -3402,7 +3472,8 @@ static void *compile_code(VM *vm, V code)
 
     Emit e = {.vm = vm, .c = sljit_create_compiler(NULL), .frame = co[CODE_FRAME],
               .arity = co[CODE_ARITY] & UINT32_MAX, .cbase = co[CODE_CBASE], .nconst = co[CODE_NCONST],
-              .code = code, .cached = NONE, .post = NONE, .entry = NONE, .label_pos = label_pos};
+              .code = code, .cached = NONE, .post = NONE, .kept = {NONE, NONE}, .kept_post = {NONE, NONE},
+              .entry = NONE, .label_pos = label_pos};
     e.labels = calloc(nlabels + 1, sizeof *e.labels);
     e.fixups = calloc(6 * ninsns + 2, sizeof *e.fixups);
     e.handlers = calloc(ninsns + 1, sizeof *e.handlers);
@@ -3458,6 +3529,7 @@ static void *compile_code(VM *vm, V code)
     count_registers(&e, words, nwords);
     choose_cached_memory(&e, words, nwords);
     assign_places(&e, words, nwords);
+    e.keeps = !e.homes && !e.reals && !e.word_regs && !e.nmemory && !e.raw_saved && SAVED_HOMES >= KEPT;
     struct sljit_label *start = sljit_emit_label(c);
     enter(&e);
     emit_memory_caches(&e);
@@ -3490,6 +3562,9 @@ static void *compile_code(VM *vm, V code)
             }
         e.post = NONE;
         e.next = i + insn_length(p);
+        for (int k = 0; k < KEPT; k++)
+            e.kept_post[k] = keeps_cache(p) && !writes_slot(p, e.kept[k]) ? e.kept[k] : NONE;
+        const uint32_t kept_pre[KEPT] = {e.kept[0], e.kept[1]};
         switch (p[0]) {
         case OP_MOVE:
             put_result(&e, p[1], OPND(&e, p[2]));
@@ -3693,14 +3768,22 @@ static void *compile_code(VM *vm, V code)
            state after it. Other slow paths raise, or come before a call. */
         for (size_t k = first_slow; k < e.nslow; k++) {
             Slow *s = &e.slow[k];
-            if (s->kind == SLOW_ALLOC)
+            if (s->kind == SLOW_ALLOC) {
                 s->restore = pre;
-            else if (s->kind == SLOW_PRIM)
+                s->kept[0] = kept_pre[0];
+                s->kept[1] = kept_pre[1];
+            } else if (s->kind == SLOW_PRIM) {
                 s->restore = e.post;
+                s->kept[0] = e.kept_post[0];
+                s->kept[1] = e.kept_post[1];
+            }
         }
         e.cached = e.post;
+        e.kept[0] = e.kept_post[0];
+        e.kept[1] = e.kept_post[1];
     }
     e.cached = NONE; /* slow paths read operands from their slots */
+    e.kept[0] = e.kept[1] = NONE;
     emit_slow_paths(&e);
     for (size_t i = 0; i < e.nfixups; i++) {
         if (e.fixups[i].label >= nlabels || !e.labels[e.fixups[i].label]) {

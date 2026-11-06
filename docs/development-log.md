@@ -156,6 +156,13 @@ Lowering rules, the collector and the kernel port have their own sections.
   a chain of additions at any base register, 0.216 ns a link with or without them, and about one cycle when the frame pointer
   moves between them, as across a call, 0.432 ns. So `rbx` as the frame pointer costs nothing against `rbp`.
 
+- **Two more registers for results read again soon** (2026-11-06, Apple M3 Max and Ryzen 5 5600X VM, A/B against the build before, alternating). S4 and S5 hold slots read within 8 instructions, or what CACHE held when it changes, in code with no homes and no raw values; every slot is still written. Found chasing `--seal` on `bytecode VM`, where `exec` stores a part of a pattern and reloads it a few instructions on.
+  - **Alone, 10^6 runs at depth 9, best of 7.** M3 open 0.551 to 0.535 s, sealed 0.587 to 0.535, so sealing no longer costs anything there; Ryzen open 0.863 to 0.777, sealed 0.838 to 0.755. A 10% gain on the Ryzen was not expected, as a slot's store and reload alone cost it nothing at any base register, and what gives it there is not known without counters.
+  - **Suite.** M3, 3 rounds at 10 times the run counts: open 0.99 over 85 rows, VM 0.96, pipeline 1.00, no group slower; sealed 1.00, VM 0.91. Ryzen, 2 rounds: 1.00 over 87 rows, VM 0.90, pipeline 0.98, control flow 1.02, patterns 1.03. Results match on every row.
+  - **Independent.** M3 0.95 to 1.01, the kernel suite 1.00 and THORN 0.98 to 1.00; Ryzen 0.97 to 1.00. No compile-time cost shows.
+  - **Slower rows, on the Ryzen.** `match list (single clause, not matching)` 1.33 is placement: its hot path is the same instructions, and with the code moved by nops that run only on entry it reads 64.8 or 86.4 ms by offset, 64.8 before. `shen.<-dict` with a missing key 12.5 to about 13.4 ms, 12.7 to 13.9 by offset, may be a small real cost on a path that raises.
+  - **Two bugs on the way, which the eval cases caught at once.** A result loaded through a kept register that CACHE was about to move into, and a call's result moving CACHE, which by then is the callee's. Passed after: fast tier, `make test-differential` also under `SHEN_JIT_GC_STRESS=1000`, the stress suites, `make test-x86`.
+
 ### Branch shapes and code placement
 
 - **Comparisons fused with branches** (2026-11-01, M3 Max). With other changes, `fib` 30 6.0 to 5.2 ms. Fused only
@@ -1274,9 +1281,9 @@ Never run until now: every "Sealed / Scheme" above is against its normal mode. `
 | all | 95 | 0.92 | 0.30 | 0.30 |
 
 - **`bytecode VM` is where it gains:** depth 9 610 to 413 ms. It is the only group behind by much once both are sealed.
-- **`--seal` makes `bytecode VM` slower on the M3, and not on x86-64.** Alone, 10^6 runs at depth 9, best of 7: M3 open 0.552 to 0.566 s and sealed 0.585 to 0.594, at each of 6 shifts by unrelated definitions; Ryzen 5 5600X VM open 0.852 to 0.861 and sealed 0.828 to 0.842, where sealing gains 2%. It helps `compile pipeline` on the M3, 68 to 62 ms at depth 5. Rejected as a target: nothing is wrong in the code.
-  - **What it is not.** The sealed bytecode is the open one less its guards, and in native code the same sequences, with fewer jumps. Self time by function is the same, and sealing `vm.shen` alone gives all of it, so it is in `exec`. 0 to 12 nops before the loop's aligned body, which run only on entry, move neither mode much, and sealed stays behind at each.
-  - **What moves it.** A taken jump added before each `cons` and each `+`, `-` and `*`, the jumps open code has between its inlined bodies, takes sealed from about 0.590 to 0.572 and open from about 0.555 to 0.581. So it depends on how the M3 fetches or schedules straight-line code that reloads slots stored a few instructions before; which, its counters would have to say. Adding jumps for one machine's sake is not worth it, and sealed stays behind open even so.
+- **`--seal` made `bytecode VM` slower on the M3, and not on x86-64.** Alone, 10^6 runs at depth 9, best of 7: M3 open 0.552 to 0.566 s and sealed 0.585 to 0.594, at each of 6 shifts by unrelated definitions; Ryzen 5 5600X VM open 0.852 to 0.861 and sealed 0.828 to 0.842. It helps `compile pipeline` on the M3, 68 to 62 ms at depth 5.
+  - **What it was not.** The sealed bytecode is the open one less its guards, and in native code the same sequences, with fewer jumps. Self time by function is the same, and sealing `vm.shen` alone gives all of it, so it is in `exec`. 0 to 12 nops before the loop's aligned body, which run only on entry, move neither mode much.
+  - **What moved it.** A taken jump added before each `cons` and each `+`, `-` and `*`, the jumps open code has between its inlined bodies, took sealed from about 0.590 to 0.572 and open from about 0.555 to 0.581. That pointed at straight-line code reloading slots it stored a few instructions before, and registers for those removed the gap: see "Two more registers" under Registers and caching.
 
 ### x86-64 Linux
 
