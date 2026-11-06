@@ -36,9 +36,14 @@
 #define SCRATCHES ((5 + WORD_GPRS) | SLJIT_ENTER_FLOAT(3 + REAL_FLOATS))
 #define LOCALS ((REAL_REGISTERS + RAW_INTEGERS) * (sljit_s32)sizeof(sljit_sw))
 /* Registers S4 and up hold the slots of a loop that keeps them in registers
-   (Emit.homes): six on arm64, fewer where SLJIT has fewer saved registers. */
-#define HOMES (SLJIT_NUMBER_OF_SAVED_REGISTERS - 4 < 6 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 4 : 6)
-#define SAVEDS (4 + HOMES)
+   (Emit.homes): six on arm64, fewer where SLJIT has fewer saved registers. Where
+   that leaves fewer than six, scratch registers R5 and up serve too, if code written
+   by hand has not taken them: two on x86-64 outside Windows, and none on Windows.
+   Those wait in the frame around any call to C. */
+#define SAVED_HOMES (SLJIT_NUMBER_OF_SAVED_REGISTERS - 4 < 6 ? SLJIT_NUMBER_OF_SAVED_REGISTERS - 4 : 6)
+#define SAVEDS (4 + SAVED_HOMES)
+#define HOMES (SAVED_HOMES + (WORD_GPRS < 6 - SAVED_HOMES ? WORD_GPRS : 6 - SAVED_HOMES))
+#define HOME_REG(k) ((k) < SAVED_HOMES ? SLJIT_S(4 + (k)) : SLJIT_R(5 + (k) - SAVED_HOMES))
 /* Loop heads start on a 32-byte boundary: with 16, a 32-item list walk took
    12 or 17 ms depending on what was compiled before it. */
 #define LOOP_ALIGN SLJIT_LABEL_ALIGN_32
@@ -717,7 +722,7 @@ static void to_unwind(Emit *e, struct sljit_jump *jump)
    slots in registers, else its frame word. HOME gives SLJIT's operand pair. */
 static sljit_s32 slot_kind(const Emit *e, uint32_t n)
 {
-    return n >= 2 && n < e->homes + 2 ? SLJIT_S(4 + n - 2) : SLJIT_MEM1(FP);
+    return n >= 2 && n < e->homes + 2 ? HOME_REG((sljit_s32)n - 2) : SLJIT_MEM1(FP);
 }
 
 static sljit_sw slot_offset(const Emit *e, uint32_t n)
@@ -1204,7 +1209,9 @@ static void assign_places(Emit *e, const uint32_t *words, size_t nwords)
         used += raw_use[k] != 0;
     if (used > WORD_GPRS && raw_loop(words, nwords)) {
         e->homes = 0;
-        e->raw_saved = HOMES;
+        e->raw_saved = SAVED_HOMES;
+    } else if (used && e->homes > SAVED_HOMES) {
+        e->homes = 0; /* R5 and up are taken */
     }
 }
 
@@ -1361,7 +1368,7 @@ static bool keeps_cache(const uint32_t *p)
 static void spill(Emit *e)
 {
     for (uint32_t k = 0; k < e->homes; k++)
-        sljit_emit_op1(e->c, SLJIT_MOV, SLOT(2 + k), SLJIT_S(4 + k), 0);
+        sljit_emit_op1(e->c, SLJIT_MOV, SLOT(2 + k), HOME_REG((sljit_s32)k), 0);
 }
 
 /* C keeps few float registers, so all of them wait in the frame, and it keeps no scratch integer
@@ -1392,7 +1399,7 @@ static void emit_memory_caches(Emit *e);
 static void fill(Emit *e)
 {
     for (uint32_t k = 0; k < e->homes; k++)
-        sljit_emit_op1(e->c, SLJIT_MOV, SLJIT_S(4 + k), 0, SLOT(2 + k));
+        sljit_emit_op1(e->c, SLJIT_MOV, HOME_REG((sljit_s32)k), 0, SLOT(2 + k));
     load_raw(e);
     emit_memory_caches(e);
 }
@@ -1406,9 +1413,9 @@ static void enter(Emit *e)
 {
     for (uint32_t k = 0; k < e->homes; k++)
         if (2 + k < e->arity + 2)
-            sljit_emit_op1(e->c, SLJIT_MOV, SLJIT_S(4 + k), 0, SLOT(2 + k));
+            sljit_emit_op1(e->c, SLJIT_MOV, HOME_REG((sljit_s32)k), 0, SLOT(2 + k));
         else
-            sljit_emit_op1(e->c, SLJIT_MOV, SLJIT_S(4 + k), 0, IMM(V_NIL));
+            sljit_emit_op1(e->c, SLJIT_MOV, HOME_REG((sljit_s32)k), 0, IMM(V_NIL));
 }
 
 /* Publish the frame pointer and the scanned top before a call into C that
@@ -1454,9 +1461,17 @@ static void call_c_raising(Emit *e, const Slow *s, sljit_s32 arg_types, void *fn
    a loop that calls would wait on it. */
 static void call_leaf(Emit *e, sljit_s32 arg_types, void *fn)
 {
+    for (sljit_s32 k = SAVED_HOMES; k < (sljit_s32)e->homes; k++)
+        sljit_emit_op1(e->c, SLJIT_MOV, SLOT(2 + k), HOME_REG(k), 0);
     save_raw(e);
     sljit_emit_icall(e->c, SLJIT_CALL, arg_types, SLJIT_IMM, SLJIT_FUNC_ADDR(fn));
+    /* C keeps no scratch register, whether or not this call happened to touch them. */
+    if (e->vm->stress)
+        for (sljit_s32 k = SAVED_HOMES; k < HOMES; k++)
+            sljit_emit_op1(e->c, SLJIT_MOV, HOME_REG(k), 0, IMM(UINT64_C(0xDEADDEADDEADDEAD)));
     load_raw(e);
+    for (sljit_s32 k = SAVED_HOMES; k < (sljit_s32)e->homes; k++)
+        sljit_emit_op1(e->c, SLJIT_MOV, HOME_REG(k), 0, SLOT(2 + k));
 }
 
 static void check_raise(Emit *e)

@@ -33,6 +33,7 @@ All notable changes to this project are documented in this file. The format is b
   an access to memory reached at one width takes one comparison.
 - New objects now always go in the same memory, so a program that allocates uses much less of it, and allocates
   faster where two semispaces taking turns outgrew the cache. A process that only starts takes about 2 MB more.
+- On x86-64 outside Windows, a loop that calls nothing keeps up to four values in registers, where it was two.
 
 ### Fixed
 

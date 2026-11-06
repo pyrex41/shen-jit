@@ -133,8 +133,9 @@ Some refinements are built on that:
   Tail calls do not count against a leaf, except in code compiled once something needs interrupts seen, since
   functions that call each other in tail position loop, and only their entry checks see an interrupt.
 - **Loops keep their slots in registers.** Code that loops through a self tail call, makes no call but tail calls and has no
-  handlers keeps slots 2 and up in saved registers when they fit: six on arm64, two on x86-64. Code written by hand with more raw values
-  than scratch registers gives them those instead ([bytecode.md](bytecode.md), "Real and word registers"). It stores them back before any call
+  handlers keeps slots 2 and up in registers when they fit: six on arm64 and four on x86-64. Those are saved registers, except for two
+  of the four on x86-64 outside Windows, which are scratch registers, unless code written by hand uses them, and wait in the frame around any call to C. Code written by hand
+  with more raw values than scratch registers gives them the saved ones instead ([bytecode.md](bytecode.md), "Real and word registers"). It stores them back before any call
   into C that may collect or raise, and loads them again after a collection, so the frame's words are always
   valid and the collector never sees a stale pointer.
 - **Loops exit out of line.** A test that ends a loop, an `=` with a constant whose true branch only returns, jumps

@@ -143,6 +143,11 @@ Lowering rules, the collector and the kernel port have their own sections.
   patterns of 16 and 24 elements took 1.2 and 1.5 times as long.
 - **List walks are not bound by dependent loads** (2026-11-04). Corrects an earlier conclusion: walking a pattern
   takes 0.20 ns per element on the Ryzen VM and 0.14 on the M3 Max up to 12 elements, about one cycle.
+- **Four loop registers on x86-64 outside Windows** (2026-11-05, Ryzen VM, in alternation with the build before, best of 3 to 5). `r11` and `r10`, which only
+  code written by hand used, hold slots too, as Windows already had four, and wait in the frame around a call to C that keeps them live. About 15 lines net. Kernel rows 0.940, from 0.402 to 0.377
+  of Shen/Scheme 0.53, others 0.930. `reverse (32 items)` 0.77, level with Shen/Scheme, `list traversal` 0.74, `list membership` 0.67 to 0.71, many literal and type tests 0.75, `compile pipeline` 0.978,
+  `bytecode VM` 1.00, as `exec` makes real calls. Workloads never used for tuning 0.94 to 1.00. The slower rows checked were placement. Alone, with the code shifted by 0 to 8 definitions: `match list (single
+  clause, not matching)` 1.00 (1.33 in the suite), `allocating recursive call` 0.93 to 0.96 (1.06), `recursive list rebuild` 0.92 to 1.13 (1.10), and `reverse` 0.74 to 0.76. `literal float equality (false)`, 1.24, was not timed alone.
 - **Slots are not slow on Zen 3** (2026-11-05, Ryzen VM, hand-written chains). A store and a reload of the same slot add nothing to
   a chain of additions at any base register, 0.216 ns a link with or without them, and about one cycle when the frame pointer
   moves between them, as across a call, 0.432 ns. So `rbx` as the frame pointer costs nothing against `rbp`.
@@ -428,6 +433,9 @@ Nothing in the runtime changes for it alone.
   words just overwritten, so a stale pointer found a new object instead of failing. Noticed reading what this section promises, and a unit test now
   shows it. Under stress, new objects go past those words for as long as they fit, and those words no longer count as the heap. So a stale pointer to a
   young object now stays caught at any number of collections, until the area wraps. One to what a collection had kept still comes back every second one.
+- **2026-11-05, scratch registers scrambled under stress.** With a loop's slots in scratch registers, a missing reload after C passed the suites, as `h_equal` need not touch `r10` or `r11`. So under stress they
+  are overwritten after such a call. With the reload removed, an `=` case now fails under stress every time, and a `cn` case fails in a plain run here. The first cases proved nothing: large frames did not get those registers, and two equal literal lists are one
+  constant, so `=` never reached C.
 
 ### Images and executables
 
