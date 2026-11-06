@@ -1328,17 +1328,31 @@ static bool to_home(const Emit *e, uint32_t dst)
     return e->homes && slot_kind(e, dst) != SLJIT_MEM1(FP);
 }
 
-/* Store R0, the result, to slot dst, and keep it in CACHE if it is read
-   soon. */
+/* Put what k, w holds in slot dst, and keep it in CACHE if it is read soon. A load goes straight
+   to CACHE, unless CACHE is its base: over list patterns, that load takes an M3 about 15% longer
+   than one to another register and a move. */
+static void put_result(Emit *e, uint32_t dst, sljit_s32 k, sljit_sw w)
+{
+    if (!read_soon(e, dst, true)) {
+        sljit_emit_op1(e->c, SLJIT_MOV, HOME(e, dst), k, w);
+        return;
+    }
+    if (k == SLJIT_MEM1(SLJIT_S2)) {
+        sljit_emit_op1(e->c, SLJIT_MOV, R0, k, w);
+        k = SLJIT_R0;
+        w = 0;
+    }
+    if (k != SLJIT_S2)
+        sljit_emit_op1(e->c, SLJIT_MOV, CACHE, k, w);
+    if (!(dead_store(e, dst) || consumed_next(e, dst)))
+        sljit_emit_op1(e->c, SLJIT_MOV, HOME(e, dst), CACHE);
+    e->post = dst;
+}
+
+/* The same for R0, the result. */
 static void store_result(Emit *e, uint32_t dst)
 {
-    bool soon = read_soon(e, dst, true);
-    if (!(soon && (dead_store(e, dst) || consumed_next(e, dst))))
-        sljit_emit_op1(e->c, SLJIT_MOV, HOME(e, dst), R0);
-    if (soon) {
-        sljit_emit_op1(e->c, SLJIT_MOV, CACHE, R0);
-        e->post = dst;
-    }
+    put_result(e, dst, R0);
 }
 
 /* Instructions that write at most one slot and call no guest code: CACHE
@@ -1764,11 +1778,11 @@ static Test emit_type_test(Emit *e, uint32_t prim, const uint32_t *arg)
 {
     struct sljit_compiler *c = e->c;
     Test t = {{NULL, NULL, NULL, NULL}, NULL};
-    sljit_s32 r = operand_reg(e, arg[0]);
     if (prim == P_SAMEP) {
-        t.no[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, r, 0, OPND(e, arg[1]));
+        t.no[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, OPND(e, arg[0]), OPND(e, arg[1]));
         return t;
     }
+    sljit_s32 r = operand_reg(e, arg[0]);
     if (prim == P_PVARP) {
         sljit_emit_op2(c, SLJIT_AND, R1, r, 0, IMM(0xFF));
         t.no[0] = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(PVAR_TAG));
@@ -2141,7 +2155,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
     case P_EQ: {
         if (identity_operand(e, arg[0]) || identity_operand(e, arg[1])) {
             uint32_t k = identity_operand(e, arg[1]) ? 1 : 0;
-            sljit_emit_op2u(c, SLJIT_SUB | SLJIT_SET_Z, operand_reg(e, arg[1 - k]), 0, OPND(e, arg[k]));
+            sljit_emit_op2u(c, SLJIT_SUB | SLJIT_SET_Z, OPND(e, arg[1 - k]), OPND(e, arg[k]));
             store_boolean_from_flags(e, SLJIT_ZERO, dst);
             break;
         }
@@ -2184,13 +2198,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
             slow = slow_path(e, SLOW_PRIM, tag_cmp(c, SLJIT_NOT_EQUAL, R1, r, 0, TAG_PAIR));
             slow->catch_label = quiet_catch(e);
         }
-        sljit_sw at = (sljit_sw)(prim == P_HD ? 0 : sizeof(V)) - TAG_PAIR;
-        if (to_home(e, dst)) {
-            sljit_emit_op1(c, SLJIT_MOV, HOME(e, dst), SLJIT_MEM1(r), at);
-        } else {
-            sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(r), at);
-            store_result(e, dst);
-        }
+        put_result(e, dst, SLJIT_MEM1(r), (sljit_sw)(prim == P_HD ? 0 : sizeof(V)) - TAG_PAIR);
         break;
     }
     case P_CONSP:
@@ -2495,8 +2503,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
             slow->from[2] = sljit_emit_cmp(c, SLJIT_LESS_EQUAL, R2, IMM(i));
             sljit_sw at = (1 + i) * (sljit_sw)sizeof(V) - TAG_OBJECT;
             if (prim == P_GET_ADDRESS) {
-                sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0), at);
-                store_result(e, dst);
+                put_result(e, dst, SLJIT_MEM1(SLJIT_R0), at);
             } else {
                 sljit_emit_op1(c, SLJIT_MOV, R2, OPND(e, arg[2]));
                 sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM1(SLJIT_R0), at, R2);
@@ -2511,8 +2518,7 @@ static void emit_prim(Emit *e, const uint32_t *p)
         slow->from[3] = sljit_emit_cmp(c, SLJIT_GREATER_EQUAL, R1, R2);
         sljit_emit_op2(c, SLJIT_ADD, R0, R0, IMM(sizeof(V) - TAG_OBJECT));
         if (prim == P_GET_ADDRESS) {
-            sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 1);
-            store_result(e, dst);
+            put_result(e, dst, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 1);
         } else {
             sljit_emit_op1(c, SLJIT_MOV, R2, OPND(e, arg[2]));
             sljit_emit_op1(c, SLJIT_MOV, SLJIT_MEM2(SLJIT_R0, SLJIT_R1), 1, R2);
@@ -2788,8 +2794,7 @@ static bool emit_exit_test(Emit *e, const uint32_t *p, const uint32_t *ret, uint
         return false;
     if (identity_operand(e, arg[0]) || identity_operand(e, arg[1])) {
         uint32_t k = identity_operand(e, arg[1]) ? 1 : 0;
-        sljit_s32 r = operand_reg(e, arg[1 - k]);
-        slow_path(e, SLOW_RETURN, sljit_emit_cmp(c, SLJIT_EQUAL, r, 0, OPND(e, arg[k])))->insn = ret;
+        slow_path(e, SLOW_RETURN, sljit_emit_cmp(c, SLJIT_EQUAL, OPND(e, arg[1 - k]), OPND(e, arg[k])))->insn = ret;
         return true;
     }
     if (!fixnum_operand(e, arg[0]) && !fixnum_operand(e, arg[1]))
@@ -2818,8 +2823,7 @@ static void emit_fused(Emit *e, const uint32_t *p, uint32_t label)
         /* The other value where it is, against the constant as an
            immediate where it can be one. */
         uint32_t k = identity_operand(e, arg[1]) ? 1 : 0;
-        sljit_s32 r = operand_reg(e, arg[1 - k]);
-        to_label(e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, r, 0, OPND(e, arg[k])), label);
+        to_label(e, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, OPND(e, arg[1 - k]), OPND(e, arg[k])), label);
         return;
     }
     if (prim == P_EQ && (string_operand(e, arg[0]) || string_operand(e, arg[1]))) {
@@ -3476,29 +3480,19 @@ static void *compile_code(VM *vm, V code)
         e.next = i + insn_length(p);
         switch (p[0]) {
         case OP_MOVE:
-            if (to_home(&e, p[1])) {
-                sljit_emit_op1(c, SLJIT_MOV, HOME(&e, p[1]), OPND(&e, p[2]));
-                break;
-            }
-            sljit_emit_op1(c, SLJIT_MOV, R0, OPND(&e, p[2]));
-            store_result(&e, p[1]);
+            put_result(&e, p[1], OPND(&e, p[2]));
             break;
         case OP_CONST: {
             V *cell = ra_at(&vm->consts, e.cbase + p[2]);
-            sljit_s32 to = to_home(&e, p[1]) ? slot_kind(&e, p[1]) : SLJIT_R0;
             if (is_ptr(*cell))
-                sljit_emit_op1(c, SLJIT_MOV, to, 0, SLJIT_MEM0(), (sljit_sw)cell);
+                put_result(&e, p[1], SLJIT_MEM0(), (sljit_sw)cell);
             else
-                sljit_emit_op1(c, SLJIT_MOV, to, 0, IMM(*cell));
-            if (to == SLJIT_R0)
-                store_result(&e, p[1]);
+                put_result(&e, p[1], IMM(*cell));
             break;
         }
         case OP_CAPTURE:
             sljit_emit_op1(c, SLJIT_MOV, R0, SLOT(1));
-            sljit_emit_op1(c, SLJIT_MOV, R0, SLJIT_MEM1(SLJIT_R0),
-                           (sljit_sw)((CLO_CAPS + p[2]) * sizeof(V)) - TAG_PROC);
-            store_result(&e, p[1]);
+            put_result(&e, p[1], SLJIT_MEM1(SLJIT_R0), (sljit_sw)((CLO_CAPS + p[2]) * sizeof(V)) - TAG_PROC);
             break;
         case OP_CLOSURE: {
             /* Inline bump allocation, as for cons. The entry is the code's
@@ -3599,9 +3593,9 @@ static void *compile_code(VM *vm, V code)
             break;
         }
         case OP_JUMP_IF_FALSE: {
-            sljit_emit_op1(c, SLJIT_MOV, R0, OPND(&e, p[1]));
-            to_label(&e, sljit_emit_cmp(c, SLJIT_EQUAL, R0, IMM(V_FALSE)), p[2]);
-            Slow *s = slow_path(&e, SLOW_BOOLEAN, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R0, IMM(V_TRUE)));
+            sljit_s32 r = operand_reg(&e, p[1]);
+            to_label(&e, sljit_emit_cmp(c, SLJIT_EQUAL, r, 0, IMM(V_FALSE)), p[2]);
+            Slow *s = slow_path(&e, SLOW_BOOLEAN, sljit_emit_cmp(c, SLJIT_NOT_EQUAL, r, 0, IMM(V_TRUE)));
             s->insn = p;
             s->catch_label = quiet_catch(&e);
             break;
