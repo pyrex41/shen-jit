@@ -1284,6 +1284,20 @@ the recorded 0.50's time on the M3 Max. The earlier prototype has no x86-64 numb
   - **The realistic programs lost their lead.** Its Boolean checks and equality paths gave Shen/Scheme, against the same programs under 0.53 in the same suite, `compile pipeline` 0.83 to 0.87 on the VM and 0.88 and 0.90 on the M3, `bytecode VM` 0.94 and 0.98 on the VM and 0.78 and 0.82 on the M3, `symbol equality (true)` 0.66 to 0.71 and `list membership (last item)` 0.43 to 0.51. On the VM it is now ahead of Shen/JIT on both programs, by 1% to 6%. On the M3 `compile pipeline` is level, and Shen/JIT keeps 8% to 12% on `bytecode VM`. In the suite, the same programs read 1.03 to 1.07 on the VM, and 0.91 to 1.02 on the M3.
   - **Rows still behind, on the VM:** `list equality (early mismatch)` 1.27, `list allocation (three live generations)` 1.19, `allocating recursive call` 1.16, `closure allocation` 1.11. On the M3: `numeric equality (integer/fractional)` 1.12, and four rows at 1.08 to 1.10.
   - **Not measured:** Shen/Scheme with user code sealed, and why these programs differ by machine.
+- **`bytecode VM` and `compile pipeline` profiled, 2026-11-06,** to find why Shen/Scheme 0.54 leads them on the VM with more instructions. Valgrind on the VM, by the difference of two run counts and over the last 100 M instructions of a trace, and `sample` on the M3 Max. Valgrind's low addresses save Shen/JIT about 4% of its instructions here, in constant loads.
+  | Per run on the VM | `bytecode VM` | Shen/Scheme | `compile pipeline` | Shen/Scheme |
+  | --- | ---: | ---: | ---: | ---: |
+  | Instructions | 13,056 | 15,223 | 262,096 | 334,368 |
+  | Loads, stores | 4,220, 2,012 | 3,660, 1,369 | 67,173, 35,345 | 74,723, 38,056 |
+  | Taken branches per 1000 instructions | 74 | 106 | 76 | 111 |
+  | Instructions in a straight run | 13.5 | 9.4 | 13.2 | 9.0 |
+  | Code touched | 2.9 KB | 24 KB | 17 KB | 35 KB |
+  | Stores overwritten unread | 16.6% | 21.9% | 29.8% | 21.5% |
+  | IPC, at 4.55 GHz | 3.3 | 4.1 | 3.8 | 5.0 |
+  - **Where it goes, instructions on the VM and samples on the M3:** in `bytecode VM`, `exec` 75% and 80%, `env-lookup` 22% and 16%. In `compile pipeline`, `free-vars` 30% and 33%, `union-vars` 15% and 12%, `append` in C 9% and 12%, `normalise` 9% and 8%, `simplify` 9% and 7%, `member?` 6% and 7%, the collector about 2.5%. `append` costs about 211 instructions a call, and its loop is already tight.
+  - **Frame traffic is large, and not what costs on Zen 3.** 30% of `exec`'s instructions load or store a slot, and `free-vars` reloads a term's head for each clause, up to five times. Yet a chain through a slot takes 0.22 ns a turn, as through a register, for any base register, and 0.44 ns with the base moved between store and load, a longer loop: the store's value reaches the load with no latency. On the M3 the same chain takes 1.82 ns against 0.27. So the M3 pays for slots and the VM does not, and Shen/JIT still does better on the M3. Fewer slots should not be expected to close the gap on x86-64. **Rejected before:** spare registers as copies of slots, above.
+  - **Nor is it the front end, as far as a trace can tell.** Shen/JIT has fewer taken branches and longer runs, and touches less code. Two simple predictors, by address alone, miss about as much on both: 2-bit counters 164 and 156 a run, 4,198 and 4,393, and last targets 0 and 26, 1,908 and 1,735.
+  - **Not known:** what holds its IPC down. The VM's guest has no hardware counters, as `/sys/bus/event_source/devices` has no `cpu`, so `perf` would not help whatever `perf_event_paranoid` says. Mispredicted returns and memory-order flushes are candidates that only counters can tell apart.
 
 ### Native Windows (2026-11-04)
 
