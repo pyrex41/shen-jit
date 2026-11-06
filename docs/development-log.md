@@ -751,7 +751,7 @@ that. Its readings decided nothing below.
 
 - **Kernel 43.4** (2026-11-06, against 43.2 at the same runtime). Only 7 of its functions differ beyond generated names, and the port overrides none: `declare`, `shen.factor-recognisors`, and five initialisers. Its factoriser takes a `cond` with no true clause, so `define`, which factorises everything here, no longer fails on one. On a Ryzen 5 5600X VM, idle, best of 5: kernel rows 1.001, port rows 0.999, the realistic programs 0.993 and 0.994, THORN and the standard library install the same, startup 3 ms on both. An Apple M3 Max at load 2 to 15 read 1.019 and 1.008, which says little. **Not taken:** the hook its expansion offers ports, `shen.precompiled-function?`, as the image holds the kernel already initialised. One of its new extension tests writes where it runs and calls `delete-file`, which only stlib defines, so `make test-kernel` runs those tests from a copy through `tests/kernel-extensions.shen`. `gensym` now starts at 7, not 32, so `lazy-gensym` counts from where it starts.
 
-- **Shen/Scheme 0.54** (2026-11-06, Apple M3 Max, against 0.53). It compares with numeric literals soundly and raises when a `cond` has no true clause, so `eq-int-real-literal` and `ctl-cond-no-match` are no longer deviations, and its `hash` still gives 8 and 8.0 different values. All 157 contract examples pass, it makes the same generated files as a host, and it gives THORN's 35 counts. Not timed against it yet.
+- **Shen/Scheme 0.54** (2026-11-06, Apple M3 Max, against 0.53). It compares with numeric literals soundly and raises when a `cond` has no true clause, so `eq-int-real-literal` and `ctl-cond-no-match` are no longer deviations, and its `hash` still gives 8 and 8.0 different values. All 157 contract examples pass, it makes the same generated files as a host, and it gives THORN's 35 counts. Its timings are under "x86-64 Linux" below.
 
 ### Not tried yet
 
@@ -1273,6 +1273,17 @@ the recorded 0.50's time on the M3 Max. The earlier prototype has no x86-64 numb
   - **The pipeline moved less with placement.** On the VM at depth 7 it read 156 to 167 ms before, by what compiled first, and now 150 to 153. In the suite it read 1.015, so one placement can hide the gain. NOPs after each loop head are no way to try more placements: they run each turn, and took it to 155 to 235 ms.
   - **That corrects the entry above.** 5% fewer instructions left `bytecode VM` alone on the VM, and 5.7% fewer took 7% from `compile pipeline`, while the M3 reads the other way round. So the count does not predict time here, and how much of the gap between the machines it explains is less sure than the 1.18 there says.
   - **Rejected: a load based on CACHE going straight to it,** `ldr x21, [x21, #5]`. On the VM instructions 0.931 and 0.904 and no better in time, kernel rows 1.004 and port rows 1.001. On the M3 `match list` 1.16 and 1.09 at every placement, flat as NOPs were added where the build before grew with them, against 1.00 for a load to another register and a move. A load from any other base straight to CACHE does not do this. Why is not known.
+- **Against Shen/Scheme 0.54, 2026-11-06,** both on kernel 43.4 with user code open, on the Ryzen VM, idle, and an Apple M3 Max at load 2 to 4. Rows are the best of 5 in alternation, and the realistic programs alone are the best of 7.
+  | Shen/JIT over Shen/Scheme | Ryzen VM | M3 Max |
+  | --- | ---: | ---: |
+  | Kernel rows (0.53 before) | 0.348 (0.377) | 0.332 (0.366) |
+  | Port rows (0.53 before) | 0.359 (0.413) | 0.367 (0.430) |
+  | `compile pipeline` alone, depths 7, 5 and 9 | 1.02, 1.06, 1.01 | 1.02, 1.03, 0.96 |
+  | `bytecode VM` alone, depths 9 and 7 | 1.05, 1.04 | 0.88, 0.92 |
+  - **The rows gained where Shen/Scheme now pays for a sound `=`.** A test against a numeric literal was `eqv?`, and is now guarded. On the VM its control loops take 1.66 times as long, `literal integer equality (false)` 1.80 and `match list (multiple clauses, matching)` 2.10, which now reads 0.70, where it read 1.47. The M3 reads the same: 1.48, 1.72 and 1.91.
+  - **The realistic programs lost their lead.** Its Boolean checks and equality paths gave Shen/Scheme, against the same programs under 0.53 in the same suite, `compile pipeline` 0.83 to 0.87 on the VM and 0.88 and 0.90 on the M3, `bytecode VM` 0.94 and 0.98 on the VM and 0.78 and 0.82 on the M3, `symbol equality (true)` 0.66 to 0.71 and `list membership (last item)` 0.43 to 0.51. On the VM it is now ahead of Shen/JIT on both programs, by 1% to 6%. On the M3 `compile pipeline` is level, and Shen/JIT keeps 8% to 12% on `bytecode VM`. In the suite, the same programs read 1.03 to 1.07 on the VM, and 0.91 to 1.02 on the M3.
+  - **Rows still behind, on the VM:** `list equality (early mismatch)` 1.27, `list allocation (three live generations)` 1.19, `allocating recursive call` 1.16, `closure allocation` 1.11. On the M3: `numeric equality (integer/fractional)` 1.12, and four rows at 1.08 to 1.10.
+  - **Not measured:** Shen/Scheme with user code sealed, and why these programs differ by machine.
 
 ### Native Windows (2026-11-04)
 
@@ -1327,6 +1338,10 @@ rounds, in ms. Shen/Scheme cannot install the standard library, which defines a 
 | Ryzen VM, 2026-11-04 | 2 | 277 | 23 | 84 | 13 |
 | Shen/Scheme 0.52, Ryzen VM, 2026-11-04 | 241 | 1305 | 342 | - | - |
 | Windows 10 on the Ryzen, 2026-11-04 | 7 | 309 | 37 | 111 | 21 |
+| M3 Max, 2026-11-06, kernel 43.4 | 5 | 193 | 27 | 71 | 14 |
+| Shen/Scheme 0.54, M3 Max, 2026-11-06 | 58 | 808 | 156 | - | - |
+| Ryzen VM, 2026-11-06, kernel 43.4 | 2 | 274 | 30 | 84 | 14 |
+| Shen/Scheme 0.54, Ryzen VM, 2026-11-06 | 70 | 1049 | 200 | - | - |
 
 - **The gains hold outside the benchmarks.** On 2026-11-04 the kernel's test suite takes 0.20 of Shen/Scheme's 964 ms on the M3 Max and 0.21
   on the Ryzen VM, against 0.36 and 0.43 for the campaign.
@@ -1334,4 +1349,4 @@ rounds, in ms. Shen/Scheme cannot install the standard library, which defines a 
   workloads, 2026-11-04; the campaign times inside the process. The reservation went to 64 GiB.
 - **It shows compile costs.** Open inlining and exact traces (2026-11-03) cost these workloads 3 to 5% of compile time while the benchmarks
   gained: open inlining 1%, the rest most likely the bookkeeping for exact backtraces.
-- **THORN rows, added 2026-11-06.** Nothing above runs for long, so these time a prover searching, with its wall-clock limit taken away, on the problems of `tests/thorn.expected` that take it long enough: `set`, `L`, `schubert` and `ec`. The other three take little more than loading it, which is 42 ms on the M3 Max and 48 ms on the Ryzen VM. Median of nine rounds, in ms, at the build of that date: M3 Max 268, 217, 212 and 268, Ryzen VM 334, 293, 273 and 347. Each binary makes its own executable with the standard library, and each run is checked against that file. Not quite never used for tuning: profiling THORN is how `get-time`'s interning was found. Not compared with Shen/Scheme yet.
+- **THORN rows, added 2026-11-06.** Nothing above runs for long, so these time a prover searching, with its wall-clock limit taken away, on the problems of `tests/thorn.expected` that take it long enough: `set`, `L`, `schubert` and `ec`. The other three take little more than loading it, which is 42 ms on the M3 Max and 48 ms on the Ryzen VM. Median of nine rounds, in ms, at the build of that date: M3 Max 268, 217, 212 and 268, Ryzen VM 334, 293, 273 and 347. Each binary makes its own executable with the standard library, and each run is checked against that file. Not quite never used for tuning: profiling THORN is how `get-time`'s interning was found. Against Shen/Scheme 0.54, the same day, median of nine: on the M3 0.22, 0.38, 0.32 and 0.47, and on the VM 0.20, 0.38, 0.32 and 0.47. Loading THORN takes it 190 and 244 ms; less that on both sides, 0.23, 0.46, 0.37 and 0.61, and 0.20, 0.47, 0.37 and 0.60.

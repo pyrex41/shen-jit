@@ -15,10 +15,10 @@ that take it long enough to time, with its wall-clock limit taken away. Each
 binary runs each workload once per round, in an order that rotates between
 rounds; the table gives the median wall time in ms and each binary's time over
 the first's. With --scheme, Shen/Scheme runs the workloads it can too: the
-standard library defines concat*, which its port already has, the contract
-examples are shen-jit's, and THORN is not compared with it yet. Every run's
-output is checked, THORN's against tests/thorn.expected; contract examples that
-fail are only reported, since an older binary predates some of them."""
+standard library defines concat*, which its port already has, and the contract
+examples are shen-jit's. Every run's output is checked, THORN's against
+tests/thorn.expected; contract examples that fail are only reported, since an
+older binary predates some of them."""
 import os, re, shutil, statistics, subprocess, sys, tempfile, time
 from pathlib import Path
 
@@ -115,11 +115,11 @@ def main(argv):
             order = everyone[r % len(everyone):] + everyone[:r % len(everyone)]
             for w, (cwd, args, stdin, ok) in jobs.items():
                 for b in (order if r % 2 == 0 else order[::-1]):
-                    is_thorn = w.startswith('THORN')
-                    if b == scheme and (is_thorn or w in ('standard library install', 'contract examples')):
+                    if b == scheme and w in ('standard library install', 'contract examples'):
                         continue
                     t = time.perf_counter()
-                    p = subprocess.run([with_stlib[b] if is_thorn else b] + args, cwd=cwd, input=stdin,
+                    exe = with_stlib.get(b, b) if w.startswith('THORN') else b
+                    p = subprocess.run([exe] + args, cwd=cwd, input=stdin,
                                        capture_output=True, text=True, errors='replace')
                     times[(w, b)].append(time.perf_counter() - t)
                     if not ok(p.stdout + p.stderr):
