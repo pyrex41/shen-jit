@@ -242,9 +242,14 @@
        "(code f 1 6 (1) ((move 4 2) (const 5 0) (tail-call-value 3 1)) ())"]
       \\ 8 and 8.0 are distinct constants; equal strings are shared.
       [[defun f [] [cons 8 [cons (+ 7.5 0.5) [cons 8 [cons "s" "s"]]]]] []
-       [code f 0 6 [8 (+ 7.5 0.5) "s"]
-        [[prim 5 cons [const 2] [const 2]] [prim 4 cons [const 0] 5]
-         [prim 3 cons [const 1] 4] [prim 2 cons [const 0] 3] [return 2]] []]]
+       [code f 0 3 [8 (+ 7.5 0.5) "s"]
+        [[prim 2 cons [const 2] [const 2]] [prim 2 cons [const 0] 2]
+         [prim 2 cons [const 1] 2] [prim 2 cons [const 0] 2] [return 2]] []]]
+      \\ A chain with constant heads takes one slot, but not a parameter's.
+      ["(defun f (X) (let Y (cons a (cons b X)) (foo (cons c (cons d Y)))))" [[foo | 1]]
+       "(code f 1 5 (a b c d)
+          ((prim 3 cons (const 1) 2) (prim 3 cons (const 0) 3) (prim 4 cons (const 3) 3)
+           (prim 2 cons (const 2) 4) (tail-call-sealed 0 foo 1)) ())"]
       \\ An expression for eval-kl; type is erased.
       ["(type (+ 1 2) number)" []
        "(code eval-kl 0 2 (3) ((return (const 0))) ())"]

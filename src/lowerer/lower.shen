@@ -920,6 +920,14 @@
 (define shen-jit.lower.value-h
   B _ [const X] D _ -> (shen-jit.lower.emit B [const D (shen-jit.lower.constant B X)])
   B Env [var X] D _ -> (shen-jit.lower.load-var B Env X D)
+  \\ A chain of conses with constant heads stays in one slot: only the innermost
+  \\ reads other slots. A parameter's slot is left out, as nothing but a tail
+  \\ call may read it once written; the tail then goes to a slot above.
+  B Env [prim cons [[const A] [prim cons Args]]] D Top
+  -> (let K (shen-jit.lower.constant B A)
+       (do (shen-jit.lower.value-h B Env [prim cons Args] D Top)
+           (shen-jit.lower.emit B [prim D cons [const K] D])))
+      where (>= D (+ 2 (<-address B 1)))
   B Env [prim Op Args] D Top
   -> (shen-jit.lower.emit B [prim D Op | (shen-jit.lower.operands B Env Args Top)])
   B Env [lambda X Body] D Top -> (shen-jit.lower.closure B Env lambda [X] Body D Top)

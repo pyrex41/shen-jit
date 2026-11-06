@@ -156,6 +156,22 @@ check msg-string "$dir/msg.out" '(1-) "A" is not a number'
 check msg-list "$dir/msg.out" "(2-) [a b] is not a number"
 check msg-undefined "$dir/msg.out" "(4-) fn: undefined-u is undefined"
 
+# A cons run lowered into one slot, in a loop whose argument is computed in
+# place from its own slot, across collections, and a long literal.
+cat > "$dir/run.shen" <<'SHEN'
+(define grow 0 Y -> Y N Y -> (grow (- N 1) (cons a (cons b Y))))
+(define mixed 0 Y -> Y N Y -> (mixed (- N 1) (cons a (cons (length Y) Y))))
+(define keep Y -> (let X (cons a (cons b Y)) [X Y]))
+(output "~A ~A ~A ~A~%" (length (grow 200000 [])) (hd (tl (grow 2 [q]))) (hd (tl (mixed 2 [q]))) (keep [q]))
+SHEN
+"$SHEN" script "$dir/run.shen" > "$dir/run.out" 2>&1
+check cons-run-one-slot "$dir/run.out" "400000 b 3 [[a b q] [q]]"
+awk 'BEGIN { printf "(define big -> ["; for (i = 1; i <= 5000; i++) printf "%d ", i; print "])"
+    print "(define total [] -> 0 [X | Xs] -> (+ X (total Xs)))"
+    print "(output \"~A ~A ~A~%\" (hd (big)) (length (big)) (total (big)))" }' > "$dir/literal.shen"
+"$SHEN" script "$dir/literal.shen" > "$dir/literal.out" 2>&1
+check long-literal "$dir/literal.out" "1 5000 12502500"
+
 # Deep non-tail recursion grows the stack many times; the first argument,
 # passed in a register as well as in its slot, must survive each growth.
 printf '(define mk 0 Acc -> Acc N Acc -> (mk (- N 1) [N | Acc]))\n(define deep [] -> 0 [_ | Xs] -> (+ 1 (deep Xs)))\n(output "~A ~A~%%" (deep (mk 300000 [])) (length (append (mk 300000 []) [a])))\n' \

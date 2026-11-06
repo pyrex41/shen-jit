@@ -25,6 +25,8 @@ All notable changes to this project are documented in this file. The format is b
   the error.
 - `write-byte` and `close` raise an error when the write fails, as on a full disk, instead of losing the data silently.
 - Compiling a long literal list of numbers takes far less: 4000 elements about a tenth of what it did.
+- Compiling a long literal list now takes about half of what it did, and with constant elements the list uses one
+  frame slot instead of one per element.
 
 ## [0.3] - 2026-11-06
 

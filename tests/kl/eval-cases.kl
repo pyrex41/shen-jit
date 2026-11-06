@@ -1083,3 +1083,6 @@ goes through the stub, and a function that cannot be found raises as anything do
 (error "shen-jit.filled-vector: " (shen-jit.filled-vector 72057594037927936 0))
 (value none (trap-error (shen-jit.pvar-offset 0) (lambda E none)))
 (value none (trap-error (shen-jit.pvar -1) (lambda E none)))
+(value ((a b q) (q)) (let Y (cons q ()) (let X (cons a (cons b Y)) (cons X (cons Y ())))))
+(value ((a b q) (b q) (q)) (let Y (cons q ()) (let X (cons b Y) (let Z (cons a X) (cons Z (cons X (cons Y ())))))))
+(value (a c b q) ((lambda X (lambda Y (cons a (cons X (cons b Y))))) c (cons q ())))
