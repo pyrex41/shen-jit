@@ -39,6 +39,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- `=`, `<`, `>`, `<=` and `>=` now compare an integer with a real exactly. From 2^53 up the integer was rounded to a
+  double first, so `=` was not transitive, unification could depend on the order of its arguments, and two keys that
+  were `=` could have different hashes.
 - An integer literal too big for a fixnum, and one with a large exponent such as `1e300`, now reads as the
   nearest real. They could land slightly off it, as `1e100` read as `1.0000000000000006e100`.
 - A burst of new symbols, such as from `gensym` in a loop, no longer slows every later collection for as long as

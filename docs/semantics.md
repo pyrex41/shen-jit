@@ -83,9 +83,11 @@ collector copies them with it, and reuses them once it is dead (heap.c).
   integer or real, raises an error, as in Shen/Scheme. Other real operations
   follow IEEE, so infinities and NaN can arise from overflow.
 - **Comparison:** `<`, `>`, `<=` and `>=` compare mathematical values across
-  integers and reals; a non-number operand raises an error.
+  integers and reals, exactly, with no rounding of the integer; a non-number
+  operand raises an error.
 - **Equality:** `=` compares numbers by mathematical value, so `(= 8 8.0)` and
-  `(= 0.0 -0.0)` are true and NaN equals nothing. *Deviation:* Shen/Scheme
+  `(= 0.0 -0.0)` are true, and NaN equals no other value, itself included unless
+  both sides are the same object. *Deviation:* Shen/Scheme
   compiles `=` against a numeric literal to `eqv?`, so `(= 8.0 8)` with a
   computed real is false there, and its `hash` gives 8 and 8.0 different
   values.

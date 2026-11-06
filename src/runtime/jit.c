@@ -1715,8 +1715,9 @@ static struct sljit_jump *fixnum_operands(Emit *e, uint32_t a, uint32_t b, sljit
 }
 
 /* The number at operand x in a float register: a real's value, or a fixnum's, converted. Anything
-   else jumps away, through other[0] and other[1]. Uses R0 and R1. */
-static void load_number(Emit *e, uint32_t x, sljit_s32 f, struct sljit_jump **other)
+   else jumps away, through other[0] and other[1], and so does, if inexact is not NULL, through it, a
+   fixnum that a double may not hold exactly. Uses R0 and R1. */
+static void load_number(Emit *e, uint32_t x, sljit_s32 f, struct sljit_jump **other, struct sljit_jump **inexact)
 {
     struct sljit_compiler *c = e->c;
     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, x));
@@ -1729,6 +1730,10 @@ static void load_number(Emit *e, uint32_t x, sljit_s32 f, struct sljit_jump **ot
     sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(3));
     other[1] = sljit_emit_jump(c, SLJIT_NOT_ZERO);
     sljit_emit_op2(c, SLJIT_ASHR, R0, R0, IMM(2));
+    if (inexact) {
+        sljit_emit_op2(c, SLJIT_ADD, R1, R0, IMM(INT64_C(1) << 53));
+        *inexact = sljit_emit_cmp(c, SLJIT_GREATER, R1, IMM(INT64_C(1) << 54));
+    }
     sljit_emit_fop1(c, SLJIT_CONV_F64_FROM_SW, f, 0, R0);
     sljit_set_label(done, sljit_emit_label(c));
 }
@@ -1951,7 +1956,7 @@ static void emit_raw(Emit *e, const uint32_t *p)
             sljit_emit_fset64(c, f, is_fix(k) ? (double)fixval(k) : real_value(k));
         } else {
             struct sljit_jump *other[2];
-            load_number(e, p[2], f, other);
+            load_number(e, p[2], f, other, NULL);
             Slow *s = slow_path(e, SLOW_NOT_NUMBER, other[0]);
             s->from[1] = other[1];
             s->insn = p;
@@ -3022,21 +3027,22 @@ static void emit_slow_paths(Emit *e)
             if (compare || p[2] == P_ADD || p[2] == P_SUB || p[2] == P_MUL || p[2] == P_DIV) {
                 /* With a real among the operands, the work is done here. What is left is for
                    the dispatcher: what is not a number, division by zero, no room for the
-                   result, and two fixnums, which overflowed or divide exactly. */
+                   result, two fixnums, which overflowed or divide exactly, and comparing a
+                   real with a fixnum that a double may not hold. */
                 static const sljit_s32 fop[] = {[P_ADD] = SLJIT_ADD_F64, [P_SUB] = SLJIT_SUB_F64,
                                                 [P_MUL] = SLJIT_MUL_F64, [P_DIV] = SLJIT_DIV_F64};
                 static const sljit_s32 ftype[] = {[P_LT] = SLJIT_ORDERED_LESS, [P_GT] = SLJIT_ORDERED_GREATER,
                                                   [P_LE] = SLJIT_ORDERED_LESS_EQUAL,
                                                   [P_GE] = SLJIT_ORDERED_GREATER_EQUAL};
-                struct sljit_jump *other[7] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+                struct sljit_jump *other[9] = {NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
                 if (!compare) {
                     sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, p[4]));
                     sljit_emit_op2(c, SLJIT_OR, R0, R0, OPND(e, p[5]));
                     sljit_emit_op2u(c, SLJIT_AND | SLJIT_SET_Z, R0, IMM(3));
                     other[0] = sljit_emit_jump(c, SLJIT_ZERO);
                 }
-                load_number(e, p[4], SLJIT_FR0, other + 1);
-                load_number(e, p[5], SLJIT_FR1, other + 3);
+                load_number(e, p[4], SLJIT_FR0, other + 1, compare ? other + 7 : NULL);
+                load_number(e, p[5], SLJIT_FR1, other + 3, compare ? other + 8 : NULL);
                 if (compare) {
                     same[0] = sljit_emit_fcmp(c, ftype[p[2]], SLJIT_FR0, 0, SLJIT_FR1, 0);
                     differ[0] = sljit_emit_jump(c, SLJIT_JUMP);
@@ -3055,7 +3061,7 @@ static void emit_slow_paths(Emit *e)
                     go_back(e, s);
                 }
                 struct sljit_label *dispatch = sljit_emit_label(c);
-                for (int j = 0; j < 7; j++)
+                for (int j = 0; j < 9; j++)
                     sljit_set_label(other[j], dispatch);
             }
             if (p[2] == P_EQ && (fixnum_operand(e, p[4]) || fixnum_operand(e, p[5]))) {
