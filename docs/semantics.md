@@ -80,8 +80,8 @@ collector copies them with it, and reuses them once it is dead (heap.c).
 - **Reals** are IEEE doubles. Mixed integer/real arithmetic produces a real.
 - **Division:** `(/ A B)` of two integers is an integer when B divides A
   exactly and a real otherwise; any real operand gives a real. A zero divisor,
-  integer or real, raises an error, as in Shen/Scheme. Other real operations
-  follow IEEE, so infinities and NaN can arise from overflow.
+  integer or real, raises an error. *Deviation:* Shen/Scheme raises only for an integer zero, and a real zero
+  gives an infinity or NaN. Other real operations follow IEEE, so infinities and NaN can arise from overflow.
 - **Comparison:** `<`, `>`, `<=` and `>=` compare mathematical values across
   integers and reals, exactly, with no rounding of the integer; a non-number
   operand raises an error.

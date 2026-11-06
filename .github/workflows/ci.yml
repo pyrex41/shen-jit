@@ -101,6 +101,9 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: python tests/ctrlc_windows.py build/shen-jit.exe
+      - name: Differential
+        if: github.ref_type != 'tag'
+        run: make test-differential
       - name: GC stress
         if: github.ref_type != 'tag'
         run: make "KERNEL_DIR=$KERNEL_DIR" test-kernel-stress test-kl-stress

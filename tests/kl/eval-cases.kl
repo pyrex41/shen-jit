@@ -1076,3 +1076,8 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value 1 (ic-h go 0))
 (value ic-i (defun ic-i (X Y) (let A (if (= X true) one two) (let B (if (= Y a) one two) (cons A (cons B ()))))))
 (value (one two) (ic-i true b))
+(error "absvector: " (absvector 72057594037927936))
+(error "absvector: " (absvector 2305843009213693951))
+(error "shen-jit.filled-vector: " (shen-jit.filled-vector 72057594037927936 0))
+(value none (trap-error (shen-jit.pvar-offset 0) (lambda E none)))
+(value none (trap-error (shen-jit.pvar -1) (lambda E none)))

@@ -56,7 +56,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-thorn test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-thorn test-native test-ffi test-differential differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -293,6 +293,14 @@ test-native: $(BUILD)/shen-jit
 
 fuzz-native: $(BUILD)/shen-jit
 	python3 tests/native_fuzz.py
+
+# Each primitive over generated values, however it is compiled and through C (about 25 s).
+test-differential: $(BUILD)/shen-jit
+	sh tests/differential.sh $(SHEN_JIT) $(BUILD)/differential
+
+# What differs from Shen/Scheme, to read: either may be wrong, so it checks nothing.
+differential-scheme: $(BUILD)/shen-jit
+	python3 tests/differential_scheme.py $(BUILD)/shen-jit $(SHEN_SCHEME) $(BUILD)/differential-scheme
 
 # C functions called from Shen (lib/ffi.shen), against a library made for it, then from
 # typed code, which needs (tc +) before the file is read, and C written for Shen, and the
