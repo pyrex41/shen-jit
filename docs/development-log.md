@@ -670,6 +670,11 @@ that. Its readings decided nothing below.
 - **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
   time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
   the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.
+- **THORN's inference counts as a test** (2026-11-05, Apple M5). Nothing checked what a prover computes, and a wrong
+  answer from a prover looks like any other. THORN's search is deterministic once its wall-clock limit is gone: seven of
+  its problem files gave the same 35 counts and unproved goals on Shen/JIT and Shen/Scheme 0.52, in about a second each.
+  Under that limit the counts change with load, so they say nothing. `tests/prolog-unify.shen` also compared the reader's
+  1.0, which is the integer 1, so a unifier comparing numbers by identity passed 1495 of 1495; with a computed real it fails 6.
 
 ### Native code written by hand
 

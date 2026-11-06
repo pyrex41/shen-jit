@@ -32,8 +32,9 @@
   0 [X | _] -> X
   N [_ | Xs] -> (pu.nth (- N 1) Xs))
 
-\\ Atoms that differ, and two that are = without being identical.
-(set pu.atoms [a b [] 1 1.0 2 "s" "s" true c])
+\\ Atoms that differ, and pairs that are = without being identical: the reader turns 1.0
+\\ into the integer 1, so the real is computed.
+(set pu.atoms [a b [] 1 (+ 0.5 0.5) 2 "s" "s" true c])
 
 (define pu.term
   Vars Depth -> (let R (pu.random 10)

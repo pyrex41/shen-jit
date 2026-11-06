@@ -52,7 +52,7 @@ History stays linear: no merge commits. A commit message says what changed and w
 Run the fast tier after every change; it takes about 20 s and catches nearly everything:
 
 ```bash
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-native test-ffi
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-ffi
 ```
 
 A change that alters the generated files (the lowerer, the port, or the lowered test programs
@@ -76,6 +76,8 @@ New behaviour gets cases in `tests/kl/eval-cases.kl` (KL) or `tests/cli.sh` (the
 
 CI (`.github/workflows/ci.yml`) follows `tests/linux.sh`: one job makes the tarball, with pandoc and the kernel and host releases that `tools/ci-deps.sh` checks by hash, and each platform builds and
 tests it with a C compiler alone. Moving the kernel, the host or Shen/Scheme updates the hashes there.
+
+`make test-thorn` runs THORN, from the kernel, with its wall-clock limit taken away. `tests/thorn.expected` holds each problem's inference count and what went unproved, which Shen/Scheme also gives. Moving the kernel may change them: compare with Shen/Scheme, then run `tests/thorn.sh` with `UPDATE_THORN=1`.
 
 ## Releasing
 

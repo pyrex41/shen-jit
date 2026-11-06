@@ -1,0 +1,61 @@
+pelletier
+416 inferences
+21 inferences
+29 inferences
+384 inferences
+303 inferences
+21 inferences
+21 inferences
+126 inferences
+4212 inferences
+9356 inferences
+2494 inferences
+4148 inferences
+142158 inferences
+126 inferences
+29 inferences
+7552 inferences
+finished
+finished
+set
+2495 inferences
+2637 inferences
+549786 inferences
+2107 inferences
+1274 inferences
+23091 inferences
+19190 inferences
+1071 inferences
+4968 inferences
+finished
+finished
+L
+325 inferences
+816 inferences
+367971 inferences
+1511206 inferences
+[prv [imp p [neg [neg p]]]] is unproved
+1211174 inferences
+[prv [imp [and p q] p]] is unproved
+finished
+finished
+schubert
+5088693 inferences
+finished
+finished
+ec
+4144451 inferences
+finished
+finished
+groups
+317 inferences
+[all a [all x [[eq [+ a x] e] => [eq a [inv x]]]]] is unproved
+133 inferences
+[all x [eq [inv [inv x]] x]] is unproved
+finished
+finished
+dreadbury
+217 inferences
+[killed agatha agatha] is unproved
+finished
+finished
