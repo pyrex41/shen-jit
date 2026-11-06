@@ -291,6 +291,23 @@ static int compare_fix_real(int64_t i, double d)
     return rest > 0 ? -1 : rest < 0 ? 1 : 0;
 }
 
+/* Heads and elements are compared by recursion up to a depth that the margin
+   of a C stack can hold, and past it by equal_deep. */
+enum { EQUAL_DEPTH = 256 };
+
+static bool equal_deep(V a, V b);
+static int equal_depth; /* threads take turns, and = does not give up its turn */
+
+static bool equal_part(V a, V b)
+{
+    if (equal_depth >= EQUAL_DEPTH)
+        return equal_deep(a, b);
+    equal_depth++;
+    bool same = sj_equal(a, b);
+    equal_depth--;
+    return same;
+}
+
 /* = (docs/semantics.md, section 6). Lists are walked along their tails, and a
    head identical to the other is not compared further, nor are two distinct
    atoms. Strings compare whole words: equal headers mean equal lengths, and
@@ -304,7 +321,7 @@ bool sj_equal(V a, V b)
             if (!is_pair(b))
                 return false;
             V ha = ptr(a)[0], hb = ptr(b)[0];
-            if (ha != hb && (distinct_atoms(ha, hb) || !sj_equal(ha, hb)))
+            if (ha != hb && (distinct_atoms(ha, hb) || !equal_part(ha, hb)))
                 return false;
             a = ptr(a)[1];
             b = ptr(b)[1];
@@ -328,7 +345,7 @@ bool sj_equal(V a, V b)
                 return false;
             for (size_t i = 0; i < n; i++) {
                 V x = ptr(a)[1 + i], y = ptr(b)[1 + i];
-                if (x != y && (distinct_atoms(x, y) || !sj_equal(x, y)))
+                if (x != y && (distinct_atoms(x, y) || !equal_part(x, y)))
                     return false;
             }
             return true;
@@ -338,6 +355,60 @@ bool sj_equal(V a, V b)
                    ptr(a)[POINTER_ADDRESS] == ptr(b)[POINTER_ADDRESS];
         return false;
     }
+}
+
+/* = with the pairs still to compare in a list of its own, so no deeper on the C
+   stack however deep the terms. What is neither two pairs nor two absvectors
+   does not recurse. It cannot raise, having no frame (jit.c, h_equal), so what
+   looks like a cycle ends the process, as overflowing the C stack did. */
+enum { EQUAL_DEEP_ROOM = 1 << 28 }; /* words: 2 GiB */
+
+static void equal_deep_fail(const char *why)
+{
+    fprintf(stderr, "shen-jit: =: %s\n", why);
+    exit(1);
+}
+
+static bool equal_deep(V a, V b)
+{
+    size_t room = 64, count = 0, steps = 0;
+    V *todo = malloc(room * sizeof(V));
+    if (!todo)
+        equal_deep_fail("out of memory");
+    todo[count++] = a;
+    todo[count++] = b;
+    bool same = true;
+    while (same && count) {
+        b = todo[--count];
+        a = todo[--count];
+        if (a == b)
+            continue;
+        bool pairs = is_pair(a) && is_pair(b);
+        bool vectors = is_type(a, T_VECTOR) && is_type(b, T_VECTOR);
+        if (!pairs && !vectors) {
+            same = sj_equal(a, b);
+            continue;
+        }
+        size_t n = pairs ? 2 : (size_t)hdr_size(ptr(a)[0]);
+        if (vectors && n != hdr_size(ptr(b)[0])) {
+            same = false;
+            continue;
+        }
+        if (count + 2 * n > room) {
+            room = (count + 2 * n) * 2;
+            todo = room <= EQUAL_DEEP_ROOM ? realloc(todo, room * sizeof(V)) : NULL;
+            if (!todo)
+                equal_deep_fail("the term is cyclic or too large");
+        }
+        if (++steps > (size_t)1 << 31) /* a cycle may not grow the list */
+            equal_deep_fail("the term is cyclic or too large");
+        for (size_t i = n; i-- > 0;) {
+            todo[count++] = ptr(a)[(pairs ? 0 : 1) + i];
+            todo[count++] = ptr(b)[(pairs ? 0 : 1) + i];
+        }
+    }
+    free(todo);
+    return same;
 }
 
 static V boolean(bool b) { return b ? V_TRUE : V_FALSE; }

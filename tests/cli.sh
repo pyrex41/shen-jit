@@ -880,5 +880,25 @@ EOF
     fi
 fi
 
+# = on terms deeper than the C stack: heads, absvector elements, and a difference at the bottom. Too slow when
+# every thousand words collect.
+if [ -z "$SHEN_JIT_GC_STRESS" ]; then
+cat > "$dir/deep.shen" <<'SHEN'
+(define deep-heads 0 Acc -> Acc N Acc -> (deep-heads (- N 1) [Acc]))
+(define deep-vectors 0 Acc -> Acc N Acc -> (deep-vectors (- N 1) (let V (absvector 1) (address-> V 0 Acc))))
+(define deep-both 0 Acc -> Acc N Acc -> (deep-both (- N 1) [Acc (let V (absvector 1) (address-> V 0 Acc))]))
+(output "heads ~S ~S~%" (= (deep-heads 300000 x) (deep-heads 300000 x)) (= (deep-heads 300000 x) (deep-heads 300000 y)))
+(output "vectors ~S ~S~%" (= (deep-vectors 300000 x) (deep-vectors 300000 x)) (= (deep-vectors 300000 x) (deep-vectors 300000 y)))
+(output "both ~S ~S~%" (= (deep-both 16 x) (deep-both 16 x)) (= (deep-both 16 x) (deep-both 16 y)))
+(define deep-wide 0 Leaf -> [] N Leaf -> [(deep-heads 1000 Leaf) | (deep-wide (- N 1) Leaf)])
+(output "wide ~S ~S~%" (= (deep-wide 300 x) (deep-wide 300 x)) (= (deep-wide 300 x) (deep-wide 300 y)))
+SHEN
+"$SHEN" eval -l "$dir/deep.shen" 2>&1 > "$dir/deep.out"
+check deep-equal-heads "$dir/deep.out" "heads true false"
+check deep-equal-vectors "$dir/deep.out" "vectors true false"
+check deep-equal-both "$dir/deep.out" "both true false"
+check deep-equal-wide "$dir/deep.out" "wide true false"
+fi
+
 echo "cli tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

@@ -490,8 +490,8 @@ static V h_cn_bytes(uint64_t *p, V a, V b)
     return tagged(p, TAG_OBJECT);
 }
 
-/* = where the inline tests could not settle it. Equality neither allocates
-   nor raises, so it needs no published frame. */
+/* = where the inline tests could not settle it. Equality allocates nothing on
+   the heap and does not raise, so it needs no published frame. */
 static V h_equal(V a, V b) { return sj_equal(a, b) ? V_TRUE : V_FALSE; }
 
 /* A closure of the code object in constant slot `code_slot`, capturing the
