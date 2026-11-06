@@ -56,7 +56,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-thorn test-native test-ffi fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -278,6 +278,10 @@ $(BUILD)/shen-jit-stlib: $(BUILD)/shen-jit $(BUILD)/stlib/stlib.kl tools/stlib.s
 test-stlib: $(BUILD)/shen-jit-stlib
 	cd $(BUILD) && SHEN_JIT_GC_STRESS=$(GC_STRESS) ./shen-jit-stlib script ../tests/stlib.shen | \
 	  tail -1 | awk '{ print } END { exit !/ 0 failed/ }'
+
+# What a prover computes, against counts that Shen/Scheme gives too (tests/thorn.sh).
+test-thorn: $(BUILD)/shen-jit-stlib
+	sh tests/thorn.sh $(abspath $(BUILD)/shen-jit-stlib) $(KERNEL_DIR)
 
 # Native code written by hand (docs/bytecode.md, "Native code written by hand"). A macro
 # applies only to files read after it, so the tests load as a file of their own.

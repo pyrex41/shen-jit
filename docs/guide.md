@@ -795,7 +795,7 @@ its sources.
 The fast tier takes about 20 s, and catches nearly everything:
 
 ```sh
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-native test-ffi
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-ffi
 ```
 
 | Target | What it does |
@@ -805,6 +805,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-kl` | 877 `eval-kl` cases, and the lowerer running inside Shen/JIT against its stage 0 output |
 | `make test-kernel` | The kernel's test suite, the extension tests, the contract examples and `tests/cli.sh` |
 | `make test-stlib` | The executable with the standard library |
+| `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
