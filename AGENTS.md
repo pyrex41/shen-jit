@@ -36,7 +36,7 @@ checkout's own workflow, and git ignores it.
 
 ## Git
 
-History stays linear: no merge commits. A commit message says what changed and what it measured.
+A commit message says what changed and what it measured.
 
 ## Building
 
