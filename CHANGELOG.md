@@ -22,6 +22,8 @@ All notable changes to this project are documented in this file. The format is b
 - `shen-jit.pvar` and `shen-jit.pvar-offset` raised past a `trap-error` in the same function whose handler ignores
   the error.
 - Compiling a long literal list of numbers takes far less: 4000 elements about a tenth of what it did.
+- Compiling a long literal list now takes about half of what it did, and with constant elements the list uses one
+  frame slot instead of one per element.
 
 ## [0.3] - 2026-11-06
 

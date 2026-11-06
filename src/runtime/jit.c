@@ -1313,7 +1313,7 @@ static bool dead_store(const Emit *e, uint32_t dst)
 /* Whether the next instruction is the only one to read slot dst, from
    CACHE, with nothing between that could collect or read the frame: a
    return of it, or the next cons of a run, which has room already, when
-   dst is dead after it. */
+   that cons overwrites dst or dst is dead after it. */
 static bool consumed_next(const Emit *e, uint32_t dst)
 {
     const uint32_t *w = e->words, *q = w + e->next;
@@ -1322,7 +1322,7 @@ static bool consumed_next(const Emit *e, uint32_t dst)
     if (q[0] == OP_RETURN)
         return q[1] == dst;
     return q[0] == OP_PRIM && q[2] == P_CONS && e->reserved && (q[4] == dst || q[5] == dst) &&
-           q[1] != dst && dead_after(w, e->nwords, e->label_pos, e->next + insn_length(q), NONE, dst);
+           (q[1] == dst || dead_after(w, e->nwords, e->label_pos, e->next + insn_length(q), NONE, dst));
 }
 
 /* Whether a result for slot dst can go straight to its register: a loop

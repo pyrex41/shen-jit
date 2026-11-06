@@ -378,6 +378,9 @@ The JIT inlines the buffers' reads, stores and length, and `bit-and`, `bit-or`, 
   literal such as `[a b c]` allocates nothing when it runs. Pairs are
   immutable and `=` compares structure, so a shared list and a fresh one
   cannot be told apart.
+- `(cons (const A) (cons ...))` computed into a slot that is not a parameter's
+  computes its tail into that same slot, so a long chain with constant heads
+  takes one slot.
 - `(+ A B)` and `(- A B)` of two integer constants below 10^9 in magnitude
   are their result, as a constant.
 - A definition whose body (or a branch of it in tail position) is `(if C X
