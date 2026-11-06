@@ -5,6 +5,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.3] - 2026-11-06
+
 ### Added
 
 - Memory outside the heap: `shen-jit.pointer-sized` makes a C pointer readable and writable in place, with
@@ -67,6 +69,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.2...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.3...HEAD
+[0.3]: https://github.com/tizoc/shen-jit/compare/v0.2...v0.3
 [0.2]: https://github.com/tizoc/shen-jit/compare/v0.1...v0.2
 [0.1]: https://github.com/tizoc/shen-jit/releases/tag/v0.1
