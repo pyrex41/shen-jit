@@ -133,12 +133,12 @@
         [stream [stoutput]]
         [pvar0 [shen-jit.pvar 0]] [pvar1 [shen-jit.pvar 1]]
         [b0 [shen-jit.bytes 0]] [b1 [shen-jit.bytes 1]] [b8 [shen-jit.bytes 8]] [b8b [shen-jit.bytes 8]]
-        [bs [shen-jit.string->bytes "abc"]]]))
+        [bs [shen-jit.string->bytes "abc"]] [bs8 [shen-jit.string->bytes "abcdefgh"]]]))
 
 \\ The values for primitives of three arguments or more, where all of them would be too many.
 (define d.few
   -> [n0 n1 n-1 n2 n3 n7 n8 n255 n256 n-2147483648 n4294967296 half r1 inf nan empty abc s9 nil sym pair one-list
-      v0 v3 nv2b b1 b8 bs fn pvar0])
+      v0 v3 nv2b b1 b8 bs bs8 fn pvar0])
 
 (define d.literal?
   V -> (or (number? V) (string? V) (symbol? V) (= V [])))
@@ -303,14 +303,18 @@
   P N All Literals
   -> (let Plain (d.compile [[defun (d.gensym) (d.params N) [P | (d.params N)]]])
           Ways (map (/. W (@p W (d.compile (d.defs W P (d.params N) (d.gensym))))) (d.ways P N))
-          Lists (d.lists N All)
+          Lists (d.lists P N All)
        (do (d.each-args Lists [] (/. Vs (d.one P Plain Ways Vs)))
            (d.same-object P N All Plain)
            (d.constants P N Lists Literals Plain))))
 
 (define d.lists
-  N All -> (d.n-copies N All) where (<= N 2)
-  N All -> (d.n-copies N (d.filter-names (d.few) All)))
+  shen-jit.copy-bytes _ All -> (let Memory (d.filter-names [b0 b1 b8 b8b bs bs8 sym n0 abc nv2b] All)
+                                    Index (d.filter-names [n0 n1 n2 n3 n7 n8 n-1 half r1 sym n9007199254740992
+                                                           n2305843009213693951 n-2305843009213693952] All)
+                                 [Memory Index Memory Index Index])
+  _ N All -> (d.n-copies N All) where (<= N 2)
+  _ N All -> (d.n-copies N (d.filter-names (d.few) All)))
 
 (define d.n-copies
   0 _ -> []
@@ -558,6 +562,36 @@
                      (shen-jit.f64! B I 2.5) (d.prop (freeze (= (shen-jit.f64 B I) 2.5)) Text))
                  (d.prop (freeze (= (trap-error (shen-jit.s64 B I) (/. Ignored none)) none)) Text)))))
 
+\\ Copies within a buffer and between two, overlapping or not, against what each byte should become. One
+\\ that does not fit raises and changes nothing.
+(define d.copies
+  -> (let Range (d.range -1 10)
+       (d.for-each (/. I (d.for-each (/. J (d.for-each (/. N (do (d.copy-one true I J N) (d.copy-one false I J N))) Range)) Range)) Range)))
+
+(define d.pattern
+  Base -> (d.fill (shen-jit.bytes 8) (/. K (+ Base K))))
+
+(define d.fill
+  B F -> (do (d.for-each (/. K (shen-jit.u8! B K (F K))) (d.range 0 8)) B))
+
+(define d.copy-fits?
+  I J N -> (and (>= I 0) (and (>= J 0) (and (>= N 0) (and (<= (+ I N) 8) (<= (+ J N) 8))))))
+
+(define d.copy-one
+  Same I J N
+  -> (let From (d.pattern 1)
+          To (if Same From (d.pattern 101))
+          ToBase (if Same 1 101)
+          Fits (d.copy-fits? I J N)
+          Want (d.show (if Fits
+                           (d.fill (shen-jit.bytes 8) (/. K (if (and (>= K I) (< K (+ I N))) (+ 1 (- (+ J K) I)) (+ ToBase K))))
+                           (d.pattern ToBase)))
+          Raised (trap-error (do (shen-jit.copy-bytes To I From J N) false) (/. E true))
+          Text (freeze (make-string "copy ~A ~A ~A, same buffer ~A: raised ~A, gave ~A" I J N Same Raised (d.show To)))
+       (do (d.prop (freeze (= Raised (not Fits))) Text)
+           (d.prop (freeze (= (d.show To) Want)) Text)
+           (d.prop (freeze (or Same (= (d.show From) (d.show (d.pattern 1))))) Text))))
+
 \\ Bit operations against each other and against arithmetic.
 (define d.bits
   Xs -> (d.for-each (/. X (do (d.bits-one X) (d.for-each (/. Y (d.bits-pair X Y)) Xs))) Xs))
@@ -606,12 +640,13 @@
          shen-jit.append shen-jit.bit-and shen-jit.bit-or shen-jit.bit-xor shen-jit.shift-left shen-jit.shift-right
          shen-jit.rotate32 shen-jit.decimal shen-jit.u8 shen-jit.u16 shen-jit.u32 shen-jit.s32 shen-jit.s64 shen-jit.f32 shen-jit.f64]
       [3 address-> shen-jit.deref shen-jit.u8! shen-jit.u16! shen-jit.u32! shen-jit.s32! shen-jit.s64! shen-jit.f32!
-         shen-jit.f64! shen-jit.bytes->string]])
+         shen-jit.f64! shen-jit.bytes->string]
+      [5 shen-jit.copy-bytes]])
 
 \\ Against another implementation: the primitives and values of the language alone, called plainly, with
 \\ no error's message, and a length that this implementation refuses might not be refused there.
 (define d.portable-values
-  -> (d.filter (/. V (not (element? (hd V) [pvar0 pvar1 b0 b1 b8 b8b bs]))) (d.values)))
+  -> (d.filter (/. V (not (element? (hd V) [pvar0 pvar1 b0 b1 b8 b8b bs bs8]))) (d.values)))
 
 (define d.portable
   P N -> (let All (d.thunks (d.portable-values))
@@ -646,6 +681,7 @@
                      (d.arithmetic Numbers)
                      (d.strings)
                      (d.stores)
+                     (d.copies)
                      (d.bits Few)))
                skip)
            (output "~A checks, ~A failed~%" (value d.*checks*) (value d.*failures*)))))
