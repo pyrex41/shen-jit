@@ -88,7 +88,7 @@ x86-64, and runs the fast suites on them. GC stress, the sanitizers and the muta
 
 - Time the rows a change aims at directly: a small Shen file that loops over the case and reports `get-time unix`, run on the old and new binaries in alternation, several times.
 - Run `make bench` when a change can affect code beyond its target, such as branch shapes on common paths.
-- Check that a gain holds outside the benchmarks: `make bench-independent` times workloads never used for tuning, which mostly load, compile and typecheck code. A benchmark gain that does not
+- Check that a gain holds outside the benchmarks: `make bench-independent` times workloads never used for tuning, which mostly load, compile and typecheck code, and THORN, which mostly runs. A benchmark gain that does not
   show there, or a loss there, is fitting the benchmarks or a cost in compile time.
 - For real arithmetic and raw registers, `make bench-numeric` runs five programs in C, in boxed Shen and with registers, and a path tracer in C and with registers. Each prints a check, which must agree to the last digit.
 - Some rows move with where code and data lie, not with what they run: `vector create (big)` with the heap pointer's parity, and `list traversal`, `match vector`, `symbol? (true)`, `shen.sysfunc?` and

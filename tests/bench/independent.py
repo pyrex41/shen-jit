@@ -9,17 +9,21 @@ kernel sources in --kernel), installing the standard library (--stlib, its
 StLib directory, if given; Tk is left out, as it needs Tcl), this repository's
 contract examples, and starting the executable. They mostly load, compile
 and typecheck code, so they also show compile time, which benchmarks
-hardly measure. Each binary runs each workload once per round, in an order
-that rotates between rounds; the table gives the median wall time in ms and
-each binary's time over the first's. With --scheme, Shen/Scheme runs the
-workloads it can too: the standard library defines concat*, which its port
-already has, and the contract examples are shen-jit's. Every run's output
-is checked; contract examples that fail are only reported, since an older
-binary predates some of them."""
+hardly measure. The THORN rows are the other way round: they mostly run, as
+that prover searches on the kernel's problems, those of tests/thorn.expected
+that take it long enough to time, with its wall-clock limit taken away. Each
+binary runs each workload once per round, in an order that rotates between
+rounds; the table gives the median wall time in ms and each binary's time over
+the first's. With --scheme, Shen/Scheme runs the workloads it can too: the
+standard library defines concat*, which its port already has, the contract
+examples are shen-jit's, and THORN is not compared with it yet. Every run's
+output is checked, THORN's against tests/thorn.expected; contract examples that
+fail are only reported, since an older binary predates some of them."""
 import os, re, shutil, statistics, subprocess, sys, tempfile, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
+THORN_PROBLEMS = ('set', 'L', 'schubert', 'ec')
 
 
 def stlib_copy(stlib):
@@ -32,7 +36,40 @@ def stlib_copy(stlib):
     return work, sum(l.startswith('(load ') for l in lines[:end])
 
 
-def workloads(kernel, stlib_dir, loads):
+def thorn_copy(kernel, bins):
+    """A copy of THORN to run in, and for each binary one with the standard
+    library, which THORN needs, made by that binary."""
+    work = Path(tempfile.mkdtemp(prefix='shen-jit-thorn-'))
+    shutil.copytree(kernel / 'lib' / 'thorn', work / 'thorn')
+    shutil.copy(REPO / 'tests' / 'thorn-setup.shen', work / 'thorn' / 'setup.shen')
+    with_stlib = {}
+    for i, b in enumerate(bins):
+        with_stlib[b] = str(work / f'stlib-{i}{Path(b).suffix}')
+        subprocess.run([b, 'script', str(REPO / 'tools' / 'stlib.shen'), str(kernel / 'klambda' / 'stlib.kl'),
+                        with_stlib[b]], check=True, capture_output=True)
+    return work, with_stlib
+
+
+def thorn_expected():
+    """What each problem in tests/thorn.expected should print."""
+    expected, lines = {}, None
+    for line in (REPO / 'tests' / 'thorn.expected').read_text().splitlines():
+        if line != 'finished' and re.fullmatch(r'[A-Za-z]+', line):
+            lines = expected[line] = []
+        else:
+            lines.append(line)
+    return expected
+
+
+def thorn_ok(lines):
+    """Whether a run prints those lines, picked out as tests/thorn.sh does."""
+    def ok(out):
+        got = [l for l in out.replace('\r', '').splitlines() if re.search(r' inferences,|is unproved|^finished$', l)]
+        return [re.sub(r', equality.*', '', l) for l in got] == lines
+    return ok
+
+
+def workloads(kernel, stlib_dir, loads, thorn_dir):
     yes = 'y\n' * 200
     jobs = {
         'startup': (REPO, ['eval', '-e', '1'], '', lambda out: out.strip().endswith('1')),
@@ -47,6 +84,10 @@ def workloads(kernel, stlib_dir, loads):
     }
     if not stlib_dir:
         del jobs['standard library install']
+    expected = thorn_expected()
+    for problem in THORN_PROBLEMS:
+        jobs[f'THORN {problem}'] = (thorn_dir, ['eval', '-l', 'setup.shen', '-l', f'Problems/{problem}.shen',
+                                                '-e', '(output "finished~%")'], '', thorn_ok(expected[problem]))
     return jobs
 
 
@@ -62,18 +103,21 @@ def main(argv):
     if not bins:
         sys.exit(__doc__)
     work, loads = stlib_copy(stlib) if stlib else (None, 0)
+    thorn, with_stlib = thorn_copy(kernel, bins)
     try:
-        jobs = workloads(kernel, work / 'StLib' if work else None, loads)
+        jobs = workloads(kernel, work / 'StLib' if work else None, loads, thorn / 'thorn')
         everyone = bins + ([scheme] if scheme else [])
         times = {(w, b): [] for w in jobs for b in everyone}
         for r in range(rounds):
             order = everyone[r % len(everyone):] + everyone[:r % len(everyone)]
             for w, (cwd, args, stdin, ok) in jobs.items():
                 for b in (order if r % 2 == 0 else order[::-1]):
-                    if b == scheme and w in ('standard library install', 'contract examples'):
+                    is_thorn = w.startswith('THORN')
+                    if b == scheme and (is_thorn or w in ('standard library install', 'contract examples')):
                         continue
                     t = time.perf_counter()
-                    p = subprocess.run([b] + args, cwd=cwd, input=stdin, capture_output=True, text=True)
+                    p = subprocess.run([with_stlib[b] if is_thorn else b] + args, cwd=cwd, input=stdin,
+                                       capture_output=True, text=True, errors='replace')
                     times[(w, b)].append(time.perf_counter() - t)
                     if not ok(p.stdout + p.stderr):
                         sys.exit(f'{w} failed with {b}:\n{p.stdout[-2000:]}{p.stderr[-2000:]}')
@@ -82,6 +126,7 @@ def main(argv):
                               file=sys.stderr)
             print(f'round {r}', file=sys.stderr, flush=True)
     finally:
+        shutil.rmtree(thorn)
         if work:
             shutil.rmtree(work)
     names = [Path(b).name for b in bins] + (['Shen/Scheme'] if scheme else [])

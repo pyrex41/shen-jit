@@ -819,7 +819,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make deps` | Fetches the kernel and the earlier release of Shen/JIT that makes the generated files |
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
 | `make bench-numeric` | Numeric programs and a path tracer, in C and in Shen with raw registers, and those programs with boxed reals too |
-| `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library), to check that gains are not fitted to the benchmarks |
+| `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library, a prover), to check that gains are not fitted to the benchmarks |
 | `make guide` | Renders this guide and its documents' pages to `build/guide/`, with [pandoc](https://pandoc.org) |
 | `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |
 
