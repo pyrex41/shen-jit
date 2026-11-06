@@ -309,12 +309,6 @@ static void redefine(VM *vm, size_t cell)
    is returned, and *evaluated says whether the walk reached the expression
    being evaluated, so that the error came from running code rather than,
    say, the reader or the typechecker working on the input. */
-static bool symbol_is_name(V sym, const char *s)
-{
-    size_t n = strlen(s);
-    return string_length(ptr(sym)[SYM_NAME]) == n && memcmp(string_bytes(ptr(sym)[SYM_NAME]), s, n) == 0;
-}
-
 size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
 {
     size_t n = 0;
@@ -340,7 +334,7 @@ size_t jit_backtrace(VM *vm, V *names, size_t max, bool *evaluated)
         else
             break;
         n = chain_names(vm, chain, names, n, max);
-        if (is_symbol(name) && (symbol_is_name(name, "eval-kl") || symbol_is_name(name, "shen-jit.eval-kl"))) {
+        if (symbol_named(name, "eval-kl") || symbol_named(name, "shen-jit.eval-kl")) {
             *evaluated = true;
             break;
         }

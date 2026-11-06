@@ -5,6 +5,7 @@
 #include "value.h"
 
 #include <stdio.h>
+#include <string.h>
 
 /* Root arrays: values outside the heap whose cells never move. They grow by
    adding chunks; the chunk directory may move, the chunks never do. */
@@ -287,6 +288,17 @@ uint64_t hash_bytes(const void *bytes, size_t len);
 
 static inline size_t string_length(V s) { return (size_t)hdr_size(ptr(s)[0]); }
 static inline char *string_bytes(V s) { return (char *)(ptr(s) + 1); }
+
+/* Whether v is the symbol of this name, by the name and not by interning it, as
+   a prover may ask for the time at every inference. */
+static inline bool symbol_named(V v, const char *name)
+{
+    if (!is_symbol(v))
+        return false;
+    V s = ptr(v)[SYM_NAME];
+    size_t n = strlen(name);
+    return string_length(s) == n && memcmp(string_bytes(s), name, n) == 0;
+}
 
 /* What the byte primitives read and write: a byte buffer, or the memory a pointer was given
    a length for. A pointer that has none, or is dead, has length 0, so that the ordinary
