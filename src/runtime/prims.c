@@ -1048,6 +1048,14 @@ static V append(VM *vm)
     return tagged(p, TAG_PAIR);
 }
 
+/* A failed write, by what the system says. */
+static V raise_write_failed(VM *vm, const char *who)
+{
+    char text[128];
+    snprintf(text, sizeof text, "%s: %s", who, strerror(errno));
+    return sj_raise_text(vm, text);
+}
+
 static V close_stream(VM *vm, V s)
 {
     if (!is_type(s, T_STREAM))
@@ -1055,11 +1063,10 @@ static V close_stream(VM *vm, V s)
     uint64_t *o = ptr(s);
     if (o[STREAM_FLAGS] & STREAM_OPEN) {
         FILE *f = (FILE *)(uintptr_t)o[STREAM_HANDLE];
-        if ((o[STREAM_FLAGS] & STREAM_KIND_MASK) == STREAM_FILE)
-            fclose(f);
-        else
-            fflush(f);
+        int failed = (o[STREAM_FLAGS] & STREAM_KIND_MASK) == STREAM_FILE ? fclose(f) : fflush(f);
         o[STREAM_FLAGS] &= ~(uint64_t)STREAM_OPEN;
+        if (failed == EOF)
+            return raise_write_failed(vm, "close");
     }
     return V_NIL;
 }
@@ -1199,7 +1206,8 @@ static V write_byte(VM *vm, V b, V s)
         return sj_raise_value(vm, "write-byte: ~S is not an open output stream", s);
     if (!is_fix(b) || fixval(b) < 0 || fixval(b) > 255)
         return sj_raise_value(vm, "write-byte: ~S is not a byte", b);
-    fputc((int)fixval(b), f);
+    if (fputc((int)fixval(b), f) == EOF)
+        return raise_write_failed(vm, "write-byte");
     return b;
 }
 

@@ -323,6 +323,20 @@ check heap-after "$dir/heap.out" "(2-) 100000"
 printf '(trap-error (absvector 100000000) (/. E (error-to-string E)))\n' > "$dir/big.in"
 SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" < "$dir/big.in" > "$dir/big.out" 2>&1
 check heap-limit-vector "$dir/big.out" '(0-) "out of memory"'
+# A write that fails raises, from write-byte once the buffer fills and from close for what is left.
+if [ -w /dev/full ]; then
+    cat > "$dir/full.shen" <<'SHEN'
+(define fill S 0 -> ok S N -> (do (write-byte 65 S) (fill S (- N 1))))
+(output "~A~%" (trap-error (fill (open "/dev/full" out) 100000) (/. E (error-to-string E))))
+(let S (open "/dev/full" out)
+  (do (write-byte 65 S)
+      (output "~A~%" (trap-error (close S) (/. E (error-to-string E))))
+      (output "~A~%" (close S))))
+SHEN
+    "$SHEN" script "$dir/full.shen" > "$dir/full.out" 2>&1
+    contains write-failed "$dir/full.out" "write-byte: No space left on device"
+    contains close-failed "$dir/full.out" "close: No space left on device"
+fi
 # SHEN_JIT_SEMISPACE: where each semispace starts, or what the image needs if
 # that is more. It still grows, and SHEN_JIT_MAX_HEAP can now be below 32 MB.
 SHEN_JIT_GC_STRESS= SHEN_JIT_STATS=1 SHEN_JIT_SEMISPACE=8M "$SHEN" eval -e '(+ 1 2)' > "$dir/semi.out" 2>&1

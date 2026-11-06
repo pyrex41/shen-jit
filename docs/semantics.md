@@ -268,10 +268,12 @@ if it had been made then. *Deviation:* until then, reading the
   whole file in C, as Shen/Scheme's overrides do, with the path resolved and
   failures reported as for `open`. The kernel's read one byte at a time.
 - `(read-byte S)`: a byte from 0 to 255, or -1 at end of file.
-- `(write-byte B S)`: B from 0 to 255; returns B.
+- `(write-byte B S)`: B from 0 to 255; returns B. Output is buffered, so a failed write raises
+  an error here only once the buffer fills, or else from `close`.
 - Reading from an output stream, writing to an input stream, or using a closed
-  stream raises an error. `(close S)` returns the empty list, and closing a
-  closed stream does nothing.
+  stream raises an error. `(close S)` returns the empty list, and raises an error if what was
+  left to write could not be written; the stream is closed either way. Closing a closed stream
+  does nothing.
 - The standard streams are `*stinput*`, `*stoutput*` and `*sterror*`. Output to
   `*stoutput*` is flushed before any read from `*stinput*` and at exit.
 - `(char-stream? S)` is false for every stream. `read-unit-string` and
