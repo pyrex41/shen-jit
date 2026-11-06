@@ -1098,19 +1098,29 @@ static V write_byte(VM *vm, V b, V s)
     return b;
 }
 
+/* By the name, not by interning it, as a prover may ask for the time at every
+   inference. */
+static bool symbol_named(V v, const char *name)
+{
+    if (!is_symbol(v))
+        return false;
+    V s = ptr(v)[SYM_NAME];
+    size_t n = strlen(name);
+    return string_length(s) == n && memcmp(string_bytes(s), name, n) == 0;
+}
+
 static V get_time(VM *vm)
 {
-    V run = intern_cstr(vm, "run"), unix_time = intern_cstr(vm, "unix");
     V kind = vm->args[0];
 #ifdef _WIN32
-    if (kind == run && run != V_CLEARED)
+    if (symbol_named(kind, "run"))
         return make_real(vm, win_run_seconds());
-    if (kind == unix_time && unix_time != V_CLEARED)
+    if (symbol_named(kind, "unix"))
         return make_real(vm, win_unix_seconds());
 #else
-    if (kind == run && run != V_CLEARED)
+    if (symbol_named(kind, "run"))
         return make_real(vm, (double)clock() / CLOCKS_PER_SEC);
-    if (kind == unix_time && unix_time != V_CLEARED) {
+    if (symbol_named(kind, "unix")) {
         struct timeval tv;
         gettimeofday(&tv, NULL);
         return make_real(vm, (double)tv.tv_sec + tv.tv_usec * 1e-6);
