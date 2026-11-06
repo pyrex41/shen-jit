@@ -387,9 +387,9 @@ The JIT inlines the buffers' reads, stores and length, and `bit-and`, `bit-or`, 
   part of the argument again with `hd` and `tl`. Only when X has such a
   part. A test whose else is a jump to a label jumps there itself.
 - Constants are shared within a code object only when they are identical
-  literal strings, symbols or Booleans, or numbers that print identically, so 8
-  and 8.0, and 0.0 and -0.0, stay distinct; lists when their elements are
-  shared by the same rule.
+  literal strings, symbols or Booleans, or numbers that are `=` and print
+  identically, so 8 and 8.0, and 0.0 and -0.0, stay distinct; lists when their
+  elements are shared by the same rule.
 - A value with no literal syntax inside code passed to `eval-kl` at runtime (a
   closure, absvector or stream) is a constant, as in Shen/Scheme, and is never
   shared with another.

@@ -627,15 +627,16 @@
 
 \\ ---------------------------------------------------------------------------
 \\ Builders. A builder accumulates one code object in an absvector:
-\\ 0 name, 1 arity, 2 sealed names, 3 instructions (reversed), 4 constants,
-\\ 5 nested codes, 6 labels used, 7 frame size, 8 captured variables.
+\\ 0 name, 1 arity, 2 sealed names, 3 instructions (reversed), 4 constants
+\\ (reversed), 5 nested codes, 6 labels used, 7 frame size, 8 captured variables,
+\\ 9 how many constants.
 
 (define shen-jit.lower.builder
   Name Arity Sealed
-  -> (let B (absvector 9)
+  -> (let B (absvector 10)
        (do (address-> B 0 Name) (address-> B 1 Arity) (address-> B 2 Sealed)
            (address-> B 3 []) (address-> B 4 []) (address-> B 5 [])
-           (address-> B 6 0) (address-> B 7 (+ Arity 2)) (address-> B 8 []))))
+           (address-> B 6 0) (address-> B 7 (+ Arity 2)) (address-> B 8 []) (address-> B 9 0))))
 
 \\ Lower Body with Params in slots 2.. and return the finished code object.
 (define shen-jit.lower.code
@@ -649,7 +650,7 @@
          (shen-jit.lower.code-form B)))
 
 (define shen-jit.lower.code-form
-  B -> [code (<-address B 0) (<-address B 1) (<-address B 7) (<-address B 4)
+  B -> [code (<-address B 0) (<-address B 1) (<-address B 7) (reverse (<-address B 4))
              (reverse (<-address B 3)) (<-address B 5)])
 
 (define shen-jit.lower.bind
@@ -685,20 +686,23 @@
   B S -> (if (> (+ S 1) (<-address B 7)) (address-> B 7 (+ S 1)) B))
 
 \\ Constants are shared only when identical: numbers must also print the
-\\ same, because Shen's = equates 8 and 8.0.
+\\ same, because Shen's = equates 8 and 8.0. str comes last, as most numbers
+\\ compared here differ. Two values with no literal syntax never reach =.
 (define shen-jit.lower.constant
   B X -> (let Constants (<-address B 4)
-              I (shen-jit.lower.constant-index X Constants 0)
-           (do (if (= I (length Constants)) (address-> B 4 (append Constants [X])) B)
+              Count (<-address B 9)
+              I (shen-jit.lower.constant-index X Constants (- Count 1))
+           (if (= I -1)
+               (do (address-> B 4 [X | Constants]) (address-> B 9 (+ Count 1)) Count)
                I)))
 
 (define shen-jit.lower.constant-index
   _ [] I -> I
   X [Y | _] I -> I where (shen-jit.lower.same-constant? X Y)
-  X [_ | Ys] I -> (shen-jit.lower.constant-index X Ys (+ I 1)))
+  X [_ | Ys] I -> (shen-jit.lower.constant-index X Ys (- I 1)))
 
 (define shen-jit.lower.same-constant?
-  X Y -> (and (number? Y) (= (str X) (str Y))) where (number? X)
+  X Y -> (and (number? Y) (= X Y) (= (str X) (str Y))) where (number? X)
   [X | Xs] [Y | Ys] -> (and (shen-jit.lower.same-constant? X Y) (shen-jit.lower.same-constant? Xs Ys))
   X Y -> (and (not (number? Y)) (shen-jit.lower.literal? X) (= X Y)))
 

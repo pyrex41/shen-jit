@@ -15,6 +15,7 @@ All notable changes to this project are documented in this file. The format is b
 
 - `define` no longer fails on a `cond` with no true clause. The definition compiles, and raises an error when no
   clause applies.
+- Compiling a long literal list of numbers takes far less: 4000 elements about a tenth of what it did.
 
 ## [0.3] - 2026-11-06
 
