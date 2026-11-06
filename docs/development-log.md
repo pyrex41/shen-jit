@@ -226,6 +226,14 @@ Lowering rules, the collector and the kernel port have their own sections.
   that when the fixnum is past 2^53. `(< fixnum real)` in a loop 0.18 s to about 0.20 s per 10^8 in the runs it moved, in
   noise; only a real with a fixnum takes the new test. THORN's steamroller, thm13 and rcc10: 3.69, 27.9 and 20.4 G
   instructions before and after, and the same inferences.
+- **`=` on deep terms** (2026-11-05, Apple M5, load about 20, against the build before). `=` recursed on heads and
+  elements, so a 300000-deep term overflowed the C stack past `trap-error`. It cannot raise, so past 256 levels of
+  recursion it continues in `equal_deep`, with a list of its own on the heap. **Rejected:** deferring through one such list
+  from the first level, 0.19 to 0.30 s on 20-element lists of 3-element lists, and a depth passed as an argument, 0.24 s.
+  The depth in a static, as threads take turns: 3.87 to 4.55 G instructions on those lists, about 6 per recursion;
+  kernel suite 3.17 G within 0.3%, THORN's thm13, rcc10 and yql within 0.5%, the same inferences. A cycle overflowed the C stack
+  before, and still ends the process, now by a message past 2 GiB of waiting pairs or 2^31 steps (a self-containing absvector of 2 elements about 1 s and 1.1 GB, of 1 about
+  12 s). Shen/Scheme runs on and grows.
 
 ### Allocation, lists, vectors and strings
 
