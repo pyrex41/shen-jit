@@ -340,7 +340,8 @@ printf '(trap-error (absvector 100000000) (/. E (error-to-string E)))\n' > "$dir
 SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" < "$dir/big.in" > "$dir/big.out" 2>&1
 check heap-limit-vector "$dir/big.out" '(0-) "out of memory"'
 # A write that fails raises, from write-byte once the buffer fills and from close for what is left.
-if [ -w /dev/full ]; then
+# Only Linux has it: MSYS2's shell shows one on Windows, which a native program cannot open.
+if [ "$(uname -s)" = Linux ] && [ -w /dev/full ]; then
     cat > "$dir/full.shen" <<'SHEN'
 (define fill S 0 -> ok S N -> (do (write-byte 65 S) (fill S (- N 1))))
 (output "~A~%" (trap-error (fill (open "/dev/full" out) 100000) (/. E (error-to-string E))))
