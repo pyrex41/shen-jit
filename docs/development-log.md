@@ -660,6 +660,9 @@ that. Its readings decided nothing below.
   0.043 for SWI-Prolog -O, and a real index needs a hash or jump table.
 - **Standing** (2026-11-04, Apple M3 Max, CPU time per iteration, seven programs, geometric means). 0.85 of SWI-Prolog
   10.0.2 -O and 0.50 of Shen/Scheme 0.52 when first compared, 0.65 and 0.38 after the changes above.
+- **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
+  time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
+  the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.
 
 ### Native code written by hand
 
