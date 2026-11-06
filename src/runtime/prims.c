@@ -359,8 +359,9 @@ bool sj_equal(V a, V b)
 
 /* = with the pairs still to compare in a list of its own, so no deeper on the C
    stack however deep the terms. What is neither two pairs nor two absvectors
-   does not recurse. It cannot raise, having no frame (jit.c, h_equal), so what
-   looks like a cycle ends the process, as overflowing the C stack did. */
+   does not recurse, and values that settle at once, as in sj_equal, never go on
+   the list. It cannot raise, having no frame (jit.c, h_equal), so what looks
+   like a cycle ends the process, as overflowing the C stack did. */
 enum { EQUAL_DEEP_ROOM = 1 << 28 }; /* words: 2 GiB */
 
 static void equal_deep_fail(const char *why)
@@ -381,8 +382,6 @@ static bool equal_deep(V a, V b)
     while (same && count) {
         b = todo[--count];
         a = todo[--count];
-        if (a == b)
-            continue;
         bool pairs = is_pair(a) && is_pair(b);
         bool vectors = is_type(a, T_VECTOR) && is_type(b, T_VECTOR);
         if (!pairs && !vectors) {
@@ -403,8 +402,15 @@ static bool equal_deep(V a, V b)
         if (++steps > (size_t)1 << 31) /* a cycle may not grow the list */
             equal_deep_fail("the term is cyclic or too large");
         for (size_t i = n; i-- > 0;) {
-            todo[count++] = ptr(a)[(pairs ? 0 : 1) + i];
-            todo[count++] = ptr(b)[(pairs ? 0 : 1) + i];
+            V x = ptr(a)[(pairs ? 0 : 1) + i], y = ptr(b)[(pairs ? 0 : 1) + i];
+            if (x == y)
+                continue;
+            if (distinct_atoms(x, y)) {
+                same = false;
+                break;
+            }
+            todo[count++] = x;
+            todo[count++] = y;
         }
     }
     free(todo);

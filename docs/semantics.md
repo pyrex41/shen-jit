@@ -146,6 +146,12 @@ strings with the same bytes, pairs whose heads and tails are `=`, absvectors of
 the same length whose elements are `=`, or the same symbol, special, procedure,
 stream or exception. Closures compare by identity.
 
+`=` follows a term as deep as it goes, without overflowing the C stack, and it
+cannot raise. On two absvectors that contain themselves, which have no end, it
+ends the process with the message `shen-jit: =: the term is cyclic or too large`.
+So does a term that, below its first 256 levels of nesting, needs about 1 GB of
+comparisons waiting or 2^31 steps.
+
 `(hash X N)`, for a positive N, returns an integer from 0 to N inclusive, as the
 kernel's port performance guide states, and is consistent with `=`: numbers
 hash by mathematical value (8, 8.0 and -0.0/0.0 agree), strings by bytes,
