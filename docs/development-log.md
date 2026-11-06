@@ -233,6 +233,10 @@ Lowering rules, the collector and the kernel port have their own sections.
   a boxed Mandelbrot of 1000 by 200 0.506 to 0.498 s and 14.57 to 13.85 G instructions, and `bench-numeric`'s boxed programs 4.34 to
   4.28 G cycles, where they took 4.23 before the entry above. The variable case keeps its cost. Independent workloads:
   the same. **Rejected:** only leaving out the range test for such a constant, which saved the instructions and no cycles.
+  On x86-64 (a Ryzen 5 5600X VM, gcc 9.4, idle, best of 11, wall time): `(> X 4.0)` 0.475 to 0.346 s, the Mandelbrot 0.642 to
+  0.617 s, the variable case 0.362 to 0.421 s from that test, and `bench-numeric`'s boxed programs and independent workloads
+  the same. The variable case also read 0.421 to 0.448 s with this change, which leaves its code alone: with up to 5 more constant
+  additions ahead of it in the function, which move its slow path, this change's ratio ran from 0.87 to 1.06, so that is where the code lies.
 - **`=` on deep terms** (2026-11-05, Apple M5, load about 20, against the build before). `=` recursed on heads and
   elements, so a 300000-deep term overflowed the C stack past `trap-error`. It cannot raise, so past 256 levels of
   recursion it continues in `equal_deep`, with a list of its own on the heap. **Rejected:** deferring through one such list
@@ -242,6 +246,12 @@ Lowering rules, the collector and the kernel port have their own sections.
   before, and still ends the process, now by a message once the list would pass 2 GiB, which its doubling reaches at about 1.1 GB, or past 2^31 steps (a self-containing absvector of 2 elements about 1 s and 1.1 GB, of 1 about
   12 s). Shen/Scheme runs on and grows. Testing values before queuing them, as `sj_equal` does (2026-11-06, Apple M3 Max): a term nested
   5M levels through its heads left a tail waiting at each level, 238 to 302 MB of maximum resident memory, and now takes 157 MB, about the terms alone.
+- **`=` against the stack limit** (2026-11-06, 10^7 compares of 20-element lists of 3-element lists, best of 9 to 11: Apple M3 Max,
+  clang, load 3 to 5; a Ryzen 5 5600X VM, idle, gcc 9.4 and clang). **Rejected:** comparing the frame address with `c_stack_limit` in
+  place of the depth, through a static pointer as `=` has no vm. It is no simpler, and its time against the depth's has no direction: 1.01 on the M3, and on the Ryzen 0.99 with gcc,
+  0.83 with gcc aligning functions to 64 and 1.11 with clang. A first reading promised 0.83 with gcc too, on a build of the same comparison code that read 1.009 s where this
+  one reads 1.201 s, so on x86-64 this row says little below 20%. What the depth itself costs is as unclear, from before `equal_deep` to after it: 1.19 to 0.86 s
+  on the M3, with 1.12 times the instructions, and on the Ryzen 1.05 to 1.22 s with gcc, 1.13 to 1.20 s at 64 and 0.91 to 0.95 s with clang. Independent workloads did not move on either.
 
 ### Allocation, lists, vectors and strings
 
