@@ -253,8 +253,10 @@ RESULTS := grep -A1 '^passed \.\.\.' | tail -2 | awk '{ print } END { exit !/fai
 test-kernel: all $(FFI_TEST_LIB)
 	cd $(KERNEL_DIR)/tests && yes y | head -200 | \
 	  SHEN_JIT_GC_STRESS=$(GC_STRESS) $(SHEN_JIT) script runme.shen | $(RESULTS)
-	cd $(KERNEL_DIR) && SHEN_JIT_GC_STRESS=$(GC_STRESS) \
-	  $(SHEN_JIT) script tests/extensions/runme.shen < /dev/null | $(RESULTS)
+	rm -rf $(BUILD)/kernel-tests && mkdir -p $(BUILD)/kernel-tests
+	cp -R $(KERNEL_DIR)/tests $(KERNEL_DIR)/extensions $(BUILD)/kernel-tests/ && chmod -R u+w $(BUILD)/kernel-tests
+	cd $(BUILD)/kernel-tests && SHEN_JIT_GC_STRESS=$(GC_STRESS) \
+	  $(SHEN_JIT) script $(abspath tests/kernel-extensions.shen) < /dev/null | $(RESULTS)
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(SHEN_JIT) script contract/examples.shen | \
 	  tail -1 | awk '{ print } END { exit !/ 0 failed/ }'
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) sh tests/cli.sh $(SHEN_JIT)

@@ -5,6 +5,15 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Moved to the Shen kernel 43.4, from 43.2.
+
+### Fixed
+
+- `define` no longer fails on a `cond` with no true clause. The definition compiles, and raises an error when no
+  clause applies.
+
 ## [0.3] - 2026-11-06
 
 ### Added

@@ -9,6 +9,7 @@ expected=$tests/thorn.expected
 dir=$(mktemp -d)
 trap 'cd /; rm -rf "$dir"' EXIT
 cp -R "$2/lib/thorn" "$dir/thorn"
+chmod -R u+w "$dir/thorn"
 cp "$tests/thorn-setup.shen" "$dir/thorn/setup.shen"
 cd "$dir/thorn" || exit 1
 for problem in pelletier set L schubert ec groups dreadbury; do

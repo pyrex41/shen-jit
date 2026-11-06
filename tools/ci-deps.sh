@@ -11,8 +11,8 @@
 #
 # Each prints what to use: DIR, or the executable. make deps runs the first two.
 set -e
-KERNEL=43.2
-KERNEL_SHA256=23c71508f0de24785e1f127ea4fab440081904d81c463090bc642ee840417f32
+KERNEL=43.4
+KERNEL_SHA256=15e7972e6bf0cd65d37c2eba85750b8839d2dbadda41027eae0c88e5017a2756
 BOOTSTRAP=0.1
 BOOTSTRAP_URL=https://github.com/tizoc/shen-jit/releases/download/v$BOOTSTRAP/shen-jit-$BOOTSTRAP
 SCHEME=0.53

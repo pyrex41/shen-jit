@@ -36,10 +36,13 @@ def stlib_copy(stlib):
     return work, sum(l.startswith('(load ') for l in lines[:end])
 
 
-def thorn_copy(kernel, bins):
-    """A copy of THORN to run in, and for each binary one with the standard
-    library, which THORN needs, made by that binary."""
-    work = Path(tempfile.mkdtemp(prefix='shen-jit-thorn-'))
+def kernel_copy(kernel, bins):
+    """A copy of the kernel's extension tests, which write where they run, and
+    of THORN to run in, and for each binary one with the standard library, which
+    THORN needs, made by that binary."""
+    work = Path(tempfile.mkdtemp(prefix='shen-jit-kernel-'))
+    shutil.copytree(kernel / 'tests', work / 'tests')
+    shutil.copytree(kernel / 'extensions', work / 'extensions')
     shutil.copytree(kernel / 'lib' / 'thorn', work / 'thorn')
     shutil.copy(REPO / 'tests' / 'thorn-setup.shen', work / 'thorn' / 'setup.shen')
     with_stlib = {}
@@ -69,13 +72,13 @@ def thorn_ok(lines):
     return ok
 
 
-def workloads(kernel, stlib_dir, loads, thorn_dir):
+def workloads(kernel, stlib_dir, loads, copies):
     yes = 'y\n' * 200
     jobs = {
         'startup': (REPO, ['eval', '-e', '1'], '', lambda out: out.strip().endswith('1')),
         'kernel test suite': (kernel / 'tests', ['script', 'runme.shen'], yes,
                               lambda out: re.search(r'failed \.\.\. 0\s*$', out, re.M)),
-        'extension tests': (kernel, ['script', 'tests/extensions/runme.shen'], '',
+        'extension tests': (copies, ['script', str(REPO / 'tests' / 'kernel-extensions.shen')], '',
                             lambda out: re.search(r'failed \.\.\. 0\s*$', out, re.M)),
         'standard library install': (stlib_dir, ['eval', '-l', 'install-notk.shen'], '',
                                      lambda out: out.count('\nloaded') + out.startswith('loaded') == loads),
@@ -86,7 +89,7 @@ def workloads(kernel, stlib_dir, loads, thorn_dir):
         del jobs['standard library install']
     expected = thorn_expected()
     for problem in THORN_PROBLEMS:
-        jobs[f'THORN {problem}'] = (thorn_dir, ['eval', '-l', 'setup.shen', '-l', f'Problems/{problem}.shen',
+        jobs[f'THORN {problem}'] = (copies / 'thorn', ['eval', '-l', 'setup.shen', '-l', f'Problems/{problem}.shen',
                                                 '-e', '(output "finished~%")'], '', thorn_ok(expected[problem]))
     return jobs
 
@@ -103,9 +106,9 @@ def main(argv):
     if not bins:
         sys.exit(__doc__)
     work, loads = stlib_copy(stlib) if stlib else (None, 0)
-    thorn, with_stlib = thorn_copy(kernel, bins)
+    copies, with_stlib = kernel_copy(kernel, bins)
     try:
-        jobs = workloads(kernel, work / 'StLib' if work else None, loads, thorn / 'thorn')
+        jobs = workloads(kernel, work / 'StLib' if work else None, loads, copies)
         everyone = bins + ([scheme] if scheme else [])
         times = {(w, b): [] for w in jobs for b in everyone}
         for r in range(rounds):
@@ -126,7 +129,7 @@ def main(argv):
                               file=sys.stderr)
             print(f'round {r}', file=sys.stderr, flush=True)
     finally:
-        shutil.rmtree(thorn)
+        shutil.rmtree(copies)
         if work:
             shutil.rmtree(work)
     names = [Path(b).name for b in bins] + (['Shen/Scheme'] if scheme else [])

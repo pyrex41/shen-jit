@@ -114,4 +114,4 @@ Keep these current with each change:
 
 If something tells people what to do now or how things work now, it belongs in those, and not in the log.
 
-Don't say which version of Shen this implements, since that keeps changing: `tools/ci-deps.sh` holds it, and only the log's dated entries name one.
+Don't say which version of Shen this implements, since that keeps changing: `tools/ci-deps.sh` holds it, and only the log's dated entries and the changelog, when the kernel moves, name one.

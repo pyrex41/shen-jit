@@ -308,7 +308,8 @@ printf '(define lz2 X Y -> (+ X Y))\n(define lz1 X -> [X])\n' > "$dir/lazy.shen"
 check lazy-form "$dir/lazy.out" "3"
 check lazy-map "$dir/lazy.out" "[[a] [b]]"
 check lazy-arity "$dir/lazy.out" "6"
-check lazy-gensym "$dir/lazy.out" "g44"
+gensyms=$("$SHEN" eval -e '(gensym g)' < /dev/null | grep '^g[0-9]*$' | tail -1 | cut -c2-)
+check lazy-gensym "$dir/lazy.out" "g$((gensyms + 12))"
 
 # SHEN_JIT_MAX_HEAP: live data past the
 # limit raises a catchable "out of memory", and the heap is usable after.
