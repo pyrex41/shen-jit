@@ -53,6 +53,8 @@ make stlib                        # build/shen-jit-stlib
 make install PREFIX=/usr/local    # copies build/shen-jit to PREFIX/bin
 ```
 
+`make install` copies only `shen-jit`, under `DESTDIR` if that is set. It leaves out `shen-jit-stlib` and the libraries in `lib/`.
+
 `make release` makes the same executable without the runtime's symbols and debug information, which take about 5% of
 it on macOS, and over half on Linux, with gcc's. `make STATIC=1`
 links statically, for an executable that runs anywhere and cannot load libraries.
@@ -129,7 +131,7 @@ The commands come from the kernel's launcher (`shen-jit --help`):
 | --- | --- |
 | `repl` | The interactive REPL, and the default |
 | `script FILE [ARGS]` | Runs FILE, with `*argv*` set to `[FILE \| ARGS]` |
-| `eval ARGS` | Evaluates, from left to right: `-e EXPR`, `-l FILE`, `-s KEY VALUE`. `-q` silences output, and `-r` starts the REPL afterwards |
+| `eval ARGS` | Evaluates, from left to right: `-e EXPR`, `-l FILE`, `-s KEY VALUE`. `-q` silences output, and `-r` starts the REPL afterwards. `*argv*` has no value here |
 
 An error that nothing catches, or an unknown argument, ends the process with status 1.
 
@@ -213,7 +215,7 @@ shen-jit-stlib eval -e '(prime? 7)'    # true
 The names it exports are system functions, so a program running on it cannot `define` its own `take` or `drop`.
 That is why it is not in the default image.
 
-It is the kernel's precompiled `klambda/stlib.kl`, which a source tarball carries. The kernel's build of that file
+It is the kernel's precompiled `klambda/stlib.kl`, which a source tarball carries as `generated/stlib/stlib.kl`. The kernel's build of that file
 leaves out Encrypt, Regex, Calendar, Data and Tk, whose sources are in its `lib/`. Any binary can load that file and
 save itself, which is all `make stlib` does. To add a library or a program of your own, see
 [Saving a program](#saving-a-program).
@@ -747,7 +749,7 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 
 ### Differences from Shen/Scheme
 
-- **No stlib in the default image.** Only the kernel and the extensions are there: see
+- **No stlib in the default image.** Only the kernel and its extensions for features, programmable pattern matching, namespaces and the launcher are in use: see
   [The standard library](#the-standard-library).
 - **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.
 - **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
@@ -827,6 +829,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make bench` | The kernel's benchmarks and Shen/Scheme's realistic ones, under Shen/JIT and Shen/Scheme, compared. `make bench SEAL=1` runs Shen/JIT sealed |
 | `make bench-numeric` | Numeric programs and a path tracer, in C and in Shen with raw registers, and those programs with boxed reals too |
 | `make bench-independent` | Workloads never used for tuning (the kernel's test suite, installing the standard library, a prover), to check that gains are not fitted to the benchmarks |
+| `make clean` | Removes what `make` builds in `build/`, but for the generated files and `shen-jit-stlib` |
 | `make guide` | Renders this guide and its documents' pages to `build/guide/`, with [pandoc](https://pandoc.org) |
 | `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |
 
