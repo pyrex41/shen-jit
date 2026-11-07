@@ -192,7 +192,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http
+GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-listener
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -338,6 +338,7 @@ test-http: $(BUILD)/shen-jit
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
 	  -l lib/memory.shen -l tests/http_server.shen | $(FFI_RESULT)
 	sh tests/http_request_image.sh $(SHEN_JIT)
+	sh tests/http_listener.sh $(SHEN_JIT)
 
 fuzz-native: $(BUILD)/shen-jit
 	python3 tests/native_fuzz.py

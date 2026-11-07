@@ -19,6 +19,7 @@ on:
       - docs/deadlines.md
       - docs/http-head.md
       - docs/http.md
+      - docs/http-listener.md
       - site/**
       - assets/**
       - .github/workflows/pages.yml

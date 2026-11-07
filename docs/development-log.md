@@ -1125,6 +1125,33 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Bounded HTTP admission, shutdown and a SQLite application (2026-11-07, M3 Max, macOS arm64)
+
+- Added `lib/http-listener.shen` above the one-request handler: one supervisor owns the listener and
+  registry, a configurable cap bounds workers, and each worker publishes one completion after cleanup.
+  Admission waits in the existing OS backlog when full. Immutable snapshots retain aggregate counts,
+  without keeping a growing history of completed connections. No runtime primitive or C adapter was added.
+- Shutdown closes the listener, drains within one absolute grace budget, then flags remaining socket
+  operations for cancellation. The endpoint owner closes its descriptor after returning from poll, so
+  another task cannot close and reuse it during a native wait. Partial progress survives cancellation;
+  replacing a deadline does not clear the cancellation flag. Supervisor waits use native sleep/poll
+  intervals, with no spinning, channel, general task framework or new synchronization ABI.
+- `http.wait` has its own bounded budget and reports pending work honestly. A handler or foreign call
+  can outlive grace; it finishes cooperatively before worker completion. The runtime's catchable interrupt
+  belongs to the REPL, while scripts terminate on SIGINT, so the runnable application uses an explicit
+  local shutdown command. Signal-driven graceful shutdown remains separate work.
+- `example-apps/sqlite-http/` is a persistent JSON counter API using public libraries, parameterized SQL,
+  one SQLite connection per request worker and transactions for atomic increments. It has a quiet source
+  loader, bounded lists/bodies, HEAD/method rules, database cleanup and a local POST shutdown endpoint.
+  Application routing/schema/lifecycle stay in the example, with reusable admission in the library.
+- All 64 new checks pass: 41 listener/cancellation/failure cases, a typed client, 20 application/rollback
+  checks and 2 image/GC checks. The expanded test-http has 311 checks and the full fast tier passes.
+  The independent Python HTTP/SQLite test verifies routes, 32 concurrent increments without lost updates,
+  persistence across restart, a stalled body during stop and the real CLI's shutdown command. This is
+  correctness evidence, without a comparative throughput claim. CI inherits these cases through test-http.
+- The bounded-server API has its own rendered page linked from the guide; the application has launch,
+  route and test instructions beside its source. Documentation examples, links and publication checks pass.
+
 ### Complete HTTP requests, bounded bodies and responses (2026-11-07, M3 Max, macOS arm64)
 
 - Added `lib/http-request.shen` for a strict HTTP/1.1 origin-form/OPTIONS-star subset: owned metadata,

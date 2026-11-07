@@ -33,9 +33,10 @@
 (define io.socket-budget
   Policy Op Name ->
     (let D (<-address Policy 0)
-      (if (or (empty? D) (not (deadline.expired? D)))
-          [ok]
-          [error (io.native-error Op timeout 0 Name "deadline expired")])))
+      (cond ((<-address Policy 1)
+              [error (io.native-error Op cancelled 0 Name "socket operation cancelled")])
+            ((or (empty? D) (not (deadline.expired? D))) [ok])
+            (true [error (io.native-error Op timeout 0 Name "deadline expired")]))))
 
 (define io.socket-slice
   Policy ->
@@ -44,12 +45,17 @@
 
 (define io.socket-wait
   Token Name Policy Event Op ->
+    (io.socket-wait-ready Token Name Policy Event Op (io.socket-budget Policy Op Name)))
+
+(define io.socket-wait-ready
+  _ _ _ _ _ [error Error] -> [error Error]
+  Token Name Policy Event Op [ok] ->
     (let Slice (io.socket-slice Policy)
       (if (= Slice 0)
           [error (io.native-error Op timeout 0 Name "deadline expired")]
           (let Ready (socket.c-poll (socket.pollfd (io.socket-id Token) Event) 1 Slice)
                Code (if (< Ready 0) (io.socket-code) 0)
-            (cond ((> Ready 0) [ok])
+            (cond ((> Ready 0) (io.socket-budget Policy Op Name))
                   ((or (= Ready 0) (io.socket-again? Code))
                     (io.socket-wait Token Name Policy Event Op))
                   (true [error (io.socket-error poll Name Code)]))))))
@@ -104,7 +110,7 @@
 (define io.socket-make
   S Name ->
     (let Token (io.socket-token S)
-         Policy (io.record [[]])
+         Policy (io.record [[] false])
          E (io.endpoint Name read-write 65536
                         (/. B (io.socket-read Token Name Policy B))
                         (/. B (io.socket-write Token Name Policy B))
@@ -142,6 +148,16 @@
     (let _ (io.socket-check E)
       (do (address-> (<-address E 13) 0 []) E)))
 
+\\ Cancellation is the only cross-task endpoint operation. It publishes one monotonic flag,
+\\ without closing or reusing a descriptor while its owner may still be inside poll.
+(define io.socket-cancel
+  E ->
+    (let _ (io.endpoint-check E)
+         Token (<-address E 12)
+         _ (if (and (shen-jit.pointer? Token) (= (shen-jit.pointer-kind Token) io.socket))
+               true (error "io: not a socket endpoint"))
+      (do (address-> (<-address E 13) 1 true) true)))
+
 \\ Flush before sending FIN. Read EOF, write shutdown and full close remain separate states.
 (define io.shutdown-write
   E ->
@@ -170,4 +186,5 @@
 (declare io.socket [number --> [string --> io.endpoint]])
 (declare io.socket-deadline [io.endpoint --> [deadline --> io.endpoint]])
 (declare io.socket-unlimited [io.endpoint --> io.endpoint])
+(declare io.socket-cancel [io.endpoint --> boolean])
 (declare io.shutdown-write [io.endpoint --> io.close-result])

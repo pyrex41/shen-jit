@@ -21,6 +21,7 @@ checkout's own workflow, and git ignores it.
 | `include/` | `shen.h`, for C written for Shen |
 | `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, and `handle.shen`, which releases memory once nothing reaches it |
 | `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, and `release-notes.sh` prints a version's section of the changelog |
+| `example-apps/` | Runnable applications built over the public libraries, each with its own README and independent test |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
 | `contract/` | The contract examples, and Shen/Scheme's results for them |

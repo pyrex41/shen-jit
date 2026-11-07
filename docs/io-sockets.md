@@ -79,6 +79,10 @@ endpoint or its old writer raise, including empty writes. Full `io.close` remain
 remembered result. Close after successful shutdown does not flush the detached, already drained writer.
 This supports request EOF followed by a server response without prematurely closing the whole connection.
 
+`io.socket-cancel Endpoint` can be called from another task to permanently cancel nonempty backend I/O,
+including while its task waits. It preserves acknowledged progress and leaves close to that task.
+See [server cancellation](http-listener.md#cancellation-and-ownership) for the cooperative wait/ownership rules.
+
 ## A bounded session handler
 
 Load [tools/frame-echo.shen](../tools/frame-echo.shen) with the libraries above. A one-connection program

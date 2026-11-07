@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- A bounded HTTP listener with connection limits, cooperative socket cancellation, controlled shutdown
+  and completion snapshots. A runnable SQLite counter API in `example-apps/sqlite-http/` demonstrates
+  per-request database ownership, atomic increments, JSON responses and an explicit shutdown command.
+
 - Optional HTTP/1.1 request parsing, bounded Content-Length bodies, response encoding and a one-request
   socket driver with per-phase deadlines, typed APIs and a small echo/health example. Ambiguous framing
   is rejected; HEAD/bodyless responses, partial output failure and owned body bytes have explicit rules.

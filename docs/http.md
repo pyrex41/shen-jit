@@ -157,6 +157,7 @@ Options are `[Name Number]` pairs, for example `[[body-limit 65536] [body-timeou
 Unknown, duplicate and invalid options raise before ownership transfers. A fresh absolute deadline is
 installed for each phase, spanning all short progress within it. Handler execution itself is not timed.
 The driver does not accept a second request, drain an unbounded body or add a thread/accept loop.
+The [bounded listener](http-listener.md) runs this driver with a connection cap and controlled shutdown.
 
 Malformed/unsupported requests get an empty 400/413/414/417/431/501/505 response as appropriate; budget
 expiry gets 408. Application exceptions or invalid responses get an empty 500 before any application
