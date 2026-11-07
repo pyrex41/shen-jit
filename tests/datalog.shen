@@ -402,6 +402,104 @@
 (dt.raises "not as a relation" "cannot name"
   (freeze (datalog.define dt.bad [[relation not [symbol]]])))
 
+\* Arithmetic: distances along weighted edges, bounded so that they end; a lookup by a computed
+   value; bindings that depend on each other, written in either order; an alias of a symbol; and
+   expressions compared. *\
+(defdatalog dt.arith
+  (relation edge [symbol symbol integer])
+  (relation start [symbol])
+  (relation dist [symbol integer])
+  (relation n [integer])
+  (relation next [integer integer])
+  (relation chain [integer integer integer])
+  (relation same [symbol symbol])
+  (relation small [integer integer])
+  (relation sq [integer integer])
+  (rule (dist X 0) <-- (start X))
+  (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)) (<= D 10))
+  (rule (next X Y) <-- (n X) (= Y (+ X 1)) (n Y))
+  (rule (chain X Z Y) <-- (n X) (= Z (* Y 2)) (= Y (- X 1)))
+  (rule (same X Y) <-- (start X) (= Y X))
+  (rule (small X Y) <-- (n X) (n Y) (< (+ X Y) 2) (= (- X Y) 1))
+  (rule (sq X Y) <-- (n X) (= Y (- (* X X) (* 2 X)))))
+
+(set dt.arith-facts [[start a] [edge a b 3] [edge b c 4] [edge a c 9] [edge c a 1] [edge c d 5]
+                     [n -1] [n 0] [n 1] [n 2] [n 4]])
+
+(dt.same "arithmetic" (value dt.arith-facts) dt.arith dist [[a 0] [a 8] [a 10] [b 3] [c 7] [c 9]])
+(dt.same "arithmetic" (value dt.arith-facts) dt.arith next [[-1 0] [0 1] [1 2]])
+(dt.same "arithmetic" (value dt.arith-facts) dt.arith chain [[-1 -4 -2] [0 -2 -1] [1 0 0] [2 2 1] [4 6 3]])
+(dt.same "arithmetic" (value dt.arith-facts) dt.arith same [[a a]])
+(dt.same "arithmetic" (value dt.arith-facts) dt.arith small [[0 -1] [1 0]])
+(dt.same "arithmetic" (value dt.arith-facts) dt.arith sq [[-1 3] [0 0] [1 -1] [2 0] [4 8]])
+
+\* 32 bits, signed: the extremes are kept and ordered, and arithmetic past them raises, however
+   it is evaluated. *\
+(defdatalog dt.int32
+  (relation v [integer])
+  (relation lt [integer integer])
+  (rule (lt X Y) <-- (v X) (v Y) (< X Y)))
+
+(defdatalog dt.int32-up
+  (relation v [integer])
+  (relation up [integer integer])
+  (rule (up X Y) <-- (v X) (= Y (+ X 1))))
+
+(dt.same "32 bits" [[v -2147483648] [v 0] [v 2147483647]] dt.int32 lt
+  [[-2147483648 0] [-2147483648 2147483647] [0 2147483647]])
+(dt.raises "past 32 bits" "outside 32 bits" (freeze (datalog.run dt.int32-up [[v 2147483647]])))
+(dt.raises "past 32 bits, KL" "outside 32 bits" (freeze (dt.run-kl dt.int32-up [[v 2147483647]])))
+(set datalog.*native* true)
+(datalog.forget-code dt.int32-up)
+(dt.raises "past 32 bits, reference" "outside 32 bits" (freeze (datalog.run-naive dt.int32-up [[v 2147483647]])))
+(dt.raises "a fact past 32 bits" "in a column of type integer" (freeze (datalog.run dt.int32 [[v 2147483648]])))
+(dt.check "holds? with an integer" (datalog.holds? (datalog.run dt.int32-up [[v -5]]) [up -5 -4]) true)
+(dt.check "holds? across types" (datalog.holds? (datalog.run dt.dep [[imports a b]]) [imports 0 1]) false)
+
+(dt.raises "arithmetic on symbols" "works on integers"
+  (freeze (datalog.define dt.bad [[relation p [symbol]] [rule [p [var "Y"]] [[p [var "X"]] [= [var "Y"] [+ [var "X"] 1]]]]])))
+(dt.raises "an unbound binding" "Y is not bound"
+  (freeze (datalog.define dt.bad [[relation p [integer]] [rule [p [var "Y"]] [[p [var "X"]] [= [var "Y"] [+ [var "Z"] 1]]]]])))
+(dt.raises "two unbound sides" "is not bound"
+  (freeze (datalog.define dt.bad [[relation p [integer]] [rule [p [var "X"]] [[p [var "X"]] [= [var "Y"] [var "Z"]]]]])))
+
+\* Fingerprints collide only among many values spread over 32 bits, so that a probe that trusted
+   one would pass every small test. Native joins against KL joins, whose probes are the table
+   kernels', on lookups, members and negations of 150,000 random tuples, most keys absent. *\
+(defdatalog dt.spread
+  (relation a [integer integer])
+  (relation b [integer])
+  (relation c [integer integer])
+  (relation t [integer integer integer])
+  (relation by-key [integer integer])
+  (relation by-two [integer integer integer])
+  (relation member [integer integer])
+  (relation missing [integer])
+  (relation missing-two [integer integer])
+  (rule (by-key X Y) <-- (b X) (a X Y))
+  (rule (by-two X Y Z) <-- (c X Y) (t X Y Z))
+  (rule (member X Y) <-- (c X Y) (a X Y))
+  (rule (missing X) <-- (b X) (not (a X _)))
+  (rule (missing-two X Y) <-- (c X Y) (not (t X Y _))))
+
+(define dt.word32
+  -> (- (shen-jit.bit-xor (shen-jit.shift-left (dtg.random 65536) 16) (dtg.random 65536)) 2147483648))
+
+(define dt.spread-facts
+  0 Acc -> Acc
+  N Acc -> (let X (dt.word32) Y (dt.word32) Z (dt.word32)
+             (dt.spread-facts (- N 1)
+               (append [[a X Y] [t X Y Z]]
+                       (if (= 0 (shen.mod N 2)) [[b Z] [c Z Y]] [])
+                       (if (= 0 (shen.mod N 3)) [[b X] [c X Y]] [])
+                       Acc))))
+
+(let Facts (dt.spread-facts 150000 [])
+     Native (datalog.run dt.spread Facts)
+     Kl (dt.run-kl dt.spread Facts)
+  (map (/. R (dt.check (make-string "spread ~A" R) (datalog.count Native R) (datalog.count Kl R)))
+       [by-key by-two member missing missing-two]))
+
 \* Native kernels run, and the plans that fall back to KL are few. *\
 (dt.check "native kernels ran" (< (value datalog.*fallbacks*) 20) true)
 

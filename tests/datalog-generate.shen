@@ -109,14 +109,36 @@
                          (< R 8) (dtg.value Type)
                          true [any])))
 
+\* Sometimes K bound to arithmetic on an integer the body binds, kept between -4 and 4 so that
+   recursion through it ends, and sometimes an expression compared. *\
+(define dtg.arithmetic
+  Bound -> (let Numbers (dtg.of-type Bound integer)
+                R (dtg.random 6)
+             (cases (empty? Numbers) []
+                    (< R 2) [[= [var "K"] [(dtg.choose [+ - *]) [var (dtg.choose Numbers)] (dtg.operand Numbers)]]
+                             [<= [var "K"] 4] [>= [var "K"] -4]]
+                    (= R 2) [[(dtg.choose [< >= = !=]) [(dtg.choose [+ - *]) [var (dtg.choose Numbers)] (dtg.operand Numbers)]
+                              (dtg.value integer)]]
+                    true [])))
+
+(define dtg.operand
+  Numbers -> (if (= 0 (dtg.random 2)) [var (dtg.choose Numbers)] (dtg.value integer)))
+
+(define dtg.binds-k?
+  [] -> false
+  [[= [var "K"] _] | _] -> true
+  [_ | Ls] -> (dtg.binds-k? Ls))
+
 (define dtg.rule
   Relations
   -> (let Atoms (dtg.times (+ 1 (dtg.random 3)) (freeze (dtg.atom (dtg.choose Relations))))
-          Bound (dtg.body-bound Atoms Relations [])
+          Atomic (dtg.body-bound Atoms Relations [])
+          Arithmetic (dtg.arithmetic Atomic)
+          Bound (if (dtg.binds-k? Arithmetic) [["K" | integer] | Atomic] Atomic)
           Head (dtg.head (dtg.choose Relations) Bound)
           Tests (dtg.comparison Bound)
           Negation (dtg.negation Relations Bound)
-       [Head (append Atoms (append Tests Negation))]))
+       [Head (append Atoms (append Arithmetic (append Tests Negation)))]))
 
 \* Negations dropped from the last rules that have them until the program is stratified. *\
 (define dtg.stratified

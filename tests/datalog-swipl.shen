@@ -30,7 +30,28 @@
    by then, as its table is, so plain negation is enough. *\
 (define swi.comparison
   [not Atom] -> (cn "\+ " (swi.atom-form Atom))
+  [Op A B] -> (cn (swi.expr A) (cn (swi.arith-op Op) (swi.expr B)))
+              where (or (datalog.expression? A) (datalog.expression? B))
   [Op A B] -> (cn (swi.term A) (cn (swi.op Op) (swi.term B))))
+
+\* What binds a variable is is, after the atoms and before what reads it. Generated programs bind
+   only from what the atoms bind. *\
+(define swi.binding
+  [= [var V] E] -> (cn "V" (cn V (cn " is " (swi.expr E)))))
+
+(define swi.binding?
+  [= [var "K"] _] -> true
+  _ -> false)
+
+(define swi.expr
+  [Op A B] -> (cn "(" (cn (swi.expr A) (cn (cn " " (cn (str Op) " ")) (cn (swi.expr B) ")"))))
+              where (datalog.arithmetic? Op)
+  T -> (swi.term T))
+
+(define swi.arith-op
+  = -> " =:= "
+  != -> " =\= "
+  Op -> (swi.op Op))
 
 (define swi.op
   < -> " < "
@@ -42,8 +63,13 @@
 
 (define swi.body
   Body -> (swi.join (append (map (function swi.atom-form) (datalog.atoms Body))
-                            (map (function swi.comparison) (datalog.conditions Body)))
+                            (append (map (function swi.binding) (swi.filter (function swi.binding?) (datalog.conditions Body)))
+                                    (map (function swi.comparison) (swi.filter (/. C (not (swi.binding? C))) (datalog.conditions Body)))))
                     ", "))
+
+(define swi.filter
+  _ [] -> []
+  F [X | Xs] -> (if (F X) [X | (swi.filter F Xs)] (swi.filter F Xs)))
 
 (define swi.rule
   [Head []] -> (cn (swi.atom-form Head) ".c#10;")

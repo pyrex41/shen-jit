@@ -44,10 +44,24 @@ false
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
 
-- **Columns** are `symbol`, `string` or `integer`, and a value of another type raises when it is given.
+- **Columns** are `symbol`, `string` or `integer`, and a value of another type raises when it is given. An integer is 32 bits, signed:
+  from -2147483648 to 2147483647.
 - **Rules:** a body has atoms, negated atoms and comparisons: `<`, `>`, `<=` and `>=` on integers, and `=` and `!=` on values of one
-  type. A variable in a head, a comparison or a negated atom must appear in an atom of the body, and each `_` is a variable of its own.
-  There is no arithmetic that makes values, and no terms inside a column.
+  type. A variable in a head, a comparison or a negated atom must appear in an atom of the body, or be bound by `=`, and each `_` is a variable of its own.
+  There are no terms inside a column.
+- **Arithmetic:** `(+ A B)`, `(- A B)` and `(* A B)` on integers, nested as deep as wanted, can stand on either side of a comparison.
+  `(= D (+ D0 W))` binds `D` when nothing else has, and compares otherwise; a binding can use what another binds, in any order.
+  An operation whose result is not 32 bits raises. Arithmetic makes new values, so a recursive rule that uses it should bound them,
+  as `(<= D 10)` does here, or it does not end:
+
+```shen
+(defdatalog distances
+  (relation edge [symbol symbol integer])
+  (relation start [symbol])
+  (relation dist [symbol integer])
+  (rule (dist X 0) <-- (start X))
+  (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)) (<= D 10)))
+```
 - **Negation:** `(not (edge X _))` holds when no tuple matches: here, when `X` has no edge out. A relation cannot depend on the negation of
   one that depends on it, as there would be no single answer, and defining such a program raises. So each relation it negates is complete
   before a rule reads it, and a program is evaluated in strata.

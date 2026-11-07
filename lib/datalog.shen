@@ -31,18 +31,20 @@
 \\ datalog.code        (datalog.code Name), the KL those give
 \\ datalog.stats       (datalog.stats Db), rounds, and per relation tuples and derivations
 \\
-\\ A column is a symbol, a string or an integer. A variable in a head, a comparison or a negated
-\\ atom must appear in a positive atom of the body. Comparisons are <, >, <= and >= on integers,
-\\ and = and != on values of one type. (not (edge X _)) holds when no tuple matches; a relation
+\\ A column is a symbol, a string or an integer of 32 bits, signed. A variable in a head, a
+\\ comparison or a negated atom must appear in a positive atom of the body, or be bound by =.
+\\ Comparisons are <, >, <= and >= on integers, and = and != on values of one type; either side
+\\ can be arithmetic, (+ A B), (- A B) or (* A B), which raises when a result is not 32 bits.
+\\ (= D (+ D0 W)) binds D if nothing else has. (not (edge X _)) holds when no tuple matches; a relation
 \\ cannot depend on the negation of one that depends on it, so what is negated is complete before
 \\ it is read. As data, a variable is [var "X"] and _ is [any].
 \\
 \\ Relations are sets, so duplicates count once, and the order of rules, atoms and facts does not
 \\ change a result. Evaluation is a snapshot: new facts mean a new datalog.run.
 \\
-\\ Each rule becomes KL, for an order of joins, kept with the program. The order comes from the sizes
-\\ of the relations as it runs, and changes when they have. Values are interned, and tuples kept
-\\ flat in byte buffers: see "Storage" below.
+\\ Each rule becomes a native kernel, for an order of joins, kept with the program. The order comes
+\\ from the sizes of the relations as it runs, and changes when they have. Symbols and strings are
+\\ interned, integers are themselves, and tuples are kept flat in byte buffers: see "Storage" below.
 
 (set datalog.*adaptive* true)
 (set datalog.*plans* 0)
@@ -56,18 +58,28 @@
 (define datalog.ordering?
   X -> (element? X [< > <= >=]))
 
-(define datalog.fixnum?
-  X -> (and (integer? X) (trap-error (do (shen-jit.bit-or X 0) true) (/. E false))))
+\\ An integer column holds 32 bits, signed, as itself; symbols and strings are interned.
+(define datalog.int32?
+  X -> (and (integer? X) (>= X -2147483648) (<= X 2147483647)
+            (trap-error (do (shen-jit.bit-or X 0) true) (/. E false))))
 
 (define datalog.value-type
   X -> symbol where (symbol? X)
   X -> string where (string? X)
-  X -> integer where (datalog.fixnum? X)
+  X -> integer where (datalog.int32? X)
   _ -> none)
+
+\\ The 32 bits a column holds for an integer, and back.
+(define datalog.int-word
+  X -> (if (< X 0) (+ X 4294967296) X))
+
+(define datalog.word-int
+  W -> (if (> W 2147483647) (- W 4294967296) W))
 
 (define datalog.term->form
   [var Name] -> (intern Name)
   [any] -> (intern "_")
+  [Op A B] -> [Op (datalog.term->form A) (datalog.term->form B)] where (datalog.arithmetic? Op)
   X -> X)
 
 (define datalog.atom->form
@@ -129,6 +141,10 @@
                            (error "datalog ~A: ~A is not bound by an atom of the body" Say V)
                            (tl Known)))
   Say _ [any] -> (error "datalog ~A: _ cannot be compared" Say)
+  Say Env [Op A B] -> (if (and (= (datalog.term-type Say Env A) integer) (= (datalog.term-type Say Env B) integer))
+                          integer
+                          (error "datalog ~A: ~A works on integers" Say Op))
+                      where (datalog.arithmetic? Op)
   Say _ X -> (let Type (datalog.value-type X)
                (if (= Type none)
                    (error "datalog ~A: ~S is not a value" Say X)
@@ -196,10 +212,42 @@
 (define datalog.check-rule
   Name Relations Head Body
   -> (let Say (make-string "~A, rule ~R" Name (datalog.rule->form Head Body))
-          Env (datalog.check-all (/. S E A (datalog.check-atom S Relations E A)) Say [] (datalog.atoms Body))
+          Atoms (datalog.check-all (/. S E A (datalog.check-atom S Relations E A)) Say [] (datalog.atoms Body))
+          Env (datalog.check-binders Say (datalog.conditions Body) Atoms)
           _ (datalog.check-all (/. S E C (datalog.check-condition S Relations E C)) Say Env (datalog.conditions Body))
           _ (datalog.check-head Say Env Relations Head false)
        [Head Body]))
+
+\\ Arithmetic on integers: (+ A B), (- A B) and (* A B), nested as deep as wanted.
+(define datalog.arithmetic?
+  X -> (element? X [+ - *]))
+
+(define datalog.expr-vars
+  [var V] -> [V]
+  [Op A B] -> (union (datalog.expr-vars A) (datalog.expr-vars B)) where (datalog.arithmetic? Op)
+  _ -> [])
+
+(define datalog.bound?
+  Vars Env -> (datalog.subset? Vars (map (function hd) Env)))
+
+\\ (= V E), where V is not bound yet and everything in E is, binds V. What binds one variable can
+\\ make another's ready, so this goes on until nothing more is bound.
+(define datalog.binder
+  [= [var V] B] Bound -> [V B] where (and (not (element? V Bound)) (datalog.subset? (datalog.expr-vars B) Bound))
+  [= A [var V]] Bound -> [V A] where (and (not (element? V Bound)) (datalog.subset? (datalog.expr-vars A) Bound))
+  _ _ -> none)
+
+(define datalog.check-binders
+  Say Conditions Env -> (datalog.check-binders-h Say Conditions Env Conditions false))
+
+(define datalog.check-binders-h
+  _ [] Env _ false -> Env
+  Say [] Env All true -> (datalog.check-binders-h Say All Env All false)
+  Say [C | Cs] Env All Progress
+  -> (let B (datalog.binder C (map (function hd) Env))
+       (if (= B none)
+           (datalog.check-binders-h Say Cs Env All Progress)
+           (datalog.check-binders-h Say Cs [[(hd B) | (datalog.term-type Say Env (hd (tl B)))] | Env] All true))))
 
 \\ The relations a body reads, and of those, the ones that must be complete before it runs.
 (define datalog.body-relations
@@ -266,10 +314,13 @@
   -> [(datalog.check-rule Name Relations Head Body) | (datalog.rules Name Relations Items)]
   Name _ [Item | _] -> (error "datalog ~A: ~S is neither a relation nor a rule" Name Item))
 
+\\ The constants to intern: integers are themselves.
 (define datalog.term-constants
   [] Acc -> Acc
   [[var _] | Ts] Acc -> (datalog.term-constants Ts Acc)
   [[any] | Ts] Acc -> (datalog.term-constants Ts Acc)
+  [[Op A B] | Ts] Acc -> (datalog.term-constants [A B | Ts] Acc) where (datalog.arithmetic? Op)
+  [X | Ts] Acc -> (datalog.term-constants Ts Acc) where (integer? X)
   [X | Ts] Acc -> (datalog.term-constants Ts (adjoin X Acc)))
 
 (define datalog.constants
@@ -381,9 +432,10 @@
 
 (define datalog.naive-body
   [] Conditions [Rel | Terms] Env Tables Acc
-  -> (if (datalog.naive-true? Conditions Env Tables)
-         [[Rel | (map (/. T (datalog.naive-value T Env)) Terms)] | Acc]
-         Acc)
+  -> (let Bound (datalog.naive-bind Conditions Env Conditions false)
+       (if (datalog.naive-true? Conditions Bound Tables)
+           [[Rel | (map (/. T (datalog.naive-value T Bound)) Terms)] | Acc]
+           Acc))
   [[Rel | Terms] | Atoms] Comparisons Head Env Tables Acc
   -> (datalog.naive-tuples (tl (assoc Rel Tables)) Terms Atoms Comparisons Head Env Tables Acc))
 
@@ -408,7 +460,28 @@
 
 (define datalog.naive-value
   [var X] Env -> (tl (assoc X Env))
+  [Op A B] Env -> (datalog.arithmetic Op (datalog.naive-value A Env) (datalog.naive-value B Env))
+                  where (datalog.arithmetic? Op)
   C _ -> C)
+
+\\ What each binding condition binds, until nothing more is; once bound, it holds as a comparison.
+(define datalog.naive-bind
+  [] Env _ false -> Env
+  [] Env All true -> (datalog.naive-bind All Env All false)
+  [C | Cs] Env All Progress
+  -> (let B (datalog.binder C (map (function hd) Env))
+       (if (= B none)
+           (datalog.naive-bind Cs Env All Progress)
+           (datalog.naive-bind Cs [[(hd B) | (datalog.naive-value (hd (tl B)) Env)] | Env] All true))))
+
+\\ Each operation on 32-bit integers raises if its result is not one.
+(define datalog.arithmetic
+  + A B -> (datalog.in-range (+ A B))
+  - A B -> (datalog.in-range (- A B))
+  * A B -> (datalog.in-range (* A B)))
+
+(define datalog.in-range
+  X -> (if (datalog.int32? X) X (error "datalog: arithmetic gave ~A, outside 32 bits" X)))
 
 (define datalog.naive-true?
   [] _ _ -> true
@@ -579,18 +652,28 @@
   [[bind V _] | Cs] Bound -> (datalog.bound-after Cs [V | Bound])
   [_ | Cs] Bound -> (datalog.bound-after Cs Bound))
 
-\\ The conditions that can run now, as steps, and those left. A negated atom is [absent Rel Keys
-\\ Terms]: no tuple has these terms in these columns.
+\\ The conditions that can run now, as steps, those left, and what is bound after: [Steps Left
+\\ Bound]. A negated atom is [absent Rel Keys Terms]: no tuple has these terms in these columns.
+\\ (= V E) whose V is not bound is [assign V E], and may make others ready.
 (define datalog.ready
-  [] _ Ready Left -> (@p (reverse Ready) (reverse Left))
-  [C | Cs] Bound Ready Left
-  -> (if (datalog.subset? (datalog.condition-vars C) Bound)
-         (datalog.ready Cs Bound [(datalog.condition-step C Bound) | Ready] Left)
-         (datalog.ready Cs Bound Ready [C | Left])))
+  Conditions Bound -> (datalog.ready-h Conditions Bound [] [] false))
+
+(define datalog.ready-h
+  [] Bound Ready Left false -> [(reverse Ready) (reverse Left) Bound]
+  [] Bound Ready Left true -> (let More (datalog.ready-h (reverse Left) Bound [] [] false)
+                                [(append (reverse Ready) (hd More)) | (tl More)])
+  [C | Cs] Bound Ready Left Progress
+  -> (let B (datalog.binder C Bound)
+       (cases (datalog.subset? (datalog.condition-vars C) Bound)
+              (datalog.ready-h Cs Bound [(datalog.condition-step C Bound) | Ready] Left Progress)
+              (= B none)
+              (datalog.ready-h Cs Bound Ready [C | Left] Progress)
+              true
+              (datalog.ready-h Cs [(hd B) | Bound] [[assign | B] | Ready] Left true))))
 
 (define datalog.condition-vars
   [not [_ | Terms]] -> (datalog.term-vars Terms [])
-  [_ A B] -> (datalog.term-vars [A B] []))
+  [_ A B] -> (union (datalog.expr-vars A) (datalog.expr-vars B)))
 
 (define datalog.condition-step
   [not [Rel | Terms]] Bound -> [absent Rel (datalog.key-columns Terms 1 Bound) (datalog.key-terms Terms Bound)]
@@ -624,14 +707,13 @@
 
 (define datalog.plan-next
   Step Columns Atoms Comparisons Head Bound Est
-  -> (let After (datalog.bound-after Columns Bound)
-          Split (datalog.ready Comparisons After [] [])
-       [Step | (append (fst Split) (datalog.plan-steps Atoms (snd Split) Head After Est))]))
+  -> (let Split (datalog.ready Comparisons (datalog.bound-after Columns Bound))
+       [Step | (append (hd Split) (datalog.plan-steps Atoms (hd (tl Split)) Head (hd (tl (tl Split))) Est))]))
 
 (define datalog.plan-rule
   [Head Body] Est
-  -> (let Split (datalog.ready (datalog.conditions Body) [] [] [])
-       (append (fst Split) (datalog.plan-steps (datalog.atoms Body) (snd Split) Head [] Est))))
+  -> (let Split (datalog.ready (datalog.conditions Body) [])
+       (append (hd Split) (datalog.plan-steps (datalog.atoms Body) (hd (tl Split)) Head (hd (tl (tl Split))) Est))))
 
 \\ A variant: the atom at Position reads the new tuples, and goes first.
 (define datalog.plan-variant
@@ -639,9 +721,9 @@
   -> (let Atoms (datalog.atoms Body)
           Atom (datalog.nth Position Atoms)
           Others (datalog.without Position Atoms)
-          Split (datalog.ready (datalog.conditions Body) [] [] [])
-       (append (fst Split)
-               (datalog.plan-scan (hd Atom) new (tl Atom) Others (snd Split) Head [] Est))))
+          Split (datalog.ready (datalog.conditions Body) [])
+       (append (hd Split)
+               (datalog.plan-scan (hd Atom) new (tl Atom) Others (hd (tl Split)) Head (hd (tl (tl Split))) Est))))
 
 (define datalog.without
   1 [_ | Xs] -> Xs
@@ -978,24 +1060,42 @@
   Rel Keys [[Rel | Ks] | Rest] -> [[Rel | (if (element? Keys Ks) Ks (append Ks [Keys]))] | Rest]
   Rel Keys [Other | Rest] -> [Other | (datalog.add-index Rel Keys Rest)])
 
+\\ A term's word: an integer's 32 bits, or an interned value's number.
 (define datalog.value-form
   [var V] _ -> (datalog.var-symbol V)
+  C _ -> (datalog.int-word C) where (integer? C)
   C Constants -> (datalog.position C Constants 0))
 
 (define datalog.var-symbol
   V -> (intern (cn "V" V)))
 
+\\ An integer term's value, signed, from its word.
 (define datalog.number-form
-  [var V] _ -> [<-address [<-address s 0] (datalog.var-symbol V)]
+  [var V] _ -> (let W (datalog.var-symbol V) [if [> W 2147483647] [- W 4294967296] W])
+  [Op A B] Constants -> [datalog.in-range [Op (datalog.number-form A Constants) (datalog.number-form B Constants)]]
+                        where (datalog.arithmetic? Op)
   C _ -> C)
 
+(define datalog.expression?
+  [Op _ _] -> (datalog.arithmetic? Op)
+  _ -> false)
+
+\\ Values of one type are equal when their words are; an expression is compared as a number.
 (define datalog.filter-form
+  = A B Constants -> [= (datalog.number-form A Constants) (datalog.number-form B Constants)]
+                     where (or (datalog.expression? A) (datalog.expression? B))
+  != A B Constants -> [not (datalog.filter-form = A B Constants)]
   = A B Constants -> [= (datalog.value-form A Constants) (datalog.value-form B Constants)]
-  != A B Constants -> [not [= (datalog.value-form A Constants) (datalog.value-form B Constants)]]
   Op A B Constants -> [Op (datalog.number-form A Constants) (datalog.number-form B Constants)])
 
+\\ What [assign V E] binds V to: a word, as a column would hold.
+(define datalog.assign-form
+  E Constants -> [datalog.int-word (datalog.number-form E Constants)] where (datalog.expression? E)
+  E Constants -> (datalog.value-form E Constants))
+
 (define datalog.step-uses
-  [filter _ A B] -> (datalog.term-vars [A B] [])
+  [filter _ A B] -> (union (datalog.expr-vars A) (datalog.expr-vars B))
+  [assign _ E] -> (datalog.expr-vars E)
   [absent _ _ Terms] -> (datalog.term-vars Terms [])
   [emit _ | Terms] -> (datalog.term-vars Terms [])
   [scan _ _ Columns] -> (datalog.columns-use Columns)
@@ -1009,6 +1109,7 @@
 (define datalog.step-binds
   [scan _ _ Columns] -> (datalog.columns-bind Columns)
   [lookup _ _ _ Columns] -> (datalog.columns-bind Columns)
+  [assign V _] -> [V]
   _ -> [])
 
 (define datalog.columns-bind
@@ -1047,6 +1148,8 @@
   [] _ _ _ -> true
   [[filter Op A B] | Steps] Ctx Prefix N
   -> [if (datalog.filter-form Op A B (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N) true]
+  [[assign V E] | Steps] Ctx Prefix N
+  -> [let (datalog.var-symbol V) (datalog.assign-form E (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N)]
   [[absent Rel Keys Terms] | Steps] [Relations Constants Indexes] Prefix N
   -> [let r [<-address s (datalog.relation-slot Rel Relations)]
        [if (datalog.found-form Rel Keys Terms [Relations Constants Indexes])
@@ -1219,20 +1322,53 @@
 (define datalog.mask
   -> 4294967295)
 
-\\ The word a term stands for: an interned value.
+\\ The word a term stands for: an integer's 32 bits, or an interned value.
 (define datalog.native-value
   [var V] Env _ -> (tl (assoc V Env))
+  C _ _ -> (datalog.int-word C) where (integer? C)
   C _ Constants -> (datalog.position C Constants 0))
 
-\\ The integer a term stands for, from the run's integers by value.
+\\ The integer a term stands for, signed: a column read as such, or a word's low half extended.
 (define datalog.native-integer
-  [var V] Env [_ _ _ N] -> [u64 (datalog.param (intern "Ints") [<-address s (+ 1 N)]) [shift-left (tl (assoc V Env)) 3]]
+  [var V] Env _ -> (datalog.signed (tl (assoc V Env)))
   C _ _ -> C)
 
+(define datalog.signed
+  [u32 Tuples Off] -> [s32 Tuples Off]
+  [bit-and R 4294967295] -> R
+  W -> [shift-right-signed [shift-left W 32] 32])
+
+\\ A comparison, as statements that compute its expressions and the test after them.
 (define datalog.native-test
-  = A B Env [R Constants | X] -> [= (datalog.native-value A Env Constants) (datalog.native-value B Env Constants)]
-  != A B Env [R Constants | X] -> [!= (datalog.native-value A Env Constants) (datalog.native-value B Env Constants)]
-  Op A B Env Ctx -> [Op (datalog.native-integer A Env Ctx) (datalog.native-integer B Env Ctx)])
+  Op A B Env [R Constants | X]
+  -> [[] [Op (datalog.native-value A Env Constants) (datalog.native-value B Env Constants)]]
+     where (and (element? Op [= !=]) (not (datalog.expression? A)) (not (datalog.expression? B)))
+  Op A B Env Ctx -> (let L (datalog.native-operand A Env Ctx 1)
+                         R (datalog.native-operand B Env Ctx 2)
+                      [(append (hd L) (hd R)) [Op (hd (tl L)) (hd (tl R))]]))
+
+\\ An integer operand as [Statements Form]: an expression is computed into Arith<D>, with what
+\\ its operands need from Arith<D+1> on, so that the second operand leaves the first alone.
+(define datalog.native-operand
+  E Env Ctx D -> (let T (datalog.word-name "Arith" D)
+                   [(datalog.native-compute E Env Ctx T (+ D 1)) T])
+                 where (datalog.expression? E)
+  E Env Ctx _ -> [[] (datalog.native-integer E Env Ctx)])
+
+(define datalog.native-compute
+  [Op A B] Env Ctx Target D
+  -> (let L (datalog.native-operand A Env Ctx D)
+          R (datalog.native-operand B Env Ctx (+ D 1))
+       (append (hd L) (hd R)
+               [[word Target [Op (hd (tl L)) (hd (tl R))]]
+                [unless [u< [+ Target 2147483648] 4294967296] [return-word (datalog.overflow-code)]]])))
+
+\\ What a kernel returns when arithmetic leaves 32 bits: more than any place to start again from.
+(define datalog.overflow-code
+  -> 1099511627776)
+
+(define datalog.overflowed
+  -> (error "datalog: arithmetic gave a value outside 32 bits"))
 
 \\ Columns of the tuple whose first byte is Base in Tuples.
 (define datalog.column-word
@@ -1256,7 +1392,16 @@
 (define datalog.native-steps
   [] _ _ _ _ -> []
   [[filter Op A B] | Steps] Ctx Env Level Outer
-  -> [[when (datalog.native-test Op A B Env Ctx) | (datalog.native-steps Steps Ctx Env Level Outer)]]
+  -> (let Test (datalog.native-test Op A B Env Ctx)
+       (append (hd Test) [[when (hd (tl Test)) | (datalog.native-steps Steps Ctx Env Level Outer)]]))
+  [[assign V E] | Steps] [Relations Constants | More] Env Level Outer
+  -> (if (datalog.expression? E)
+         (let Target (intern (cn "Val." V))
+           (append (datalog.native-compute E Env [Relations Constants | More] Target 1)
+                   (datalog.native-steps Steps [Relations Constants | More]
+                     [[V | [bit-and Target 4294967295]] | Env] Level Outer)))
+         (datalog.native-steps Steps [Relations Constants | More]
+           [[V | (datalog.native-value E Env Constants)] | Env] Level Outer))
   [[absent Rel Keys Terms] | Steps] Ctx Env Level Outer
   -> (datalog.native-absent Rel Keys Terms Steps Ctx Env Level Outer)
   [[emit Rel | Terms] | _] Ctx Env _ Outer -> (datalog.native-insert Rel Terms Ctx Env Outer)
@@ -1454,7 +1599,9 @@
           Call [Kernel | (map (function tl) Params)]
           GoForm [defun Go [s start]
                    [let x Call
-                     [if [= x 0] true [do [datalog.grow [<-address s Head]] [Go s [- x 1]]]]]]
+                     [cond [[= x 0] true]
+                           [[= x (datalog.overflow-code)] [datalog.overflowed]]
+                           [true [do [datalog.grow [<-address s Head]] [Go s [- x 1]]]]]]]
           Entry [defun Name [s] [Go s First]]
           _ (set datalog.*forms* [Entry GoForm [define-native Kernel (map (function hd) Params) | Written]
                                   | (value datalog.*forms*)])
@@ -1465,20 +1612,9 @@
   [[scan Rel new _] | _] Relations -> [<-address [<-address s (datalog.relation-slot Rel Relations)] 5]
   [[scan _ _ _] | _] _ -> 0
   [[filter | _] | Steps] Relations -> (datalog.first-start Steps Relations)
+  [[assign | _] | Steps] Relations -> (datalog.first-start Steps Relations)
   [[absent | _] | Steps] Relations -> (datalog.first-start Steps Relations)
   _ _ -> 0)
-
-\\ The integers of a run's values, by number, for native comparisons; 0 for what is not one.
-(define datalog.ints-bytes
-  Values N -> (let
-                 B (shen-jit.bytes (* 8 (if (> N 0) N 1)))
-              (datalog.fill-ints Values B 0 N)))
-
-(define datalog.fill-ints
-  _ B N N -> B
-  Values B I N -> (let V (<-address Values I)
-                       _ (if (datalog.fixnum? V) (shen-jit.s64! B (* 8 I) V) skip)
-                    (datalog.fill-ints Values B (+ I 1) N)))
 
 \\ The KL of the plan with no sizes to go by.
 (define datalog.code
@@ -1702,6 +1838,13 @@
   [V | Vs] Interned -> (let Id (datalog.intern V Interned)
                          [Id | (datalog.intern-all Vs Interned)]))
 
+\\ The words of a checked fact's values.
+(define datalog.encode
+  [] _ -> []
+  [V | Vs] Interned -> [(datalog.int-word V) | (datalog.encode Vs Interned)] where (integer? V)
+  [V | Vs] Interned -> (let Id (datalog.intern V Interned)
+                         [Id | (datalog.encode Vs Interned)]))
+
 (define datalog.list-forms
   0 _ -> []
   N L -> [[hd L] | (datalog.list-forms (- N 1) [tl L])])
@@ -1731,7 +1874,7 @@
   [] _ _ _ -> true
   [[Rel | Values] | Facts] Relations S Interned
   -> (let Check (datalog.check-fact Relations [Rel | Values])
-          Ids (datalog.intern-all Values Interned)
+          Ids (datalog.encode Values Interned)
           R (<-address S (datalog.relation-slot Rel Relations))
           Add (datalog.adder (length Ids))
           _ (Add R Ids)
@@ -1765,11 +1908,10 @@
           Interned (shen.dict 8)
           _ (datalog.intern-all Constants Interned)
           N (length Relations)
-          S (absvector (+ 2 N))
+          S (absvector (+ 1 N))
           _ (datalog.fill-state Relations S 1)
           _ (datalog.load-facts Facts Relations S Interned)
           _ (address-> S 0 (datalog.values-vector Interned))
-          _ (address-> S (+ 1 N) (datalog.ints-bytes (<-address S 0) (shen.dict-count Interned)))
           _ (datalog.merge-state S 1 N)
           Run [Name Relations Constants S]
           _ (set datalog.*plans* 0)
@@ -1783,21 +1925,21 @@
            (<-address S (datalog.relation-slot Rel Relations))
            (error "datalog: no relation ~A" Rel))))
 
-(define datalog.arity-of
-  Name Rel -> (length (tl (assoc Rel (datalog.nth 3 (datalog.program Name))))))
+(define datalog.types-of
+  Name Rel -> (tl (assoc Rel (datalog.nth 3 (datalog.program Name)))))
 
 (define datalog.tuple-at
-  _ _ I N _ -> [] where (= I N)
-  Tuples Base I N Values
-  -> (let Id (shen-jit.u32 Tuples (+ Base (* 4 I)))
-          More (datalog.tuple-at Tuples Base (+ I 1) N Values)
-       [(<-address Values Id) | More]))
+  _ _ [] _ -> []
+  Tuples Base [Type | Types] Values
+  -> (let Word (shen-jit.u32 Tuples Base)
+          More (datalog.tuple-at Tuples (+ Base 4) Types Values)
+       [(if (= Type integer) (datalog.word-int Word) (<-address Values Word)) | More]))
 
 (define datalog.read-tuples
   P To _ _ _ _ Acc -> Acc where (= P To)
-  P To Tuples Stride Arity Values Acc
-  -> (datalog.read-tuples (+ P 1) To Tuples Stride Arity Values
-       [(datalog.tuple-at Tuples (* P Stride) 0 Arity Values) | Acc]))
+  P To Tuples Stride Types Values Acc
+  -> (datalog.read-tuples (+ P 1) To Tuples Stride Types Values
+       [(datalog.tuple-at Tuples (* P Stride) Types Values) | Acc]))
 
 (define datalog.tuples
   [naive _ Tables] Rel
@@ -1806,7 +1948,7 @@
   [db Name S | Rest] Rel
   -> (let Rec (datalog.relation-of [db Name S | Rest] Rel)
        (datalog.read-tuples 0 (<-address Rec 6) (<-address Rec 2) (<-address Rec 7)
-                            (datalog.arity-of Name Rel) (<-address S 0) [])))
+                            (datalog.types-of Name Rel) (<-address S 0) [])))
 
 (define datalog.count
   [naive | Rest] Rel -> (length (datalog.tuples [naive | Rest] Rel))
@@ -1815,18 +1957,26 @@
 (define datalog.holds?
   [naive | Rest] [Rel | Values] -> (element? Values (datalog.tuples [naive | Rest] Rel))
   [db Name S Interned | Rest] [Rel | Values]
-  -> (let Ids (datalog.lookup-ids Values Interned)
+  -> (let Rec (datalog.relation-of [db Name S Interned | Rest] Rel)
+          Ids (datalog.lookup-ids Values (datalog.types-of Name Rel) Interned)
           Find (datalog.finder (length Values))
-       (and (not (= Ids no))
-            (> (Find (datalog.relation-of [db Name S Interned | Rest] Rel) Ids) 0))))
+       (and (not (= Ids no)) (> (Find Rec Ids) 0))))
 
+\\ The words of these values, or no if one cannot be in such a column.
 (define datalog.lookup-ids
-  [] _ -> []
-  [V | Vs] Interned -> (let Entry (datalog.dict-find Interned V)
-                         (if (cons? Entry)
-                             (let More (datalog.lookup-ids Vs Interned)
-                               (if (= More no) no [(tl Entry) | More]))
-                             no)))
+  [] [] _ -> []
+  [V | Vs] [integer | Ts] Interned
+  -> (if (datalog.int32? V) (datalog.more-ids (datalog.int-word V) Vs Ts Interned) no)
+  [V | Vs] [T | Ts] Interned
+  -> (let Entry (datalog.dict-find Interned V)
+       (if (and (cons? Entry) (= (datalog.value-type V) T))
+           (datalog.more-ids (tl Entry) Vs Ts Interned)
+           no))
+  _ _ _ -> no)
+
+(define datalog.more-ids
+  Id Vs Ts Interned -> (let More (datalog.lookup-ids Vs Ts Interned)
+                         (if (= More no) no [Id | More])))
 
 (define datalog.match
   Db [Rel | Terms] -> (datalog.match-tuples (datalog.tuples Db Rel) Terms []))
