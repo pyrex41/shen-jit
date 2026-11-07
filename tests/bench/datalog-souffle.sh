@@ -14,11 +14,19 @@ fi
 if [ -n "$KEEP" ]; then base=$KEEP; mkdir -p "$base"; else base=$(mktemp -d); trap 'rm -rf "$base"' EXIT; fi
 # Soufflé generates the C++, and it is compiled here with the flags of its own souffle-compile.py,
 # whose include paths in Homebrew's bottle fail: one misses its headers, another clashes with Xcode's.
-INCLUDE=$(dirname "$(dirname "$(command -v souffle)")")/include/souffle
+# SOUFFLE, SOUFFLE_FLAGS and SOUFFLE_LIBS name another build, such as one with OpenMP.
+SOUFFLE=${SOUFFLE:-souffle}
+INCLUDE=$(dirname "$(dirname "$(command -v "$SOUFFLE")")")/include/souffle
+SOUFFLE_FLAGS=${SOUFFLE_FLAGS:--DRAM_DOMAIN_SIZE=64 -I$INCLUDE}
+SOUFFLE_LIBS=${SOUFFLE_LIBS:-}
+# Parallel code is generated only when asked for then, with SOUFFLE_GENERATE="-j auto".
+SOUFFLE_GENERATE=${SOUFFLE_GENERATE:-}
 build_cpp() { # program, name
-    souffle -F "$(dirname "$1")" -g "$2.cpp" "$1" &&
-    c++ -std=c++17 -O3 -w -DRAM_DOMAIN_SIZE=64 -DUSE_NCURSES -DUSE_LIBZ -DUSE_SQLITE -I"$INCLUDE" "$2.cpp" -o "$2" -lz -lsqlite3 -lncurses
+    "$SOUFFLE" $SOUFFLE_GENERATE -F "$(dirname "$1")" -g "$2.cpp" "$1" &&
+    c++ -std=c++17 -O3 -w -DUSE_NCURSES -DUSE_LIBZ -DUSE_SQLITE $SOUFFLE_FLAGS "$2.cpp" -o "$2" -lz -lsqlite3 -lncurses $SOUFFLE_LIBS
 }
+# THREADS lists the thread counts to time compiled programs at; the interpreter runs on one.
+THREADS=${THREADS:-1}
 LIMIT=${LIMIT:-60}
 CASES=${*:-closure-sparse closure-dense nonlinear same-generation mutual triangles skewed-join call-graph points-to-small-a points-to-small-b points-to-small-c points-to-large-a points-to-large-b points-to-large-c}
 for c in closure-sparse closure-dense nonlinear same-generation mutual triangles skewed-join call-graph points-to-small-a points-to-small-b points-to-small-c points-to-large-a points-to-large-b points-to-large-c; do
@@ -48,7 +56,9 @@ best() {
     echo "$b"
 }
 
-printf '%-20s %9s %9s %9s %9s %9s %s\n' case ours compiled interpreted start build-ms results
+printf '%-20s %9s' case ours
+for j in $THREADS; do printf ' %9s' "j$j"; done
+printf ' %9s %9s %9s %s\n' interpreted start build-ms results
 for c in $CASES; do
     d=$base/$c
     ours=$(grep -a "^OURS $c " "$base/ours.log" | awk '{print $3}')
@@ -70,10 +80,17 @@ for c in $CASES; do
         done
     fi
     start=$(best "$d/prog" -F "$d/empty")
-    compiled=$(best "$d/prog" -F "$d")
-    i0=$(best souffle -F "$d/empty" "$d/time.dl")
-    interpreted=$(best souffle -F "$d" "$d/time.dl")
-    net=$(python3 -c "print('over' if '$compiled'=='over' else '%.1f' % ($compiled-$start))")
-    neti=$(python3 -c "print('over' if '$interpreted'=='over' else '%.1f' % ($interpreted-$i0))")
-    printf '%-20s %9s %9s %9s %9s %9s %s\n' "$c" "$ours" "$net" "$neti" "$start" "$build" "$results"
+    printf '%-20s %9s' "$c" "$ours"
+    for j in $THREADS; do
+        t=$(best "$d/prog" -F "$d" -j "$j")
+        printf ' %9s' "$(python3 -c "print('over' if '$t'=='over' else '%.1f' % ($t-$start))")"
+    done
+    if [ -n "$NO_INTERPRETER" ]; then
+        neti=-
+    else
+        i0=$(best "$SOUFFLE" -F "$d/empty" "$d/time.dl")
+        interpreted=$(best "$SOUFFLE" -F "$d" "$d/time.dl")
+        neti=$(python3 -c "print('over' if '$interpreted'=='over' else '%.1f' % ($interpreted-$i0))")
+    fi
+    printf ' %9s %9s %9s %s\n' "$neti" "$start" "$build" "$results"
 done

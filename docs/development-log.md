@@ -1575,7 +1575,22 @@ The same rules and facts, written out for Soufflé; every result it finished mat
 
 - **Soufflé joins in the order written,** and orders a and b, made up for testing our planner, are bad for it. Order c is how points-to analyses are written. Its profile-guided schedule, statistics taken on the small case and applied to the large one, gave about 1,090 ms from order a and from order c, against 860 for order c as written.
 - **So on one thread:** ours is ahead on the closures, same generation, the call graph and points-to, 1.3 times Soufflé's best schedule there, and behind on the skewed join, at 1.5 times its time, and on runs under a millisecond.
-- **Not measured:** Soufflé in parallel, which is where it is built to go further; a build with 32-bit values; its magic sets.
+- **In parallel,** with Soufflé 2.5 built from its release source with OpenMP from Homebrew's libomp and 32-bit values, as ours. Its parallel code is generated only when `-j` is given then, so programs are generated with `-j auto` and run with each count. Compiled, its startup taken away, ms, on a machine whose load was 3 to 4 from other work:
+
+  | ms | Ours | 1 thread | 4 | 8 | 12 |
+  | --- | --- | --- | --- | --- | --- |
+  | Closure, sparse | 125 | 389 | 170 | 159 | 157 |
+  | Closure, dense | 10.6 | 34.5 | 13.6 | 11.2 | 10.6 |
+  | Nonlinear closure | 514 | 585 | 163 | 87 | 62 |
+  | Same generation | 21.6 | 47.4 | 15.9 | 11.2 | 9.2 |
+  | Skewed join | 132 | 102 | 26.7 | 19.7 | 16.6 |
+  | The call graph | 11.9 | 42.9 | 23.4 | 29.9 | 29.2 |
+  | Points-to small, order c | 193 | 197 | 63.6 | 45.4 | 40.5 |
+  | Points-to large, order a | 691 | 15,238 | 4,045 | 2,126 | 1,491 |
+  | Points-to large, order c | 685 | 770 | 257 | 193 | 168 |
+
+  On 12 threads it is 2.3 to 8.3 times our time on nonlinear closure, same generation, the skewed join and points-to as written, about even on the dense closure, and behind us on the sparse closure, the call graph, whose recursion goes deep and narrow, and a badly ordered rule. Its build with 32-bit values is also a little faster on one thread than the bottle's with 64. One thread runs Shen at a time here, so this is the gap that stays.
+- **Not measured:** its magic sets.
 
 ## Benchmark results
 
