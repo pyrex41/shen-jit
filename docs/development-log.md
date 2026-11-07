@@ -1607,6 +1607,16 @@ The first real use of `lib/native.shen`'s structured control from a generator ra
 - **Speed:** facts load faster, with no integers to intern: the four-join chain 12.3 ms against 17, mutual recursion 0.4 against 0.7. Points-to, three alternating pairs on a loaded machine, 546, 544, 579 ms before against 533, 620, 614 after on the large row, which is within the noise there. The other workloads are within noise.
 - **The suite** takes 1.5 s with the larger test.
 
+### Aggregates (2026-11-07, Apple M3 Max, against the arithmetic commit)
+
+`(= N (count (edge X _)))`, `(sum W Atom)`, `(min W Atom)` and `(max W Atom)`. The keys are the atom's variables that appear elsewhere in the body, decided by the checker from the rule as written, so that no plan can change what is grouped. Over no tuples, count and sum give 0, and min and max give nothing, so the rule does not hold: Soufflé's choice, and SWI-Prolog's `aggregate_all`.
+
+- **The same shape as negation:** the relation aggregated must be complete, so it is a dependency in an earlier stratum, refused in a cycle. An aggregate is then `=` with a fold for its right side: it binds its variable once its keys are bound, or compares when that is bound already.
+- **Native, no fallback:** a kernel folds into a register of its own, over a loop for no keys, a probe of the relation's table for a whole tuple, and an index's probe and chain for some columns; the probe loop is the one lookups and negation share. min and max start just outside 32 bits, where nothing leaves them. A sum is checked once, at the end, as a check of each partial sum would raise or not by the order of the tuples. Six aggregate rules of the tests compile to six kernels.
+- **Grouping by free variables was left out:** Soufflé's and SWI-Prolog's `aggregate_all` count every match of the atom, which a relation of sets makes each tuple once; grouping is by what the rest of the body binds.
+- **Generated programs** sometimes add an aggregate with keys, constants, `_` and variables of its own, which may repeat; a rule with one is dropped whole when the program would not be stratified. Of 300, 44 keep one, 5 of them comparing. They agree with the reference, KL joins and SWI-Prolog. Planted, a min that keeps the larger fails 5 checks and a chain that skips its update 19.
+- **Nothing lost:** the workloads, with no aggregates, are within noise of before.
+
 ### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
 
 The same rules and facts, written out for Soufflé; every result it finished matches ours. Its compiled programs are built from the C++ it generates with the flags of its own compile script, as that script's include paths fail in Homebrew's bottle. That bottle has no OpenMP, so Soufflé ran on one thread, as we do, and it keeps 64-bit values where we keep 32. Times in ms, best of three: ours is `datalog.run` with facts as a list, and Soufflé's its process less the same with no facts, which is its startup, about 15 ms. Building took it 3.0 to 3.7 s a program.

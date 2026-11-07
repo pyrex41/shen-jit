@@ -62,10 +62,19 @@
   != -> " \== ")
 
 (define swi.body
-  Body -> (swi.join (append (map (function swi.atom-form) (datalog.atoms Body))
-                            (append (map (function swi.binding) (swi.filter (function swi.binding?) (datalog.conditions Body)))
-                                    (map (function swi.comparison) (swi.filter (/. C (not (swi.binding? C))) (datalog.conditions Body)))))
-                    ", "))
+  Body -> (let Conditions (datalog.conditions Body)
+            (swi.join (append (map (function swi.atom-form) (datalog.atoms Body))
+                              (map (function swi.aggregate) (swi.filter (function datalog.aggregate-condition?) Conditions))
+                              (map (function swi.binding) (swi.filter (function swi.binding?) Conditions))
+                              (map (function swi.comparison)
+                                   (swi.filter (/. C (not (or (swi.binding? C) (datalog.aggregate-condition? C)))) Conditions)))
+                      ", ")))
+
+\* An aggregate is aggregate_all, which does not group by its free variables, after the atoms
+   that bind its keys: a tabled relation's answers are a set, so each tuple counts once. *\
+(define swi.aggregate
+  [= [var V] [count Atom]] -> (make-string "aggregate_all(count, ~A, V~A)" (swi.atom-form Atom) V)
+  [= [var V] [Op [var W] Atom]] -> (make-string "aggregate_all(~A(V~A), ~A, V~A)" Op W (swi.atom-form Atom) V))
 
 (define swi.filter
   _ [] -> []

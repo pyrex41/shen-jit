@@ -35,9 +35,11 @@
 \\ comparison or a negated atom must appear in a positive atom of the body, or be bound by =.
 \\ Comparisons are <, >, <= and >= on integers, and = and != on values of one type; either side
 \\ can be arithmetic, (+ A B), (- A B) or (* A B), which raises when a result is not 32 bits.
-\\ (= D (+ D0 W)) binds D if nothing else has. (not (edge X _)) holds when no tuple matches; a relation
-\\ cannot depend on the negation of one that depends on it, so what is negated is complete before
-\\ it is read. As data, a variable is [var "X"] and _ is [any].
+\\ (= D (+ D0 W)) binds D if nothing else has. (= N (count (edge X _))), and (sum W Atom),
+\\ (min W Atom) and (max W Atom), aggregate over the tuples an atom matches, with keys its
+\\ variables that appear elsewhere in the body. (not (edge X _)) holds when no tuple matches; a relation
+\\ cannot depend on the negation or an aggregate of one that depends on it, so what is negated or
+\\ aggregated is complete before it is read. As data, a variable is [var "X"] and _ is [any].
 \\
 \\ Relations are sets, so duplicates count once, and the order of rules, atoms and facts does not
 \\ change a result. Evaluation is a snapshot: new facts mean a new datalog.run.
@@ -92,12 +94,20 @@
 
 (define datalog.literal->form
   [not Atom] -> [not (datalog.atom->form Atom)]
+  [aggregate V count _ Atom _] -> [= (intern V) [count (datalog.atom->form Atom)]]
+  [aggregate V Op T Atom _] -> [= (intern V) [Op (intern T) (datalog.atom->form Atom)]]
+  [= A B] -> [= (datalog.aggregate->form A) (datalog.aggregate->form B)]
   Literal -> (datalog.atom->form Literal))
+
+(define datalog.aggregate->form
+  [count Atom] -> [count (datalog.atom->form Atom)]
+  [Op T Atom] -> [Op (datalog.term->form T) (datalog.atom->form Atom)] where (datalog.aggregate? Op)
+  T -> (datalog.term->form T))
 
 (define datalog.relations
   _ [] Acc -> (reverse Acc)
   Name [[relation Rel Types] | Items] Acc
-  -> (cases (or (not (symbol? Rel)) (variable? Rel) (datalog.comparison? Rel) (= Rel not))
+  -> (cases (or (not (symbol? Rel)) (variable? Rel) (datalog.comparison? Rel) (element? Rel [not aggregate]))
             (error "datalog ~A: ~S cannot name a relation" Name Rel)
             (cons? (assoc Rel Acc))
             (error "datalog ~A: relation ~A is declared twice" Name Rel)
@@ -160,9 +170,10 @@
               true Env))
   Say _ Form -> (error "datalog ~A: ~S is not a comparison" Say Form))
 
-\\ A literal of a body is an atom, a comparison or a negated atom; the last two are conditions.
+\\ A literal of a body is an atom, a comparison, a negated atom or an aggregate; all but the first
+\\ are conditions.
 (define datalog.atom?
-  [Op | _] -> (not (or (datalog.comparison? Op) (= Op not)))
+  [Op | _] -> (not (or (datalog.comparison? Op) (element? Op [not aggregate])))
   _ -> true)
 
 \\ (not Atom): no tuple of that relation matches, with every variable in it bound elsewhere.
@@ -170,7 +181,93 @@
   Say Relations Env [not [Rel | Terms]]
   -> (do (datalog.check-head Say Env Relations [Rel | Terms] true) Env)
   Say _ _ [not Atom] -> (error "datalog ~A: ~S is not an atom" Say Atom)
+  Say Relations Env [aggregate V Op Target Atom Keys]
+  -> (datalog.check-aggregate Say Relations Env V Op Target Atom Keys)
   Say _ Env Comparison -> (datalog.check-comparison Say Env Comparison))
+
+\\ ---------------------------------------------------------------------------
+\\ Aggregates: (= N (count Atom)), and (sum W Atom), (min W Atom) and (max W Atom) over a variable
+\\ of the atom. A variable of the atom that appears elsewhere in the body is a key, bound first;
+\\ the others are its own, and W must be one of them. Over no tuples, count and sum give 0, and min
+\\ and max nothing, so that the rule does not hold. The checker turns each into [aggregate V Op
+\\ Target Atom Keys], Target none for count.
+
+(define datalog.aggregate?
+  X -> (element? X [count sum min max]))
+
+(define datalog.aggregate-form?
+  [count _] -> true
+  [Op _ _] -> (datalog.aggregate? Op)
+  _ -> false)
+
+(define datalog.aggregate-condition?
+  [= A B] -> (or (datalog.aggregate-form? A) (datalog.aggregate-form? B))
+  _ -> false)
+
+(define datalog.normalize
+  Say Body -> (map (/. L (if (datalog.aggregate-condition? L)
+                              (datalog.normalize-aggregate Say L (datalog.remove-one L Body))
+                              L))
+                   Body))
+
+(define datalog.normalize-aggregate
+  Say [= [var V] Agg] Others -> (datalog.aggregate-of Say V Agg Others) where (datalog.aggregate-form? Agg)
+  Say [= Agg [var V]] Others -> (datalog.aggregate-of Say V Agg Others) where (datalog.aggregate-form? Agg)
+  Say L _ -> (error "datalog ~A: an aggregate stands on one side of =, with a variable on the other, not as in ~R"
+                    Say (datalog.literal->form L)))
+
+(define datalog.aggregate-of
+  Say V [count Atom] Others -> (datalog.aggregate-h Say V count none Atom Others)
+  Say V [Op [var T] Atom] Others -> (datalog.aggregate-h Say V Op T Atom Others)
+  Say _ Agg _ -> (error "datalog ~A: ~R is not an aggregate" Say (datalog.aggregate->form Agg)))
+
+(define datalog.aggregate-h
+  Say V Op Target [Rel | Terms] Others
+  -> (let Own (datalog.term-vars Terms [])
+          Keys (datalog.keep-in Own (datalog.body-vars Others))
+       (cases (element? V Own)
+              (error "datalog ~A: ~A is what the aggregate gives, and in what it reads" Say V)
+              (and (not (= Target none)) (not (element? Target Own)))
+              (error "datalog ~A: ~A, which ~A reads, is not in its atom" Say Target Op)
+              (element? Target Keys)
+              (error "datalog ~A: ~A, which ~A reads, must appear only in its atom" Say Target Op)
+              true [aggregate V Op Target [Rel | Terms] Keys]))
+  Say _ _ _ Atom _ -> (error "datalog ~A: ~S is not an atom" Say Atom))
+
+(define datalog.keep-in
+  [] _ -> []
+  [X | Xs] Ys -> (if (element? X Ys) [X | (datalog.keep-in Xs Ys)] (datalog.keep-in Xs Ys)))
+
+\\ The variables a body's literals name, in any position.
+(define datalog.body-vars
+  [] -> []
+  [L | Ls] -> (union (datalog.literal-vars L) (datalog.body-vars Ls)))
+
+(define datalog.literal-vars
+  [not [_ | Terms]] -> (datalog.term-vars Terms [])
+  [aggregate V _ _ [_ | Terms] _] -> [V | (datalog.term-vars Terms [])]
+  [= A B] -> (union (datalog.aggregate-vars A) (datalog.aggregate-vars B))
+  [Op A B] -> (union (datalog.expr-vars A) (datalog.expr-vars B)) where (datalog.comparison? Op)
+  [_ | Terms] -> (datalog.term-vars Terms []))
+
+(define datalog.aggregate-vars
+  [count [_ | Terms]] -> (datalog.term-vars Terms [])
+  [Op T [_ | Terms]] -> (union (datalog.expr-vars T) (datalog.term-vars Terms [])) where (datalog.aggregate? Op)
+  E -> (datalog.expr-vars E))
+
+\\ Its keys must be bound, its own variables are typed by its atom, and what it reads is an integer.
+(define datalog.check-aggregate
+  Say Relations Env V Op Target [Rel | Terms] Keys
+  -> (let Unbound (difference Keys (map (function hd) Env))
+          _ (if (cons? Unbound) (error "datalog ~A: ~A is not bound by an atom of the body" Say (hd Unbound)) skip)
+          Inner (datalog.check-atom Say Relations Env [Rel | Terms])
+          _ (if (and (not (= Target none)) (not (= (tl (assoc Target Inner)) integer)))
+                (error "datalog ~A: ~A reads integers" Say Op)
+                skip)
+          Known (assoc V Env)
+       (cases (empty? Known) (error "datalog ~A: ~A is not bound by an atom of the body" Say V)
+              (= (tl Known) integer) Env
+              true (error "datalog ~A: ~A is ~A, and an aggregate gives an integer" Say V (tl Known)))))
 
 (define datalog.atoms
   [] -> []
@@ -210,8 +307,9 @@
          (error "datalog ~A: ~S is not of type ~A" Say X Type)))
 
 (define datalog.check-rule
-  Name Relations Head Body
-  -> (let Say (make-string "~A, rule ~R" Name (datalog.rule->form Head Body))
+  Name Relations Head Written
+  -> (let Say (make-string "~A, rule ~R" Name (datalog.rule->form Head Written))
+          Body (datalog.normalize Say Written)
           Atoms (datalog.check-all (/. S E A (datalog.check-atom S Relations E A)) Say [] (datalog.atoms Body))
           Env (datalog.check-binders Say (datalog.conditions Body) Atoms)
           _ (datalog.check-all (/. S E C (datalog.check-condition S Relations E C)) Say Env (datalog.conditions Body))
@@ -235,7 +333,13 @@
 (define datalog.binder
   [= [var V] B] Bound -> [V B] where (and (not (element? V Bound)) (datalog.subset? (datalog.expr-vars B) Bound))
   [= A [var V]] Bound -> [V A] where (and (not (element? V Bound)) (datalog.subset? (datalog.expr-vars A) Bound))
+  [aggregate V Op Target Atom Keys] Bound
+  -> [V [aggregate V Op Target Atom Keys]] where (and (not (element? V Bound)) (datalog.subset? Keys Bound))
   _ _ -> none)
+
+(define datalog.binding-type
+  Say Env [aggregate | _] -> integer
+  Say Env E -> (datalog.term-type Say Env E))
 
 (define datalog.check-binders
   Say Conditions Env -> (datalog.check-binders-h Say Conditions Env Conditions false))
@@ -247,21 +351,23 @@
   -> (let B (datalog.binder C (map (function hd) Env))
        (if (= B none)
            (datalog.check-binders-h Say Cs Env All Progress)
-           (datalog.check-binders-h Say Cs [[(hd B) | (datalog.term-type Say Env (hd (tl B)))] | Env] All true))))
+           (datalog.check-binders-h Say Cs [[(hd B) | (datalog.binding-type Say Env (hd (tl B)))] | Env] All true))))
 
 \\ The relations a body reads, and of those, the ones that must be complete before it runs.
 (define datalog.body-relations
   [] -> []
   [[not [Rel | _]] | Ls] -> (adjoin Rel (datalog.body-relations Ls))
+  [[aggregate _ _ _ [Rel | _] _] | Ls] -> (adjoin Rel (datalog.body-relations Ls))
   [L | Ls] -> (if (datalog.atom? L) (adjoin (hd L) (datalog.body-relations Ls)) (datalog.body-relations Ls)))
 
 (define datalog.complete-relations
   [] -> []
   [[not [Rel | _]] | Ls] -> (adjoin Rel (datalog.complete-relations Ls))
+  [[aggregate _ _ _ [Rel | _] _] | Ls] -> (adjoin Rel (datalog.complete-relations Ls))
   [_ | Ls] -> (datalog.complete-relations Ls))
 
-\\ A relation cannot depend on the negation of one that depends on it: there would be no single
-\\ answer. What each relation reaches comes from the plans' datalog.reach.
+\\ A relation cannot depend on the negation or an aggregate of one that depends on it: there would
+\\ be no single answer. What each relation reaches comes from the plans' datalog.reach.
 (define datalog.check-strata
   Name Relations Rules
   -> (let Graph (map (/. R [(hd R) | (datalog.depends (hd R) Rules)]) Relations)
@@ -271,10 +377,10 @@
 (define datalog.check-rule-strata
   Name [[Head | Terms] Body] Reach
   -> (map (/. N (cases (= N Head)
-                       (error "datalog ~A, rule ~R: ~A depends on its own negation"
+                       (error "datalog ~A, rule ~R: ~A depends on its own negation or aggregate"
                               Name (datalog.rule->form [Head | Terms] Body) Head)
                        (element? Head (tl (assoc N Reach)))
-                       (error "datalog ~A, rule ~R: ~A depends on the negation of ~A, which depends on ~A"
+                       (error "datalog ~A, rule ~R: ~A depends on the negation or an aggregate of ~A, which depends on ~A"
                               Name (datalog.rule->form [Head | Terms] Body) Head N Head)
                        true ok))
           (datalog.complete-relations Body)))
@@ -296,6 +402,7 @@
 (define datalog.body-stratum
   [] _ -> 0
   [[not [Rel | _]] | Ls] S -> (datalog.max (+ 1 (tl (assoc Rel S))) (datalog.body-stratum Ls S))
+  [[aggregate _ _ _ [Rel | _] _] | Ls] S -> (datalog.max (+ 1 (tl (assoc Rel S))) (datalog.body-stratum Ls S))
   [L | Ls] S -> (if (datalog.atom? L)
                     (datalog.max (tl (assoc (hd L) S)) (datalog.body-stratum Ls S))
                     (datalog.body-stratum Ls S)))
@@ -332,6 +439,7 @@
 (define datalog.body-constants
   [] Acc -> Acc
   [[not [_ | Terms]] | Ls] Acc -> (datalog.body-constants Ls (datalog.term-constants Terms Acc))
+  [[aggregate _ _ _ [_ | Terms] _] | Ls] Acc -> (datalog.body-constants Ls (datalog.term-constants Terms Acc))
   [[_ | Terms] | Ls] Acc -> (datalog.body-constants Ls (datalog.term-constants Terms Acc)))
 
 \\ [program Name Relations Rules Constants Strata].
@@ -432,8 +540,8 @@
 
 (define datalog.naive-body
   [] Conditions [Rel | Terms] Env Tables Acc
-  -> (let Bound (datalog.naive-bind Conditions Env Conditions false)
-       (if (datalog.naive-true? Conditions Bound Tables)
+  -> (let Bound (datalog.naive-bind Conditions Env Conditions false Tables)
+       (if (and (not (= Bound no)) (datalog.naive-true? Conditions Bound Tables))
            [[Rel | (map (/. T (datalog.naive-value T Bound)) Terms)] | Acc]
            Acc))
   [[Rel | Terms] | Atoms] Comparisons Head Env Tables Acc
@@ -466,13 +574,47 @@
 
 \\ What each binding condition binds, until nothing more is; once bound, it holds as a comparison.
 (define datalog.naive-bind
-  [] Env _ false -> Env
-  [] Env All true -> (datalog.naive-bind All Env All false)
-  [C | Cs] Env All Progress
+  [] Env _ false _ -> Env
+  [] Env All true Tables -> (datalog.naive-bind All Env All false Tables)
+  [C | Cs] Env All Progress Tables
   -> (let B (datalog.binder C (map (function hd) Env))
-       (if (= B none)
-           (datalog.naive-bind Cs Env All Progress)
-           (datalog.naive-bind Cs [[(hd B) | (datalog.naive-value (hd (tl B)) Env)] | Env] All true))))
+          Value (if (= B none) [] (datalog.naive-bound (hd (tl B)) Env Tables))
+       (cases (= B none) (datalog.naive-bind Cs Env All Progress Tables)
+              (empty? Value) no
+              true (datalog.naive-bind Cs [[(hd B) | Value] | Env] All true Tables))))
+
+(define datalog.naive-bound
+  [aggregate V Op Target Atom Keys] Env Tables -> (datalog.naive-aggregate Op Target Atom Env Tables)
+  E Env _ -> (datalog.naive-value E Env))
+
+\\ An aggregate over the tuples its atom matches: [], which no value is, for min or max of none.
+(define datalog.naive-aggregate
+  Op Target [Rel | Terms] Env Tables
+  -> (let Matches (datalog.naive-matches (tl (assoc Rel Tables)) Terms Env)
+          Values (if (= Target none) [] (map (/. M (tl (assoc Target M))) Matches))
+       (cases (= Op count) (length Matches)
+              (= Op sum) (datalog.in-range (datalog.sum Values 0))
+              (empty? Values) []
+              (= Op min) (datalog.fold-pick (function <) Values)
+              true (datalog.fold-pick (function >) Values))))
+
+(define datalog.naive-matches
+  [] _ _ -> []
+  [Tuple | Tuples] Terms Env -> (let M (datalog.naive-match Terms Tuple Env)
+                                  (if (= M no)
+                                      (datalog.naive-matches Tuples Terms Env)
+                                      [M | (datalog.naive-matches Tuples Terms Env)])))
+
+(define datalog.sum
+  [] Acc -> Acc
+  [X | Xs] Acc -> (datalog.sum Xs (+ X Acc)))
+
+(define datalog.fold-pick
+  F [X | Xs] -> (datalog.fold-pick-h F Xs X))
+
+(define datalog.fold-pick-h
+  _ [] Best -> Best
+  F [X | Xs] Best -> (datalog.fold-pick-h F Xs (if (F X Best) X Best)))
 
 \\ Each operation on 32-bit integers raises if its result is not one.
 (define datalog.arithmetic
@@ -487,6 +629,9 @@
   [] _ _ -> true
   [[not [Rel | Terms]] | Rest] Env Tables
   -> (and (not (datalog.naive-any? (tl (assoc Rel Tables)) Terms Env))
+          (datalog.naive-true? Rest Env Tables))
+  [[aggregate V Op Target Atom Keys] | Rest] Env Tables
+  -> (and (= (datalog.naive-aggregate Op Target Atom Env Tables) (tl (assoc V Env)))
           (datalog.naive-true? Rest Env Tables))
   [[Op A B] | Rest] Env Tables
   -> (and (datalog.compare Op (datalog.naive-value A Env) (datalog.naive-value B Env))
@@ -669,15 +814,29 @@
               (= B none)
               (datalog.ready-h Cs Bound Ready [C | Left] Progress)
               true
-              (datalog.ready-h Cs [(hd B) | Bound] [[assign | B] | Ready] Left true))))
+              (datalog.ready-h Cs [(hd B) | Bound] [(datalog.binding-step (hd B) (hd (tl B)) Bound) | Ready] Left true))))
 
 (define datalog.condition-vars
   [not [_ | Terms]] -> (datalog.term-vars Terms [])
+  [aggregate V _ _ _ Keys] -> [V | Keys]
   [_ A B] -> (union (datalog.expr-vars A) (datalog.expr-vars B)))
 
 (define datalog.condition-step
   [not [Rel | Terms]] Bound -> [absent Rel (datalog.key-columns Terms 1 Bound) (datalog.key-terms Terms Bound)]
+  [aggregate | A] Bound -> (datalog.fold-step compare [aggregate | A] Bound)
   [Op A B] _ -> [filter Op A B])
+
+(define datalog.binding-step
+  V [aggregate | A] Bound -> (datalog.fold-step bind [aggregate | A] Bound)
+  V E _ -> [assign V E])
+
+\\ [fold Mode V Op Target Rel Keys KeyTerms Columns]: the aggregate over the tuples of Rel with
+\\ these terms in the Keys columns, Columns saying what to do with the rest. Mode is bind, or
+\\ compare when V is bound already.
+(define datalog.fold-step
+  Mode [aggregate V Op Target [Rel | Terms] _] Bound
+  -> [fold Mode V Op Target Rel (datalog.key-columns Terms 1 Bound) (datalog.key-terms Terms Bound)
+      (datalog.columns (datalog.unkey Terms 1 Bound) 1 Bound)])
 
 \\ Steps for the atoms left, each a scan of all tuples or a lookup by its known columns.
 (define datalog.plan-steps
@@ -1037,20 +1196,24 @@
 (define datalog.steps-indexes
   [] _ Acc -> Acc
   [Step | Steps] Relations Acc
-  -> (datalog.steps-indexes Steps Relations
-       (if (datalog.indexed? Step Relations)
-           (datalog.add-index (hd (tl Step)) (hd (tl (tl Step))) Acc)
-           Acc)))
+  -> (let Index (datalog.step-index Step Relations)
+       (datalog.steps-indexes Steps Relations
+         (if (= Index none) Acc (datalog.add-index (hd Index) (hd (tl Index)) Acc)))))
 
 \\ Keys that are every column need no index: the relation's own table finds them. A negated atom
 \\ with no keys needs only to know whether the relation is empty.
 (define datalog.whole-tuple?
   Rel Keys Relations -> (= (length Keys) (datalog.arity-in Rel Relations)))
 
-(define datalog.indexed?
-  [lookup Rel Keys | _] Relations -> (not (datalog.whole-tuple? Rel Keys Relations))
-  [absent Rel Keys | _] Relations -> (not (or (empty? Keys) (datalog.whole-tuple? Rel Keys Relations)))
-  _ _ -> false)
+\\ The index a step looks up, as [Rel Keys], or none.
+(define datalog.step-index
+  [lookup Rel Keys | _] Relations -> (datalog.index-of Rel Keys Relations)
+  [absent Rel Keys | _] Relations -> (datalog.index-of Rel Keys Relations)
+  [fold _ _ _ _ Rel Keys | _] Relations -> (datalog.index-of Rel Keys Relations)
+  _ _ -> none)
+
+(define datalog.index-of
+  Rel Keys Relations -> (if (or (empty? Keys) (datalog.whole-tuple? Rel Keys Relations)) none [Rel Keys]))
 
 (define datalog.arity-in
   Rel Relations -> (- (length (assoc Rel Relations)) 1))
@@ -1096,6 +1259,8 @@
 (define datalog.step-uses
   [filter _ A B] -> (union (datalog.expr-vars A) (datalog.expr-vars B))
   [assign _ E] -> (datalog.expr-vars E)
+  [fold bind _ _ _ _ _ Terms _] -> (datalog.term-vars Terms [])
+  [fold compare V _ _ _ _ Terms _] -> (adjoin V (datalog.term-vars Terms []))
   [absent _ _ Terms] -> (datalog.term-vars Terms [])
   [emit _ | Terms] -> (datalog.term-vars Terms [])
   [scan _ _ Columns] -> (datalog.columns-use Columns)
@@ -1110,6 +1275,7 @@
   [scan _ _ Columns] -> (datalog.columns-bind Columns)
   [lookup _ _ _ Columns] -> (datalog.columns-bind Columns)
   [assign V _] -> [V]
+  [fold bind V | _] -> [V]
   _ -> [])
 
 (define datalog.columns-bind
@@ -1150,6 +1316,14 @@
   -> [if (datalog.filter-form Op A B (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N) true]
   [[assign V E] | Steps] Ctx Prefix N
   -> [let (datalog.var-symbol V) (datalog.assign-form E (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N)]
+  [[fold Mode V Op Target Rel Keys Terms Columns] | Steps] [Relations Constants Indexes] Prefix N
+  -> (let Ctx [Relations Constants Indexes]
+          Rest (datalog.gen Steps Ctx Prefix (+ N 1))
+       [let r [<-address s (datalog.relation-slot Rel Relations)]
+         [let a (datalog.fold-form Op Target Rel Keys Terms Columns Ctx Prefix N)
+           (cases (= Mode compare) [if [= (if (= Op sum) [datalog.in-range a] a) (datalog.number-form [var V] Constants)] Rest true]
+                  (element? Op [min max]) [if [= a none] true [let (datalog.var-symbol V) [datalog.int-word a] Rest]]
+                  true [let (datalog.var-symbol V) [datalog.int-word [datalog.in-range a]] Rest])]])
   [[absent Rel Keys Terms] | Steps] [Relations Constants Indexes] Prefix N
   -> [let r [<-address s (datalog.relation-slot Rel Relations)]
        [if (datalog.found-form Rel Keys Terms [Relations Constants Indexes])
@@ -1226,8 +1400,12 @@
 
 \\ Binds come first, as a check can read a column bound earlier in the same atom.
 (define datalog.gen-columns
-  Columns Base Constants Inner
-  -> (datalog.gen-binds Columns Base (datalog.gen-checks Columns Base Constants Inner)))
+  Columns Base Constants Inner -> (datalog.gen-columns-or Columns Base Constants Inner true))
+
+\\ The same, giving Otherwise when a check fails.
+(define datalog.gen-columns-or
+  Columns Base Constants Inner Otherwise
+  -> (datalog.gen-binds Columns Base (datalog.gen-checks Columns Base Constants Inner Otherwise)))
 
 (define datalog.gen-binds
   [] _ Inner -> Inner
@@ -1236,12 +1414,51 @@
   [_ | Cs] Base Inner -> (datalog.gen-binds Cs Base Inner))
 
 (define datalog.gen-checks
-  [] _ _ Inner -> Inner
-  [[check Term I] | Cs] Base Constants Inner
+  [] _ _ Inner _ -> Inner
+  [[check Term I] | Cs] Base Constants Inner Otherwise
   -> [if [= (datalog.column-form Base I) (datalog.value-form Term Constants)]
-         (datalog.gen-checks Cs Base Constants Inner)
-         true]
-  [_ | Cs] Base Constants Inner -> (datalog.gen-checks Cs Base Constants Inner))
+         (datalog.gen-checks Cs Base Constants Inner Otherwise)
+         Otherwise]
+  [_ | Cs] Base Constants Inner Otherwise -> (datalog.gen-checks Cs Base Constants Inner Otherwise))
+
+\\ An aggregate's accumulator a, given the next value t: none until min or max has seen one.
+(define datalog.fold-init
+  count -> 0
+  sum -> 0
+  _ -> none)
+
+(define datalog.fold-update
+  count _ -> [+ a 1]
+  sum T -> [+ a T]
+  min T -> [let t T [if [= a none] t [if [< t a] t a]]]
+  max T -> [let t T [if [= a none] t [if [> t a] t a]]])
+
+\\ What a fold gives: a loop over the relation in r, or for a whole tuple's keys whether it is
+\\ there.
+(define datalog.fold-form
+  Op Target Rel Keys Terms Columns [Relations Constants Indexes] Prefix N
+  -> (let Stride (datalog.stride (datalog.arity-in Rel Relations))
+          Update (datalog.fold-update Op (if (= Target none) 0 (datalog.number-form [var Target] Constants)))
+          Name (datalog.loop-name Prefix N)
+          Body (datalog.gen-columns-or Columns l Constants Update a)
+       (cases (empty? Keys)
+              (do (set datalog.*forms* [[defun Name [l e b s a]
+                                          [if [< l e] [Name [+ l Stride] e b s Body] a]]
+                                        | (value datalog.*forms*)])
+                  [Name 0 [* [<-address r 6] Stride] [<-address r 2] s (datalog.fold-init Op)])
+              (datalog.whole-tuple? Rel Keys Relations)
+              [if (datalog.found-form Rel Keys Terms [Relations Constants Indexes]) 1 0]
+              true
+              (let Forms (map (/. T (datalog.value-form T Constants)) Terms)
+                   Find (datalog.find-kernel (datalog.arity-in Rel Relations) Keys)
+                   _ (set datalog.*forms* [[defun Name [p n b s a]
+                                             [if [> p 0]
+                                                 [let q [- p 1] [let l [* q Stride] [Name [shen-jit.u32 n [* q 4]] n b s Body]]]
+                                                 a]]
+                                           | (value datalog.*forms*)])
+                [let i [<-address r (datalog.index-slot Rel Keys Indexes)]
+                  [Name [Find [<-address i 0] [<-address r 2] [<-address i 2] | Forms]
+                        [<-address i 1] [<-address r 2] s (datalog.fold-init Op)]]))))
 
 (define datalog.gen-plan
   Steps Ctx Prefix
@@ -1404,6 +1621,8 @@
            [[V | (datalog.native-value E Env Constants)] | Env] Level Outer))
   [[absent Rel Keys Terms] | Steps] Ctx Env Level Outer
   -> (datalog.native-absent Rel Keys Terms Steps Ctx Env Level Outer)
+  [[fold Mode V Op Target Rel Keys Terms Columns] | Steps] Ctx Env Level Outer
+  -> (datalog.native-fold [Mode V Op Target Rel Keys Terms Columns] Steps Ctx Env Level Outer)
   [[emit Rel | Terms] | _] Ctx Env _ Outer -> (datalog.native-insert Rel Terms Ctx Env Outer)
   [[scan Rel Source Columns] | Steps] [Relations Constants Indexes N] Env Level Outer
   -> (let Ctx [Relations Constants Indexes N]
@@ -1495,6 +1714,68 @@
 
 (define datalog.index-name
   Prefix Slot Field -> (intern (cn Prefix (cn (str Slot) (cn "x" (str Field))))))
+
+\\ An aggregate in a register of its own, by a loop over the relation, a probe of its table for a
+\\ whole tuple's keys, or a probe of an index and its chain; then the steps after it. min and max
+\\ start from just outside 32 bits, where they stay if there was nothing.
+(define datalog.native-fold
+  [Mode V Op Target Rel Keys Terms Columns] Steps [Relations Constants Indexes N] Env Level Outer
+  -> (let Ctx [Relations Constants Indexes N]
+          Slot (datalog.relation-slot Rel Relations)
+          Stride (datalog.stride (datalog.arity-in Rel Relations))
+          Tuples (datalog.tuples-param Slot)
+          Acc (datalog.native-label "Agg")
+          Values (map (/. T (datalog.native-value T Env Constants)) Terms)
+          P (datalog.word-name "P" Level)
+          Q (datalog.word-name "Q" Level)
+          Inner (datalog.native-binds Columns Tuples Q Env)
+          Update (datalog.guarded (datalog.native-checks Columns Tuples Q Inner Constants)
+                   (datalog.native-fold-update Op Acc (if (= Target none) 0 (datalog.native-integer [var Target] Inner Ctx))))
+          Loop (cases (empty? Keys)
+                      [[for P 0 (datalog.param (datalog.word-name "Size" Slot) [<-address (datalog.record-form Slot) 6])
+                         [word Q [* P Stride]] | Update]]
+                      (datalog.whole-tuple? Rel Keys Relations)
+                      (let Probe (datalog.native-label "probe")
+                        (datalog.probe-loop Probe Values
+                          (datalog.param (datalog.word-name "Tab" Slot) [<-address (datalog.record-form Slot) 3])
+                          (datalog.param (datalog.word-name "Mask" Slot) [shen-jit.u32 [<-address (datalog.record-form Slot) 4] 8])
+                          Q Stride (datalog.equal-columns Tuples Q Values 1) [[word Acc 1] [exit Probe]]))
+                      true
+                      (let Field (datalog.index-slot Rel Keys Indexes)
+                           Index [<-address (datalog.record-form Slot) Field]
+                           Probe (datalog.native-label "probe")
+                        [[word P 0]
+                         | (append (datalog.probe-loop Probe Values
+                                     (datalog.param (datalog.index-name "Itab" Slot Field) [<-address Index 0])
+                                     (datalog.param (datalog.index-name "Imask" Slot Field) [<-address Index 2])
+                                     Q Stride (datalog.equal-keys Tuples Q Keys Values)
+                                     [[word P [bit-and (protect E) (datalog.mask)]] [exit Probe]])
+                                   [[while (datalog.native-label "chain") [> P 0]
+                                      [word Q [* [- P 1] Stride]]
+                                      [do | Update]
+                                      [word P [u32 (datalog.param (datalog.index-name "Inext" Slot Field) [<-address Index 1])
+                                                   [shift-left [- P 1] 2]]]]])]))
+          Checked (if (= Op sum)
+                      [[unless [u< [+ Acc 2147483648] 4294967296] [return-word (datalog.overflow-code)]]]
+                      [])
+          Bound [[V | [bit-and Acc 4294967295]] | Env]
+          After (cases (= Mode compare)
+                       [[when [= Acc (datalog.native-integer [var V] Env Ctx)] | (datalog.native-steps Steps Ctx Env Level Outer)]]
+                       (element? Op [min max])
+                       [[when [!= Acc (datalog.fold-start Op)] | (datalog.native-steps Steps Ctx Bound Level Outer)]]
+                       true (datalog.native-steps Steps Ctx Bound Level Outer))
+       (append [[word Acc (datalog.fold-start Op)]] Loop Checked After)))
+
+(define datalog.fold-start
+  min -> 2147483648
+  max -> -2147483649
+  _ -> 0)
+
+(define datalog.native-fold-update
+  count Acc _ -> [[word Acc [+ Acc 1]]]
+  sum Acc T -> [[word Acc [+ Acc T]]]
+  min Acc T -> [[when [< T Acc] [word Acc T]]]
+  max Acc T -> [[when [> T Acc] [word Acc T]]])
 
 \\ A name for a block or loop, of its own within a kernel.
 (define datalog.native-label
@@ -1613,6 +1894,7 @@
   [[scan _ _ _] | _] _ -> 0
   [[filter | _] | Steps] Relations -> (datalog.first-start Steps Relations)
   [[assign | _] | Steps] Relations -> (datalog.first-start Steps Relations)
+  [[fold | _] | Steps] Relations -> (datalog.first-start Steps Relations)
   [[absent | _] | Steps] Relations -> (datalog.first-start Steps Relations)
   _ _ -> 0)
 
@@ -1737,9 +2019,8 @@
   [] _ -> true
   [Step | Steps] [Name Relations Constants S]
   -> (let Run [Name Relations Constants S]
-       (do (if (datalog.indexed? Step Relations)
-               (datalog.use-index (hd (tl Step)) (hd (tl (tl Step))) Run)
-               skip)
+          Index (datalog.step-index Step Relations)
+       (do (if (= Index none) skip (datalog.use-index (hd Index) (hd (tl Index)) Run))
            (datalog.prepare Steps Run))))
 
 \\ A closure of an index's kernel, for calling it from here.

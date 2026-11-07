@@ -289,6 +289,13 @@ atoms after it look `V` up. In a kernel, each operation of an expression goes to
 of each in the register after the first's, so that a few registers serve any depth; a bound variable keeps its register. A result outside 32 bits
 returns a code above any place to start again from, and the KL around the kernel raises.
 
+The checker turns an aggregate into a condition that records its keys: the variables of its atom that appear elsewhere in the body. Its relation
+is a dependency that must be complete, as a negated one is. Once its keys are bound it is a fold step, which binds its variable, or compares when
+that is bound already. A kernel keeps its value in a register: a loop over the relation for no keys, a probe of its table for a whole tuple, and a
+probe of an index and a walk along its chain for some columns. `min` and `max` start just outside 32 bits, where they stay over no tuples, and
+a sum is checked once at the end, so that the order of the tuples cannot change whether it raises. KL folds in a loop function that returns the
+value.
+
 Symbols and strings are interned, the program's own constants first, so that generated code can hold their numbers, and an integer is its own 32 bits, so that arithmetic and comparisons need no table. A relation's tuples are u32 columns one after another in a byte buffer, which the collector does not scan, with the
 new tuples and those for the next round as ranges of it. A round reads only what was there when it began, so a loop can keep the buffer it started with while growing replaces the relation's. A table of 64-bit entries, open addressed, deduplicates: each holds the top half of its hash, which
 also says where it goes when the table grows, and the tuple's position plus one. An index is such a table by key, for the first tuple with that key, and a chain of u32s for the rest, made for each set of columns this run's plans look up, when first needed. Keys that are a whole tuple use

@@ -382,11 +382,11 @@
 (dt.same "negation, no keys" [[node a] [node b] [edge a b]] dt.neg-empty edgeless [])
 (dt.same "negation, no keys" [[node a] [node b]] dt.neg-empty edgeless [[a] [b]])
 
-(dt.raises "negation in a cycle" "depends on the negation of"
+(dt.raises "negation in a cycle" "depends on the negation or an aggregate of"
   (freeze (datalog.define dt.bad [[relation p [symbol]] [relation q [symbol]]
                                   [rule [p [var "X"]] [[q [var "X"]]]]
                                   [rule [q [var "X"]] [[q [var "X"]] [not [p [var "X"]]]]]])))
-(dt.raises "negation of itself" "depends on its own negation"
+(dt.raises "negation of itself" "depends on its own negation or aggregate"
   (freeze (datalog.define dt.bad [[relation p [symbol]] [relation q [symbol]]
                                   [rule [p [var "X"]] [[q [var "X"]] [not [p [var "X"]]]]]])))
 
@@ -462,6 +462,82 @@
   (freeze (datalog.define dt.bad [[relation p [integer]] [rule [p [var "Y"]] [[p [var "X"]] [= [var "Y"] [+ [var "Z"] 1]]]]])))
 (dt.raises "two unbound sides" "is not bound"
   (freeze (datalog.define dt.bad [[relation p [integer]] [rule [p [var "X"]] [[p [var "X"]] [= [var "Y"] [var "Z"]]]]])))
+
+\* Aggregates: by a key, over a whole relation, over nothing, with a variable repeated in the atom,
+   and comparing a result bound already. *\
+(defdatalog dt.agg
+  (relation node [symbol])
+  (relation edge [symbol symbol])
+  (relation w [symbol integer])
+  (relation degree [symbol integer])
+  (relation total [integer])
+  (relation loops [integer])
+  (relation weight [symbol integer])
+  (relation heaviest [symbol integer])
+  (relation lightest [symbol integer])
+  (relation consistent [symbol])
+  (relation weighs-degree [symbol integer])
+  (relation linked [symbol symbol integer])
+  (rule (degree X N) <-- (node X) (= N (count (edge X _))))
+  (rule (total N) <-- (= N (count (edge _ _))))
+  (rule (loops N) <-- (= N (count (edge Y Y))))
+  (rule (weight X S) <-- (node X) (= S (sum W (w X W))))
+  (rule (heaviest X M) <-- (node X) (= M (max W (w X W))))
+  (rule (lightest X M) <-- (node X) (= (min W (w X W)) M))
+  (rule (consistent X) <-- (degree X D) (= D (count (edge X _))))
+  (rule (weighs-degree X N) <-- (node X) (w X N) (= N (count (edge X _))))
+  (rule (linked X Y N) <-- (edge X Y) (= N (count (edge X Y)))))
+
+(set dt.agg-facts [[node a] [node b] [node c] [node d] [edge a b] [edge a c] [edge b c] [edge c c]
+                   [w a 5] [w a 3] [w b 7] [w b 1] [w c -2]])
+
+(dt.same "aggregates" (value dt.agg-facts) dt.agg degree [[a 2] [b 1] [c 1] [d 0]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg total [[4]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg loops [[1]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg weight [[a 8] [b 8] [c -2] [d 0]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg heaviest [[a 5] [b 7] [c -2]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg lightest [[a 3] [b 1] [c -2]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg consistent [[a] [b] [c] [d]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg weighs-degree [[b 1]])
+(dt.same "aggregates" (value dt.agg-facts) dt.agg linked [[a b 1] [a c 1] [b c 1] [c c 1]])
+(dt.same "aggregates, nothing" [] dt.agg total [[0]])
+
+(defdatalog dt.agg-sum
+  (relation w [symbol integer])
+  (relation weight [symbol integer])
+  (rule (weight X S) <-- (w X _) (= S (sum W (w X W)))))
+
+(dt.raises "a sum past 32 bits" "outside 32 bits" (freeze (datalog.run dt.agg-sum [[w a 2147483647] [w a 1]])))
+(dt.raises "a sum past 32 bits, KL" "outside 32 bits" (freeze (dt.run-kl dt.agg-sum [[w a 2147483647] [w a 1]])))
+(set datalog.*native* true)
+(datalog.forget-code dt.agg-sum)
+(dt.raises "a sum past 32 bits, reference" "outside 32 bits"
+  (freeze (datalog.run-naive dt.agg-sum [[w a 2147483647] [w a 1]])))
+(dt.same "a sum back within 32 bits" [[w a 2147483647] [w a 1] [w a -5]] dt.agg-sum weight [[a 2147483643]])
+
+(dt.raises "an aggregate of itself" "its own negation or aggregate"
+  (freeze (datalog.define dt.bad [[relation p [symbol integer]] [relation q [symbol]]
+                                  [rule [p [var "X"] [var "N"]] [[q [var "X"]] [= [var "N"] [count [p [var "X"] [any]]]]]]])))
+(dt.raises "what sum reads, not in its atom" "is not in its atom"
+  (freeze (datalog.define dt.bad [[relation w [symbol integer]] [relation s [symbol integer]]
+                                  [rule [s [var "X"] [var "S"]] [[w [var "X"] [any]] [= [var "S"] [sum [var "Y"] [w [var "X"] [var "W"]]]]]]])))
+(dt.raises "what sum reads, as a key" "must appear only in its atom"
+  (freeze (datalog.define dt.bad [[relation w [symbol integer]] [relation s [integer integer]]
+                                  [rule [s [var "W"] [var "S"]] [[w [any] [var "W"]] [= [var "S"] [sum [var "W"] [w [any] [var "W"]]]]]]])))
+(dt.raises "a sum of symbols" "sum reads integers"
+  (freeze (datalog.define dt.bad [[relation e [symbol symbol]] [relation s [symbol integer]]
+                                  [rule [s [var "X"] [var "S"]] [[e [var "X"] [any]] [= [var "S"] [sum [var "Y"] [e [var "X"] [var "Y"]]]]]]])))
+(dt.raises "a result in what it reads" "is what the aggregate gives"
+  (freeze (datalog.define dt.bad [[relation w [symbol integer]] [relation s [symbol integer]]
+                                  [rule [s [var "X"] [var "N"]] [[w [var "X"] [any]] [= [var "N"] [count [w [var "X"] [var "N"]]]]]]])))
+(dt.raises "a symbol result" "an aggregate gives an integer"
+  (freeze (datalog.define dt.bad [[relation e [symbol symbol]] [relation s [symbol]]
+                                  [rule [s [var "X"]] [[e [var "X"] [var "Y"]] [= [var "Y"] [count [e [var "X"] [any]]]]]]])))
+(dt.raises "an aggregate in arithmetic" "is not a value"
+  (freeze (datalog.define dt.bad [[relation e [symbol symbol]] [relation s [symbol integer]]
+                                  [rule [s [var "X"] [var "N"]] [[e [var "X"] [any]] [= [var "N"] [+ [count [e [var "X"] [any]]] 1]]]]])))
+(dt.raises "aggregate as a relation" "cannot name"
+  (freeze (datalog.define dt.bad [[relation aggregate [symbol]]])))
 
 \* Fingerprints collide only among many values spread over 32 bits, so that a probe that trusted
    one would pass every small test. Native joins against KL joins, whose probes are the table

@@ -129,18 +129,52 @@
   [[= [var "K"] _] | _] -> true
   [_ | Ls] -> (dtg.binds-k? Ls))
 
+\* Sometimes an aggregate over a relation, with keys the atoms bind, constants, _, and variables
+   of its own, L and W, which may repeat. It binds G, or now and then compares an integer bound
+   already. *\
+(define dtg.aggregate
+  Relations Bound
+  -> (if (= 0 (dtg.random 5))
+         (let Rel (dtg.choose Relations)
+              Atom [(hd Rel) | (dtg.map (/. T (dtg.aggregate-term T Bound)) (tl Rel))]
+              Op (if (element? [var "W"] Atom) (dtg.choose [count sum min max]) count)
+              Agg (if (= Op count) [count Atom] [Op [var "W"] Atom])
+              Numbers (dtg.of-type Bound integer)
+           (if (and (cons? Numbers) (= 0 (dtg.random 4)))
+               [[= [var (dtg.choose Numbers)] Agg]]
+               [[= [var "G"] Agg]]))
+         []))
+
+(define dtg.aggregate-term
+  Type Bound -> (let Vars (dtg.of-type Bound Type)
+                     R (dtg.random 10)
+                  (cases (and (< R 4) (cons? Vars)) [var (dtg.choose Vars)]
+                         (< R 6) (dtg.value Type)
+                         (< R 8) [any]
+                         (= Type integer) [var "W"]
+                         true [var "L"])))
+
+(define dtg.binds-g?
+  [] -> false
+  [[= [var "G"] _] | _] -> true
+  [_ | Ls] -> (dtg.binds-g? Ls))
+
 (define dtg.rule
   Relations
   -> (let Atoms (dtg.times (+ 1 (dtg.random 3)) (freeze (dtg.atom (dtg.choose Relations))))
           Atomic (dtg.body-bound Atoms Relations [])
+          Aggregate (dtg.aggregate Relations Atomic)
           Arithmetic (dtg.arithmetic Atomic)
-          Bound (if (dtg.binds-k? Arithmetic) [["K" | integer] | Atomic] Atomic)
+          Bound (append (if (dtg.binds-k? Arithmetic) [["K" | integer]] [])
+                        (if (dtg.binds-g? Aggregate) [["G" | integer]] [])
+                        Atomic)
           Head (dtg.head (dtg.choose Relations) Bound)
           Tests (dtg.comparison Bound)
           Negation (dtg.negation Relations Bound)
-       [Head (append Atoms (append Arithmetic (append Tests Negation)))]))
+       [Head (append Atoms Aggregate Arithmetic Tests Negation)]))
 
-\* Negations dropped from the last rules that have them until the program is stratified. *\
+\* Negations dropped from the last rules that have them until the program is stratified, and a
+   rule with an aggregate dropped whole, as others in it may read what it binds. *\
 (define dtg.stratified
   Relations Rules -> (if (trap-error (do (datalog.check dtg.check (dtg.items Relations Rules)) true) (/. E false))
                          Rules
@@ -149,9 +183,14 @@
 (define dtg.drop-negation
   [] -> []
   [[Head Body] | Rules] -> (let Kept (dtg.positive Body)
-                             (if (= Kept Body)
-                                 [[Head Body] | (dtg.drop-negation Rules)]
-                                 [[Head Kept] | Rules])))
+                             (cases (dtg.aggregates? Body) Rules
+                                    (= Kept Body) [[Head Body] | (dtg.drop-negation Rules)]
+                                    true [[Head Kept] | Rules])))
+
+(define dtg.aggregates?
+  [] -> false
+  [[= _ [Op | _]] | Ls] -> true where (datalog.aggregate? Op)
+  [_ | Ls] -> (dtg.aggregates? Ls))
 
 (define dtg.positive
   [] -> []

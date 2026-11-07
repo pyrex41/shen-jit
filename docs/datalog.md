@@ -62,6 +62,25 @@ false
   (rule (dist X 0) <-- (start X))
   (rule (dist Y D) <-- (dist X D0) (edge X Y W) (= D (+ D0 W)) (<= D 10)))
 ```
+
+- **Aggregates:** `(= N (count (edge X _)))` counts the tuples an atom matches, and `(sum W Atom)`, `(min W Atom)` and `(max W Atom)`
+  read an integer variable of the atom. A variable of the atom that appears elsewhere in the body is a key, which the rest of the body
+  binds, as `X` here; the others belong to the aggregate. Over no tuples, `count` and `sum` give 0, and `min` and `max` give nothing, so the
+  rule does not hold. If `N` is bound already, the aggregate compares instead. As with negation, a relation cannot depend on an aggregate of one
+  that depends on it.
+
+```shen
+(defdatalog degrees
+  (relation node [symbol])
+  (relation edge [symbol symbol])
+  (relation cost [symbol integer])
+  (relation degree [symbol integer])
+  (relation dearest [symbol integer])
+  (rule (degree X N) <-- (node X) (= N (count (edge X _))))
+  (rule (dearest X M) <-- (node X) (= M (max C (cost X C)))))
+```
+
+With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degree` is `((a 1) (b 0))` and `dearest` is `((a 5))`.
 - **Negation:** `(not (edge X _))` holds when no tuple matches: here, when `X` has no edge out. A relation cannot depend on the negation of
   one that depends on it, as there would be no single answer, and defining such a program raises. So each relation it negates is complete
   before a rule reads it, and a program is evaluated in strata.
