@@ -73,7 +73,8 @@ PASS str-string-n
 PASS str-string-n-empty
 PASS str-n-string
 PASS str-n-string-byte
-PASS str-n-string-above-byte (deviation)
+PASS str-n-string-above-byte
+PASS str-n-string-not-scalar (deviation)
 PASS str-cn-non-string
 PASS str-of-string
 PASS str-of-symbol
@@ -162,4 +163,4 @@ PASS seal-redefine-kernel (deviation)
 PASS seal-open-call (deviation)
 PASS seal-kernel-call
 
-163 passed, 0 failed (shen-scheme)
+164 passed, 0 failed (shen-scheme)

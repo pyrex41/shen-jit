@@ -121,11 +121,11 @@ bytes; source text and files pass through as UTF-8 bytes without decoding.
 - `(tlstr S)`: S without its first byte; the empty string raises an error.
 - `(cn A B)`: concatenation; a non-string raises an error.
 - `(string->n S)`: the first byte; the empty string raises an error.
-- `(n->string N)`: a one-byte string for N from 0 to 255; anything else raises
-  an error. *Deviation:* Shen/Scheme accepts any Unicode scalar value and
-  creates a one-unit string that cannot be written as a byte. The kernel otherwise
-  passes only bytes, but its reader passes the N of a `c#N;` escape, so `c#955;` in a
-  string is a reader error here: write such a character as its UTF-8 bytes.
+- `(n->string N)`: a one-byte string for N from 0 to 255, as the reader passes source
+  bytes through it, and the UTF-8 bytes of any other Unicode scalar value, as from a
+  `c#955;` escape in a string; anything else raises an error. `c#233;` is therefore
+  one byte, and `(string->n (n->string 955))` is its first byte. *Deviation:* Shen/Scheme
+  also accepts other numbers, and makes a one-unit string of a scalar value.
 - `(str X)`: for strings, the text in double quotes; symbols, their name;
   Booleans, "true" or "false"; numbers, as above; the empty list, "()". Other
   values give a description such as `#<procedure>`; `str` never raises.

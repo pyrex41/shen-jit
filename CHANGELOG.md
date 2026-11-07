@@ -16,6 +16,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- A `c#N;` escape past 255 in a string, such as `c#955;`, no longer fails to load: `n->string` gives a Unicode scalar
+  value's UTF-8 bytes.
 - File read errors raise instead of looking like end of file: whole-file reads no longer return empty or
   partial data on failure, and `read-byte` reports failed file reads.
 - Loading code with more than 255 parameters or call arguments, or a capture index above 255, reports which limit

@@ -1626,10 +1626,23 @@ V sj_primitive(VM *vm, size_t index)
             return sj_raise_value(vm, "tlstr: ~S is not a non-empty string", a);
         return substring(vm, 1, string_length(a) - 1);
     case P_STR: return to_string(vm, a);
-    case P_N_STRING:
-        if (!is_fix(a) || fixval(a) < 0 || fixval(a) > 255)
-            return sj_raise_value(vm, "n->string: ~S is not a byte", a);
-        return byte_string(vm, (unsigned)fixval(a));
+    case P_N_STRING: {
+        /* A byte as itself, as the reader passes source bytes through here, and
+           what is past a byte, as from a c#N; escape, as UTF-8. */
+        int64_t n = is_fix(a) ? fixval(a) : -1;
+        if (n < 0 || n > 0x10FFFF || (n >= 0xD800 && n <= 0xDFFF))
+            return sj_raise_value(vm, "n->string: ~S is not a byte or a Unicode scalar value", a);
+        if (n <= 255)
+            return byte_string(vm, (unsigned)n);
+        char utf8[4];
+        size_t len = n <= 0x7FF ? 2 : n <= 0xFFFF ? 3 : 4;
+        static const unsigned char lead[] = {0, 0, 0xC0, 0xE0, 0xF0};
+        for (size_t i = len - 1; i > 0; i--, n >>= 6)
+            utf8[i] = (char)(0x80 | (n & 0x3F));
+        utf8[0] = (char)(lead[len] | n);
+        V s = make_string(vm, utf8, len);
+        return s == V_CLEARED ? sj_raise(vm, "out of memory") : s;
+    }
     case P_STRING_N:
         if (!is_type(a, T_STRING) || string_length(a) == 0)
             return sj_raise_value(vm, "string->n: ~S is not a non-empty string", a);

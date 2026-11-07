@@ -190,6 +190,11 @@ awk 'BEGIN { printf "(define big -> ["; for (i = 1; i <= 5000; i++) printf "%d "
 "$SHEN" script "$dir/literal.shen" > "$dir/literal.out" 2>&1
 check long-literal "$dir/literal.out" "1 5000 12502500"
 
+# A c#N; escape past a byte, in source and from a string, is that character in UTF-8.
+printf '(pr (cn "c#955;" "c#128512;c#10;"))\n(pr (cn (hd (read-from-string (cn (n->string 34) (cn "c#233;c#955;" (n->string 34))))) "c#10;"))\n' > "$dir/escape.shen"
+"$SHEN" script "$dir/escape.shen" > "$dir/escape.out" 2>&1
+contains escape-source "$dir/escape.out" "$(printf '\316\273\360\237\230\200')"
+
 # Deep non-tail recursion grows the stack many times; the first argument,
 # passed in a register as well as in its slot, must survive each growth.
 printf '(define mk 0 Acc -> Acc N Acc -> (mk (- N 1) [N | Acc]))\n(define deep [] -> 0 [_ | Xs] -> (+ 1 (deep Xs)))\n(output "~A ~A~%%" (deep (mk 300000 [])) (length (append (mk 300000 []) [a])))\n' \
