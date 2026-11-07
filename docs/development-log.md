@@ -1015,6 +1015,16 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
 - **`SHEN_JIT_MAX_HEAP`** raises a catchable "out of memory". At the limit the last tenth of the heap is a reserve: without one, a heap
   full of live data left no room for the error, and the handler received `[]`.
 
+### String escape CLI check (2026-11-07)
+
+- Windows x86-64 CI failed only `escape-source`: its non-ASCII grep check rejected output that displayed
+  the expected lambda and emoji. The same run passed all 1,088 eval-kl cases, including the UTF-8 byte
+  values. The fixture also printed a standalone byte 233, which is deliberately preserved by `n->string`
+  and is not valid UTF-8 by itself. A text search over that output is not a portable byte assertion.
+- The fixture now prints byte lists as ASCII and checks exact lines for both source escapes and
+  `read-from-string`, including preservation of byte 233. No runtime behavior changes. The fast tier
+  passes on macOS arm64, including all 198 CLI checks; shell syntax and whitespace checks pass too.
+
 ### File read errors (2026-11-07, macOS arm64)
 
 - Reading a directory returned an empty string or byte list, or -1 through `read-byte`, although stdio set
