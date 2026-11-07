@@ -32,7 +32,12 @@ enum {
 };
 
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t turn = PTHREAD_COND_INITIALIZER;
+/* A waiter sleeps on its ticket's slot, so that a release wakes the next thread and not the
+   whole queue, which took all the machine's cores at 1000 threads waiting on sockets. */
+#define TURN PTHREAD_COND_INITIALIZER
+static pthread_cond_t turn[16] = {TURN, TURN, TURN, TURN, TURN, TURN, TURN, TURN,
+                                  TURN, TURN, TURN, TURN, TURN, TURN, TURN, TURN};
+#undef TURN
 static uint64_t next_ticket, serving; /* serving is the holder's; the rest wait */
 static VM *ticking;
 
@@ -41,7 +46,7 @@ static void acquire(void)
     pthread_mutex_lock(&lock);
     uint64_t ticket = next_ticket++;
     while (ticket != serving)
-        pthread_cond_wait(&turn, &lock);
+        pthread_cond_wait(&turn[ticket % 16], &lock);
     pthread_mutex_unlock(&lock);
 }
 
@@ -49,7 +54,7 @@ static void release(void)
 {
     pthread_mutex_lock(&lock);
     serving++;
-    pthread_cond_broadcast(&turn);
+    pthread_cond_broadcast(&turn[serving % 16]);
     pthread_mutex_unlock(&lock);
 }
 

@@ -253,7 +253,8 @@ fit, so that a stale pointer fails at once. `SHEN_JIT_SLOW_PRIMS` compiles every
 `thread` makes real threads, of which one runs at a time, holding a global lock. A timer asks for a switch every 10 ms if another
 thread is waiting, by the same mechanism as an interrupt: it clears the limit that frames check, so the next function entry or loop check comes to
 the runtime. Each thread has its own guest stack, handlers, C roots, native stack bound and saved error codes, swapped as the lock changes hands.
-A thread about to wait gives the lock up, and a foreign call can too.
+A thread about to wait gives the lock up, and a foreign call can too. Waiters are served in order, each woken by its ticket rather than all at
+once, since threads waiting on sockets take the lock often.
 
 The first thread has everything compile again on its next call, since loops must then test for a switch, and code compiled before need not have.
 The same goes for the REPL, when it starts catching Ctrl-C.

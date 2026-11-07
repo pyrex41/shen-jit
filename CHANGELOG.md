@@ -15,6 +15,8 @@ All notable changes to this project are documented in this file. The format is b
   numbers takes about a thirtieth of what it did.
 - Lowering is faster: looking up a fixed name no longer scans them all, and a long definition with many inlined calls
   no longer takes time that grows with the square of its size.
+- Many threads waiting on sockets use far less CPU: giving up the runtime lock wakes the next thread, not every
+  waiting one, so 1000 such threads no longer take over the machine.
 
 ### Fixed
 

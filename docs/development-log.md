@@ -839,6 +839,15 @@ machine on a Ryzen 5 5600X with Ubuntu 20.04, gcc 9.4 and glibc 2.31. A bare rat
   against 0.43, and building short lists 1.08 times as long.
 - **`exit` could hang:** it flushes every stream, and waits on one that another thread is blocked reading. With threads
   the process flushes what was written and calls `_exit`, so `SHEN_JIT_STATS` prints nothing then.
+- **A release woke the whole queue (2026-11-07, Apple M3 Max, against the build before).** Waiters sleep on one of 16
+  condition variables, by ticket, in place of one that every release broadcast to. Threads waiting on a socket take the
+  lock 10 times a second, so this grew much faster than their number. CPU seconds during a 6 s wait, old then new:
+  100 threads 0.56, 0.29; 300 threads 2.25, 1.60; 1000 threads 595, killed at 40 s without finishing, then 21, finishing
+  in 6.2 s. Handoffs did not change: 4 threads polling 50000 times each 0.57 to 0.60 s, 0.58 to 0.59 s; 4 busy threads
+  under the ticker 0.51 s, 0.52 to 0.53 s. 1024 variables did no better than 16 (1024 then 16: 300 threads 1.25, 1.39;
+  1000 threads 23.4, 21.5), so collisions are not what is left at 1000. What is left there is 10000 lock round trips a
+  second, which we did not take further, as 1000 idle threads is not the frequent case. Longer poll slices would cut it,
+  and would slow the response to Ctrl-C.
 
 ### x86-64 and Linux (2026-11-03)
 
