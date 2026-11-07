@@ -348,8 +348,8 @@ false
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
 | `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
 | `(datalog.define Name Items)`, `(datalog.match Db Pattern)` | The same as `defdatalog` and `datalog.ask` with the program as data, where a variable is `[var "X"]` and `_` is `[any]` |
-| `(datalog.plans Name)`, `(datalog.code Name Layout)` | Each rule's order of joins, and the KL it became |
-| `(datalog.stats Db)` | The rounds, and each relation's tuples and how many derivations made them |
+| `(datalog.plans Name)`, `(datalog.code Name Layout)` | Each rule's order of joins with no sizes to go by, and the KL that gives |
+| `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
 
 - **Columns** are `symbol`, `string` or `integer`, and a value of another type raises when it is given.
@@ -357,6 +357,7 @@ false
   type. A variable in a head or a comparison must appear in an atom of the body, and each `_` is a variable of its own.
   There is no negation, no arithmetic that makes values, and no terms inside a column.
 - **Results** are sets, and the order of rules, atoms and facts does not change them.
+- **The order of a rule's atoms** need not be tuned. A run chooses the order of joins from the sizes of the relations, and again when one has doubled.
 - **A run is a snapshot.** New facts mean a new `datalog.run`, which starts over.
 - **Saving:** a program saved with `--save` runs in the saved image.
 

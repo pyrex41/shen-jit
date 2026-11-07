@@ -436,6 +436,9 @@ NUMERIC_RESULT := grep -a '^[a-z]* [0-9.e-]* s check'
 bench-datalog: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "$(KERNEL_DIR)/klambda")' < /dev/null | \
 	  grep -a ' | \|^facts\|uncaught'
+	for c in chain-a chain-b small-a small-b large-a large-b; do for a in false true; do \
+	  $(BUILD)/shen-jit eval -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e "(do.run $$c $$a)" < /dev/null | grep -a ' | ' | head -1; \
+	done; done
 
 bench-numeric: $(BUILD)/shen-jit
 	$(CC) -O2 -ffp-contract=off -o $(BUILD)/numeric-c tests/bench/numeric.c -lm

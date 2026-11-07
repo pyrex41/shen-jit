@@ -125,7 +125,7 @@
 
 (define db.row
   Label Name Facts Layout Rel
-  -> (let _ (put Name datalog.compiled [])
+  -> (let _ (datalog.forget-code Name)
           First (db.seconds (freeze (datalog.run-layout Name Facts Layout)))
           Second (db.seconds (freeze (datalog.run-layout Name Facts Layout)))
           Third (db.seconds (freeze (datalog.run-layout Name Facts Layout)))

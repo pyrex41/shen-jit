@@ -1504,7 +1504,7 @@ independent oracles.
   and bounds the layouts a program meets to four.
 - **Retained tuples did not call for a byte-buffer engine.** 177 MB resident at 1,388,324 tuples, with one index. Not needed for anything measured.
 - **Not tried:** telling new from old tuples in the atoms around the one read as new. Nonlinear closure makes 41,142,395 derivations for 88,803 tuples, which is where it would help,
-  and is the slowest row even so. Costs of atoms in choosing the join order: the planner goes by columns known alone.
+  and is the slowest row even so.
 - **The bug tests found:** a relation could appear several times in its component, and merging it again wiped its new tuples, losing results. All layouts agreed and the fixtures
   by hand passed; only generated programs against the reference showed it, in about 3% of them.
 - **Does it notice?** 13 planted bugs, one at a time, each failed `make test-datalog`, from a missing second round to a dropped filter. It takes 0.23 s, and 62 s under `SHEN_JIT_GC_STRESS=1000`, which passes.
@@ -1514,6 +1514,23 @@ independent oracles.
   Theirs is every table and every answer enumerated with printing removed, the middle of 3 fresh processes, by CPU time, leaving out 14 to 44 ms of startup and loading. Not like for like: tabling is a general mechanism working top-down inside a full Prolog, the rules ran as written
   there while ours reorders joins, and hand-ordered Prolog was not tried. The call graph's gap may come from one table for each bound first argument, which was not measured. The rows closest together spend their time hashing and allocating tuples.
 - **The call graph:** 731 functions and 4,730 calls from the kernel's KL give 125,617 pairs reached in 48 rounds, in 18 ms.
+
+### Choosing join order while running (2026-11-07, Apple M3 Max, against the fixed plans before)
+
+The idea is Carac's (Adaptive Recursive Query Optimization, ICDE 2024): sizes change round by round in a recursive query, so no fixed order stays right, and regenerating code during a run costs little here, at 0.11 ms a program. It needs rules with many atoms, as a transitive closure has nothing to reorder. Tried on Andersen's points-to analysis over generated statements, with the rules' atoms in two orders.
+
+| ms, order a / order b | Small: 75,267 `vpt` | Large: 177,585 `vpt`, 681,172 `hpt` |
+| --- | --- | --- |
+| Fixed, most columns known next | 853 / 334 | 12,448 / 1,438 |
+| Sizes, planned once at the start | 849 / 1,070 | 12,278 / 14,776 |
+| Sizes, planned again when one doubles | 281 / 340 | 1,218 / 1,606 |
+
+- **Kept.** Re-planning takes a written order that costs 2.6 to 8.7 times as much down to about what the better one costs: on the large row 15% faster than the better fixed order on one row and 12% slower on the other. Planning once from the sizes at the start does not help, since most tuples do not exist yet: it is what happens as the relations grow that matters.
+- **The written orders were a surprise:** the one first written as the good order, by hand, was the bad one, 2.6 and 8.7 times worse. That is the case for not asking.
+- **Nothing lost elsewhere.** Closures, same generation, the call graph and the skewed join are within about 5% of before. Mutual recursion makes 15 plans, one each round, in under a millisecond.
+- **Rejected:** counting an index not yet built as dearer, which favours indexes already there, took the large row from 136 ms to 275 and 1,460 ms at factors 2 and 4 on an earlier form of this workload. Re-planning only on a factor of 4 or 8 instead of 2 did no better, from 135 to 158 and 179 ms.
+- **What is left:** indexes stay once started, so a plan change can leave one maintained and unused. The tuple counts show what storage work remains: 13,391,521 derivations for 177,585 `vpt` tuples.
+- **Checked** against a separate evaluator in Python, written from the analysis's definition, on the large row in both orders, and against the reference on 300 generated programs under both kinds of plan. SWI-Prolog's tabling ran out of its default table space on this analysis after 75 s, in order b; a larger space was not tried.
 
 ## Benchmark results
 

@@ -223,6 +223,23 @@
   (do (dt.check "a larger layout chosen" (hd (tl (hd (datalog.stats Db)))) 20)
       (dt.check "a larger layout, right" (datalog.count Db reach) 5002)))
 
+\* Plans follow sizes as they grow, and what is generated can be read. *\
+(let Db (datalog.run dt.reach (dt.chain 0 2000 []))
+  (dt.check "plans again as sizes grow" (> (hd (tl (hd (tl (tl (datalog.stats Db)))))) 4) true))
+(dt.check "plans are there to read" (cons? (datalog.plans dt.dep)) true)
+(dt.check "code is there to read" (hd (hd (datalog.code dt.dep 12))) defun)
+
+\* A rule whose order matters, written either way, gives one result. *\
+(defdatalog dt.order-a
+  (relation big [integer integer]) (relation tiny [integer integer]) (relation out [integer integer])
+  (rule (out A C) <-- (big A B) (tiny B C)))
+(defdatalog dt.order-b
+  (relation big [integer integer]) (relation tiny [integer integer]) (relation out [integer integer])
+  (rule (out A C) <-- (tiny B C) (big A B)))
+(set dt.order-facts [[big 1 2] [big 3 2] [big 4 5] [tiny 2 9]])
+(dt.same "order, one way" (value dt.order-facts) dt.order-a out [[1 9] [3 9]])
+(dt.same "order, the other" (value dt.order-facts) dt.order-b out [[1 9] [3 9]])
+
 \* Errors, each when the program is defined. *\
 (dt.raises "undeclared" "no relation nope"
   (freeze (datalog.define dt.bad [[rule [nope a] []]])))
@@ -279,6 +296,13 @@
   -> (do (dt.compare-relation Seed Db Reference Relations)
          (dt.compare-all Seed Dbs Reference Relations)))
 
+\* The same with plans that do not follow sizes. *\
+(define dt.run-fixed
+  Name Facts -> (let _ (set datalog.*adaptive* false)
+                     Db (datalog.run Name Facts)
+                     _ (set datalog.*adaptive* true)
+                  Db))
+
 (define dt.generated
   0 -> ok
   N -> (let Program (dtg.program)
@@ -289,11 +313,12 @@
             _ (datalog.define Name (dtg.items Relations Rules))
             Reference (datalog.run-naive Name Facts)
             Dbs (dt.run-layouts Name Facts [-1 0 12])
+            Fixed (dt.run-fixed Name Facts)
             Name2 (dtg.numbered "dt.h" N)
             _ (datalog.define Name2 (append (dtg.items (dtg.shuffle Relations) [])
                                             (dtg.rule-items (dtg.shuffle (dtg.shuffle-bodies Rules)))))
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
-            _ (dt.compare-all N Dbs Reference Relations)
+            _ (dt.compare-all N [Fixed | Dbs] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
          (dt.generated (- N 1))))
 
