@@ -848,6 +848,14 @@ machine on a Ryzen 5 5600X with Ubuntu 20.04, gcc 9.4 and glibc 2.31. A bare rat
   1000 threads 23.4, 21.5), so collisions are not what is left at 1000. What is left there is 10000 lock round trips a
   second, which we did not take further, as 1000 idle threads is not the frequent case. Longer poll slices would cut it,
   and would slow the response to Ctrl-C.
+- **A closed pipe ended the process (2026-11-07).** SIGPIPE was at its default, so `write-byte` to a pipe nobody read
+  died with status 141, and only sockets avoided it, with their own flags. A review of an I/O library found this, as its
+  contract promises an error. It now has a handler that does nothing, set at startup, and the write fails and raises.
+  `SIG_IGN` was rejected: an ignored signal stays ignored across exec, so a child such as `yes | head` would see EPIPE, and
+  every spawn would have to reset it. A handler is reset by exec, as a test checks. Dying quietly when the uncaught error
+  is a broken stdout was left out: `| head` now prints one error and exits with status 1, as Python does, and that
+  would take a special case at the top level. The flags in `lib/socket.shen` are now redundant, and stay until someone
+  changes that file.
 
 ### x86-64 and Linux (2026-11-03)
 

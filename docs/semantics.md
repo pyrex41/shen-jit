@@ -278,7 +278,10 @@ if it had been made then. *Deviation:* until then, reading the
   raises with the system's message. On systems that open a directory as an input
   stream, reading it raises rather than treating it as empty.
 - `(write-byte B S)`: B from 0 to 255; returns B. Output is buffered, so a failed write raises
-  an error here only once the buffer fills, or else from `close`.
+  an error here only once the buffer fills, or else from `close`. Writing to a pipe that nobody
+  reads is such a failure, and does not end the process, so that `shen-jit script f | head` can
+  end with `write-byte: Broken pipe` and status 1 if nothing catches it. Output still buffered
+  when the process ends is dropped silently. A child process finds `SIGPIPE` at its default.
 - Reading from an output stream, writing to an input stream, or using a closed
   stream raises an error. `(close S)` returns the empty list, and raises an error if what was
   left to write could not be written; the stream is closed either way. Closing a closed stream

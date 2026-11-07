@@ -20,6 +20,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Writing to a closed pipe raises an error that a program can catch, instead of ending the process. So
+  `shen-jit script f | head` can now print `write-byte: Broken pipe` to stderr and exit with status 1.
 - A `c#N;` escape past 255 in a string, such as `c#955;`, no longer fails to load: `n->string` gives a Unicode scalar
   value's UTF-8 bytes.
 - File read errors raise instead of looking like end of file: whole-file reads no longer return empty or

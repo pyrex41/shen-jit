@@ -24,10 +24,11 @@
          initial semispace: an allocation that does not fit then raises "out
          of memory". The collector copies, so the process uses about twice
          SIZE. */
-#define _DEFAULT_SOURCE /* access */
+#define _DEFAULT_SOURCE /* access, sigaction */
 #include "jit.h"
 #include "ops.h"
 #include "reader.h"
+#include <signal.h>
 
 #include <stdlib.h>
 #include <string.h>
@@ -333,9 +334,28 @@ static int run(int argc, char **argv)
     return 0;
 }
 
+#ifndef _WIN32
+static void on_broken_pipe(int sig) { (void)sig; }
+
+/* A write to a pipe that nobody reads then fails and raises, where it would end the process.
+   A handler and not SIG_IGN: exec resets a handler and keeps an ignored signal, and a child
+   should find the default. */
+static void raise_on_broken_pipes(void)
+{
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = on_broken_pipe;
+    sigemptyset(&sa.sa_mask);
+    sigaction(SIGPIPE, &sa, NULL);
+}
+#else
+static void raise_on_broken_pipes(void) {}
+#endif
+
 int main(int argc, char **argv)
 {
     if (argc == 4 && strcmp(argv[1], "--stage1") == 0)
         return stage1(argv[2], argv[3]);
+    raise_on_broken_pipes();
     return run(argc, argv);
 }

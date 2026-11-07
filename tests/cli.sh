@@ -409,6 +409,17 @@ SHEN
     contains write-failed "$dir/full.out" "write-byte: No space left on device"
     contains close-failed "$dir/full.out" "close: No space left on device"
 fi
+# A write to a pipe that nobody reads raises, where SIGPIPE would end the process. Windows has no such signal.
+if [ "$posix" = yes ]; then
+    cat > "$dir/pipe.shen" <<EOF
+(define fill N -> (do (pr "xxxxxxxxxxxxxxxx" (stoutput)) (fill (+ N 1))))
+(let R (trap-error (fill 0) (/. E (error-to-string E)))
+     S (open "$dir/pipe.out" out)
+  (do (pr R S) (close S)))
+EOF
+    "$SHEN" script "$dir/pipe.shen" 2> /dev/null | true
+    contains pipe-raises "$dir/pipe.out" "Broken pipe"
+fi
 # SHEN_JIT_SEMISPACE: where each semispace starts, or what the image needs if
 # that is more. It still grows, and SHEN_JIT_MAX_HEAP can now be below 32 MB.
 SHEN_JIT_GC_STRESS= SHEN_JIT_STATS=1 SHEN_JIT_SEMISPACE=8M "$SHEN" eval -e '(+ 1 2)' > "$dir/semi.out" 2>&1
@@ -855,6 +866,17 @@ EOF
     "$SHEN" eval -l lib/ffi.shen -l "$dir/ffi3.shen" > "$dir/ffi3.out" 2>&1 < /dev/null
     check ffi-backtrace "$dir/ffi3.out" "  in ffi.strlen"
     check ffi-backtrace-caller "$dir/ffi3.out" "  in ffi.outer"
+
+    # A child finds SIGPIPE at its default: exec resets the handler, as it would not an ignored signal.
+    if [ "$posix" = yes ]; then
+        cat > "$dir/child.shen" <<EOF
+(shen-jit.library child.libc ["libc.so.6" "libSystem.dylib"])
+(define-foreign child.system child.libc "system" (string) --> int32)
+(child.system "(yes 2> /dev/null; echo \$? > $dir/child.out) | head -1 > /dev/null")
+EOF
+        "$SHEN" eval -l lib/ffi.shen -l "$dir/child.shen" > /dev/null 2>&1 < /dev/null
+        check child-sigpipe "$dir/child.out" "141"
+    fi
 
     # Shen called from C without end stops before the C stack does, as an error any code can
     # catch, on the main thread and on another. The test library is made for this by the Makefile,

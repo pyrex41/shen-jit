@@ -256,6 +256,9 @@ the runtime. Each thread has its own guest stack, handlers, C roots, native stac
 A thread about to wait gives the lock up, and a foreign call can too. Waiters are served in order, each woken by its ticket rather than all at
 once, since threads waiting on sockets take the lock often.
 
+`SIGPIPE` has a handler that does nothing, set at startup, so that a write to a closed pipe fails and raises. Being a handler and not `SIG_IGN`,
+exec resets it, and a child finds the default.
+
 The first thread has everything compile again on its next call, since loops must then test for a switch, and code compiled before need not have.
 The same goes for the REPL, when it starts catching Ctrl-C.
 
