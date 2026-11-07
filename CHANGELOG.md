@@ -20,6 +20,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Under `SHEN_JIT_MAX_HEAP`, a vector or string of 256 KB or more no longer raises `out of memory` with the heap nearly
+  empty, as it did for good once the heap had grown past half the limit. The process can use more memory at the limit
+  as a result, up to about three times it.
 - Writing to a closed pipe raises an error that a program can catch, instead of ending the process. So
   `shen-jit script f | head` can now print `write-byte: Broken pipe` to stderr and exit with status 1.
 - A `c#N;` escape past 255 in a string, such as `c#955;`, no longer fails to load: `n->string` gives a Unicode scalar

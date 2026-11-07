@@ -331,7 +331,8 @@ come before those arguments.
 - **Large objects:** vectors, strings and byte buffers of 32K words or more are allocated
   apart and copied only into an image; collections mark them, scan them in place and
   free the dead ones. They count as live data for that rule, and once
-  toward `SHEN_JIT_MAX_HEAP`. An image holds them inside its heap.
+  toward `SHEN_JIT_MAX_HEAP`, which is on what the heap holds, small and large
+  objects together, and not on the room it has grown to. An image holds them inside its heap.
 - **Guest stack.** It starts at 64K slots, filled with the cleared value, and
   doubles on overflow up to a maximum of 1 GiB. Exceeding
   the maximum raises a catchable "stack overflow" error. The stack never shrinks

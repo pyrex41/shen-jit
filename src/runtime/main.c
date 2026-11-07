@@ -22,8 +22,8 @@
          that is more: less collects more often and uses less memory.
          SHEN_JIT_MAX_HEAP=SIZE stops the heap growing past SIZE, at least the
          initial semispace: an allocation that does not fit then raises "out
-         of memory". The collector copies, so the process uses about twice
-         SIZE. */
+         of memory". The collector copies, so the process can use two to three
+         times SIZE. */
 #define _DEFAULT_SOURCE /* access, sigaction */
 #include "jit.h"
 #include "ops.h"

@@ -394,6 +394,35 @@ check heap-after "$dir/heap.out" "(2-) 100000"
 printf '(trap-error (absvector 100000000) (/. E (error-to-string E)))\n' > "$dir/big.in"
 SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" < "$dir/big.in" > "$dir/big.out" 2>&1
 check heap-limit-vector "$dir/big.out" '(0-) "out of memory"'
+# The limit is on what the heap holds, not on what it has room for: semispaces grown by a list
+# since dropped leave room for a large object. Large objects and small ones share the limit,
+# and each raises at it, with the heap usable after.
+cat > "$dir/limit.shen" <<'EOF'
+(define mk N Acc -> (if (= N 0) Acc (mk (- N 1) [N | Acc])))
+(define large -> (absvector 65539))
+(define try F -> (trap-error (do (thaw F) ok) (/. E (error-to-string E))))
+(define hold Acc -> (let V (trap-error (large) (/. E false))
+                      (if (= V false) Acc (hold [V | Acc]))))
+(output "list dropped, large: ~A~%" (do (length (mk 1500000 [])) (try (freeze (large)))))
+(let Held (hold [])
+  (do (output "large at the limit: ~A~%" (try (freeze (large))))
+      (output "small at the limit: ~A~%" (try (freeze (length (mk 1000000 [])))))
+      (output "holding some: ~A~%" (> (length Held) 50))))
+(output "large after: ~A~%" (try (freeze (large))))
+(output "small after: ~A~%" (try (freeze (length (mk 100000 [])))))
+(let List (mk 3000000 [])
+  (do (output "large beside a list: ~A~%" (try (freeze (hold []))))
+      (output "kept: ~A~%" (length List))))
+EOF
+SHEN_JIT_GC_STRESS= SHEN_JIT_MAX_HEAP=64M "$SHEN" script "$dir/limit.shen" > "$dir/limit.out" 2>&1
+check limit-list-dropped "$dir/limit.out" "list dropped, large: ok"
+check limit-large "$dir/limit.out" "large at the limit: out of memory"
+check limit-small "$dir/limit.out" "small at the limit: out of memory"
+check limit-held "$dir/limit.out" "holding some: true"
+check limit-large-after "$dir/limit.out" "large after: ok"
+check limit-small-after "$dir/limit.out" "small after: ok"
+check limit-beside-list "$dir/limit.out" "large beside a list: ok"
+check limit-kept "$dir/limit.out" "kept: 3000000"
 # A write that fails raises, from write-byte once the buffer fills and from close for what is left.
 # Only Linux has it: MSYS2's shell shows one on Windows, which a native program cannot open.
 if [ "$(uname -s)" = Linux ] && [ -w /dev/full ]; then

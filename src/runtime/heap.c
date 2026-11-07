@@ -797,7 +797,7 @@ bool vm_collect(VM *vm, size_t need_words)
        would leave no room for the error. */
     if (vm->max_words && vm->space_words * 2 > vm->max_words) {
         size_t usable = vm->space_words / 10 * 9;
-        vm->hlimit = vm->area + (kept < usable ? usable - kept : 0);
+        vm->hlimit = vm->area + (live < usable ? usable - live : 0);
     }
     /* Under stress, new objects go past the words just overwritten for as long as
        they fit, or they would land on what a stale pointer points to and hide it.
@@ -834,6 +834,15 @@ uint64_t *vm_alloc(VM *vm, size_t words)
     return p;
 }
 
+/* Whether this would take what the heap holds past SHEN_JIT_MAX_HEAP, less its reserve. What
+   it holds and not what it has room for: semispaces never shrink, so one grown to the limit
+   would refuse every large object from then on, with nothing live. */
+static bool past_limit(VM *vm, size_t words)
+{
+    size_t held = (size_t)(vm->live_end - vm->space) + (size_t)(vm->hp - vm->area_from) + vm->large_words;
+    return held + words > vm->max_words / 10 * 9;
+}
+
 /* A large object: a spare block of the same size if there is one, or a new
    one. Large allocations count toward the next collection, which frees the
    dead ones, and toward SHEN_JIT_MAX_HEAP. */
@@ -841,13 +850,13 @@ static uint64_t *alloc_large(VM *vm, size_t words)
 {
     if ((vm->large_since + words > vm->space_words || vm->stress) && !vm_collect(vm, 0))
         return NULL;
-    if (vm->max_words && 2 * vm->space_words + vm->large_words + words > vm->max_words) {
+    if (vm->max_words && past_limit(vm, words)) {
         free_spares(vm);
-        if (2 * vm->space_words + vm->large_words + words > vm->max_words) {
+        if (past_limit(vm, words)) {
             if (!vm_collect(vm, 0))
                 return NULL;
             free_spares(vm);
-            if (2 * vm->space_words + vm->large_words + words > vm->max_words)
+            if (past_limit(vm, words))
                 return NULL;
         }
     }

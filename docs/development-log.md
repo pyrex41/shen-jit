@@ -457,6 +457,14 @@ Nothing in the runtime changes for it alone.
 
 - **2026-11-01.** 32 MB each at the start, doubling when live data passes 40%, never shrinking. At `SHEN_JIT_MAX_HEAP`
   (2026-11-02) the last tenth is a reserve, so that raising a catchable "out of memory" has room.
+- **The limit counts what the heap holds (2026-11-07, Apple M3 Max).** A large object was refused when twice the semispace, plus
+  large objects, passed the limit. Semispaces never shrink, so once one had grown past half the limit every `(absvector 65539)`
+  raised "out of memory", with the heap nearly empty. The override test met it at 256M, and a dropped list of 3 million
+  does it. Large objects now compare what a collection kept, what was allocated since and the large objects with the limit less its
+  reserve, and small allocations at the limit count live large objects too, which they did not, so together they
+  stop at one limit. At 64M a program can now hold 113 vectors of 512 KB, where it held none after a large list. The cost is that memory is no
+  longer capped by the old sum: that run peaked at 212 MB against 103 MB. Shrinking the semispaces was not tried, as a limit is a safety valve,
+  and programs that do not set one take neither path.
 - **A smaller default: rejected** (2026-11-04). Ryzen virtual machine, best of 3 to 7, at 32, 16, 8 and 4 MB: `tuple create`
   2.05, 1.63, 2.11, 3.64 ns; short lists 1.00, 1.01, 1.20, 1.72; kernel suite 1.00, 1.07, 1.14, 1.15. Each collection copies
   the kernel's data, about 330 µs. `SHEN_JIT_SEMISPACE` makes it a choice: on the M3 Max, `hamilton` at the same sizes takes
@@ -1016,7 +1024,6 @@ A renamed definition calls the port's everything else, so a difference belongs t
 - **The same in both, not an override's doing:** `(let F zero (fn F))` for a function of no arguments raises "zero is not a function", since `(F)` applies a symbol, as on Shen/Scheme. `(fn zero)` works, as the lowerer calls it by name.
 - **Does it notice?** Sixteen bugs planted in the port, one at a time, each failed: no undo in the unifier, no occurs check, a binding order swapped, `shen.deref` stopping at a pair, the gensym count, `shen.record-kl` always adding, a wrong exponent past the fixnum range in `shen.compute-integer` and in `shen.compute-E`, a zero digit's place lost in `shen.compute-fraction-h`, a missed code in `shen.misc?`, a missed `+` in `shen.<atom>`, the dictionary's count, `read-file-as-string` giving bytes, `fn`'s error as a value, what `shen.record-and-evaluate` returns, a dropped free-variable check. Three more broke the reader the test itself is read with: that fails too. A new override that the test does not name fails, as does a listed difference that no longer shows.
 - **Left out:** `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which read the REPL's input, display what reaches the top and end the process, as `tests/cli.sh` checks. `hash` at a bound below 1, where the kernel's never ends. Values of `hash`, which differ by design, so only its range. Running the rules together: `shen.<atom>` runs on the port's number functions, each checked alone.
-- **Seen on the way, not acted on:** at `SHEN_JIT_MAX_HEAP` the semispaces never shrink, and a large object counts against what they take, so once they have grown to the limit `(absvector 65539)` raises "out of memory" with the heap nearly empty. Running the kernel's `shen.str->bytes` on 20,000 bytes under a limit of 256M does it, as each frame holds its own copy of the rest of the string.
 
 ### The REPL and small decisions
 
