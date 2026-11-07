@@ -12,6 +12,8 @@ local PAGES = {
   io = 'Chunk I/O',
   framing = 'Binary framing',
   ['io-sockets'] = 'Socket I/O endpoints',
+  deadlines = 'Operation deadlines',
+  ['http-head'] = 'HTTP head framing',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 

@@ -355,7 +355,9 @@ Optional `lib/io.shen` adds bounded readers and writers over byte views, with me
 independently of Shen's default I/O. See [Chunk I/O](https://github.com/tizoc/shen-jit/blob/main/docs/io.md)
 for loading, file helpers, partial transfers, cleanup and typed results. [Binary framing](https://github.com/tizoc/shen-jit/blob/main/docs/framing.md)
 adds bounded messages over those readers; [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md)
-connect the same I/O API to TCP connections.
+connect the same I/O API to TCP connections. [Operation deadlines](https://github.com/tizoc/shen-jit/blob/main/docs/deadlines.md)
+provide total monotonic budgets; [HTTP head framing](https://github.com/tizoc/shen-jit/blob/main/docs/http-head.md)
+captures bounded header blocks while preserving body bytes.
 
 ### Calling C
 

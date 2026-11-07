@@ -1,0 +1,13 @@
+\\ Definitions are already in the image. Every allocation collects in this workload.
+(let D (deadline.after (freeze 0) 100)
+     E (io.input-buffer (buffer.from-string "xc#13;c#10;c#13;c#10;body"))
+     R (io.reader E [[chunk-size 2]])
+     F (http.head-reader R 8)
+     Head (http.read-head-until F D)
+     Body (io.read-all R 4)
+     _ (io.close E)
+     _ (shen-jit.collect)
+  (if (and (= (buffer.string (hd (tl Head))) "xc#13;c#10;c#13;c#10;")
+           (and (= (buffer.string (hd (tl Body))) "body") (= (deadline.remaining D) 100)))
+      (output "http gc ok~%")
+      (error "HTTP head or deadline ownership failed under GC stress")))

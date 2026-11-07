@@ -53,8 +53,10 @@ They hold the VM lock, so those buffers cannot move during the call. A positive 
 immediately; a short send is reported to the I/O core, whose writer retains the unsent suffix.
 
 Readiness shortage and EINTR wait/retry in Shen. Polling waits use 100 ms slices and release the VM lock,
-allowing other threads and the runtime's interruption checks to run. There is no deadline or cancellation
-option yet; `[]` is still the only transfer-options value. Slices are not operation timeouts. Unexpected
+allowing other threads and the runtime's interruption checks to run.
+[Absolute deadlines](deadlines.md) can bound a complete operation across retries and partial progress.
+Install one with `io.socket-deadline E D`, or remove it with `io.socket-unlimited E`. Transfer options
+remain `[]`; cancellation is not implemented. Slices alone are not operation timeouts. Unexpected
 exceptions, including interruption, follow the core's raising/scope cleanup behavior.
 
 Transfer, poll, shutdown and close failures preserve operation, Name and the native domain/code in the I/O
@@ -91,7 +93,8 @@ can accept a peer, close its listener, then run the [binary framing](framing.md)
 
 The handler owns the connected endpoint, echoes each complete frame and flushes before accepting the
 next message. It returns after peer EOF or failure. A real server still needs a connection cap and an
-accept loop; slow-peer deadlines and a broader HTTP protocol layer are later work.
+accept loop; [HTTP head framing](http-head.md) and deadlines are available, while request semantics,
+body framing and response handling remain separate work.
 
 `make test-io` tests loopback transfer, large framed echo, half-close, failed-flush retention, native error
 capture, repeated close, image invalidation and targeted every-allocation GC. No external network service

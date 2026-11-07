@@ -29,42 +29,69 @@
     (let Address (shen-jit.pointer-address Token)
       (if (> Address 0) (- Address 1) (error "io: socket endpoint is stale"))))
 
+\\ A policy cell keeps one absolute deadline across every short transfer and poll retry.
+(define io.socket-budget
+  Policy Op Name ->
+    (let D (<-address Policy 0)
+      (if (or (empty? D) (not (deadline.expired? D)))
+          [ok]
+          [error (io.native-error Op timeout 0 Name "deadline expired")])))
+
+(define io.socket-slice
+  Policy ->
+    (let D (<-address Policy 0)
+      (if (empty? D) 100 (deadline.slice D 100))))
+
 (define io.socket-wait
-  Token Name Event ->
-    (let Ready (socket.c-poll (socket.pollfd (io.socket-id Token) Event) 1 100)
-         Code (if (< Ready 0) (io.socket-code) 0)
-      (cond ((> Ready 0) [ok])
-            ((or (= Ready 0) (io.socket-again? Code)) (io.socket-wait Token Name Event))
-            (true [error (io.socket-error poll Name Code)]))))
+  Token Name Policy Event Op ->
+    (let Slice (io.socket-slice Policy)
+      (if (= Slice 0)
+          [error (io.native-error Op timeout 0 Name "deadline expired")]
+          (let Ready (socket.c-poll (socket.pollfd (io.socket-id Token) Event) 1 Slice)
+               Code (if (< Ready 0) (io.socket-code) 0)
+            (cond ((> Ready 0) [ok])
+                  ((or (= Ready 0) (io.socket-again? Code))
+                    (io.socket-wait Token Name Policy Event Op))
+                  (true [error (io.socket-error poll Name Code)]))))))
 
 (define io.socket-read
-  Token Name Chunk ->
+  Token Name Policy Chunk ->
+    (io.socket-read-ready Token Name Policy Chunk (io.socket-budget Policy read Name)))
+
+(define io.socket-read-ready
+  _ _ _ _ [error Error] -> [error Error]
+  Token Name Policy Chunk [ok] ->
     (let N (socket.c-recv (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) 0)
          Code (if (< N 0) (io.socket-code) 0)
       (cond ((> N 0) [read N])
             ((= N 0) [eof])
             ((io.socket-again? Code)
-              (io.socket-read-ready Token Name Chunk
-                (io.socket-wait Token Name (socket.readable-event))))
+              (io.socket-read-after-wait Token Name Policy Chunk
+                (io.socket-wait Token Name Policy (socket.readable-event) read)))
             (true [error (io.socket-error read Name Code)]))))
 
-(define io.socket-read-ready
-  _ _ _ [error Error] -> [error Error]
-  Token Name Chunk [ok] -> (io.socket-read Token Name Chunk))
+(define io.socket-read-after-wait
+  _ _ _ _ [error Error] -> [error Error]
+  Token Name Policy Chunk [ok] -> (io.socket-read Token Name Policy Chunk))
 
 (define io.socket-write
-  Token Name Chunk ->
+  Token Name Policy Chunk ->
+    (io.socket-write-ready Token Name Policy Chunk (io.socket-budget Policy write Name)))
+
+(define io.socket-write-ready
+  _ _ _ _ [error Error] -> [error Error]
+  Token Name Policy Chunk [ok] ->
     (let N (socket.c-send (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) (socket.send-flags))
          Code (if (< N 0) (io.socket-code) 0)
       (cond ((>= N 0) [written N])
             ((io.socket-again? Code)
-              (io.socket-write-ready Token Name Chunk
-                (io.socket-wait Token Name (socket.writable-event))))
+              (io.socket-write-after-wait Token Name Policy Chunk
+                (io.socket-wait Token Name Policy (socket.writable-event) write)))
             (true [error (io.socket-error write Name Code)]))))
 
-(define io.socket-write-ready
-  _ _ _ [error Error] -> [error Error]
-  Token Name Chunk [ok] -> (io.socket-write Token Name Chunk))
+(define io.socket-write-after-wait
+  _ _ _ _ [error Error] -> [error Error]
+  Token Name Policy Chunk [ok] -> (io.socket-write Token Name Policy Chunk))
 
 (define io.socket-close
   Token Name ->
@@ -77,11 +104,12 @@
 (define io.socket-make
   S Name ->
     (let Token (io.socket-token S)
+         Policy (io.record [[]])
          E (io.endpoint Name read-write 65536
-                        (/. B (io.socket-read Token Name B))
-                        (/. B (io.socket-write Token Name B))
+                        (/. B (io.socket-read Token Name Policy B))
+                        (/. B (io.socket-write Token Name Policy B))
                         (freeze (io.socket-close Token Name)))
-      (do (address-> E 12 Token) E)))
+      (do (address-> E 12 Token) (address-> E 13 Policy) E)))
 
 (define io.socket
   S Name ->
@@ -103,6 +131,17 @@
          _ (io.check E read (<-address E 9))
       Token))
 
+(define io.socket-deadline
+  E D ->
+    (let _ (io.socket-check E)
+         _ (deadline.check D)
+      (do (address-> (<-address E 13) 0 D) E)))
+
+(define io.socket-unlimited
+  E ->
+    (let _ (io.socket-check E)
+      (do (address-> (<-address E 13) 0 []) E)))
+
 \\ Flush before sending FIN. Read EOF, write shutdown and full close remain separate states.
 (define io.shutdown-write
   E ->
@@ -114,14 +153,21 @@
 
 (define io.socket-shutdown-ready
   _ _ [error Error _] -> [error Error]
-  E Token [ok _] ->
+  E Token [ok N] ->
+    (io.socket-shutdown-budget E Token N (io.socket-budget (<-address E 13) shutdown (<-address E 1))))
+
+(define io.socket-shutdown-budget
+  _ _ N [error Error] -> [error (io.progress Error N)]
+  E Token N [ok] ->
     (let Result (socket.c-shutdown (io.socket-id Token) 1)
          Code (if (< Result 0) (io.socket-code) 0)
       (if (= Result 0)
           (do (address-> E 2 read)
               (address-> E 10 [])
               [ok])
-          [error (io.socket-error shutdown (<-address E 1) Code)])))
+          [error (io.progress (io.socket-error shutdown (<-address E 1) Code) N)])))
 
 (declare io.socket [number --> [string --> io.endpoint]])
+(declare io.socket-deadline [io.endpoint --> [deadline --> io.endpoint]])
+(declare io.socket-unlimited [io.endpoint --> io.endpoint])
 (declare io.shutdown-write [io.endpoint --> io.close-result])

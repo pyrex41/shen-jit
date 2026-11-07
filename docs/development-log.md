@@ -1115,6 +1115,38 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### HTTP head framing and operation deadlines (2026-11-07, M3 Max, macOS arm64)
+
+- Added `lib/http-head.shen`: capture one CRLFCRLF-terminated block over our I/O reader, with an
+  explicit 4..1048576 byte limit, one fixed accumulator and delimiter state carried across chunks.
+  It scans incoming bytes once and leaves body/next bytes in the reader's one queue. New
+  `io.peek-some` exposes the available span after waiting only for some input, avoiding a wait for
+  a full buffer. Captures own their bytes and the accumulator is dropped on completion/failure.
+- This is framing, not request syntax or HTTP body-length validation. Bare LF, CR without LF and
+  inappropriate controls are rejected, but request lines, field names, Host and CL/TE semantics
+  remain a complete parser's job. EOF inside a partial head is an error; failure is terminal for
+  the capture. `tools/http-head-capture.shen` owns a connection for one timed capture and closes it;
+  it sends no response and is not an HTTP server.
+- `lib/deadline.shen` keeps one absolute millisecond endpoint with an injectable frozen clock.
+  `lib/clock.shen` uses existing FFI for CLOCK_MONOTONIC (Linux/macOS) or GetTickCount64 (Windows),
+  with integer millisecond conversion and no runtime change. Saved budgets reload stale. One task
+  owns the budget and clock state. Clock resolution and scheduling do not provide a real-time bound.
+- Socket policy checks that same budget before native attempts, on every poll slice and before FIN.
+  Partial progress does not renew it. Timeouts keep the existing structured I/O result shapes with
+  domain timeout and acknowledged totals. Reader timeouts are transient; a fresh budget permits
+  retry. Writers retain their suffix for explicit retry, and full close performs cleanup despite
+  expiry. A private backend-context slot holds the policy cell; ordinary endpoints default empty.
+  Files, DNS/connect/accept, arbitrary blocking calls and cancellation are outside this deadline API.
+- The new suites pass 17 fake-clock checks, 131 HTTP framing checks, 23 native timeout/progress
+  checks, a typed client and 3 image/GC/type checks. Four core regressions also verify that a pending
+  timeout behind queued input is reported before a later retry; consuming the prefix cannot discard it. HTTP checks cover every small-header split and
+  truncation, limit boundaries, body preservation, invalid controls, transport errors and the total
+  budget at completion. Native tests cover retries, timeout progress, flush retention and cleanup.
+  An independent Python TCP probe passes normal, oversized and continuously slow input cases.
+- The full fast tier, guide examples/rendered links and publication scan pass. Existing `test-io`
+  includes these suites on every CI platform; managed cases run on static builds and unavailable
+  native cases explicitly skip. HTTP framing and deadlines have separate pages linked from the guide.
+
 ### Binary framing and socket endpoints (2026-11-07, M3 Max, macOS arm64)
 
 - Added `lib/frame.shen`: a two-byte tag and four-byte payload length, both big-endian, over the

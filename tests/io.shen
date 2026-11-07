@@ -201,4 +201,21 @@
   (do (io-test.raises "backend exception" (freeze (io.read-some E (buffer.new 1) [])))
       (io-test.check "backend exception releases busy state" [ok] (freeze (io.close E)))))
 
+\\ A timeout behind queued input must be observed once before a later operation retries it.
+(let State (io-test.state)
+     Error (io.native-error read timeout 0 "source" "delayed timeout")
+     E (io-test.source "ab" 2 [error Error] State)
+     R (io.reader E [])
+  (do (io-test.check "peek delivers queued progress before timeout" "ab"
+        (freeze (io-test.view (io.peek R 4))))
+      (io.consume R 2)
+      (io-test.check "consume does not discard an unreported timeout" [error Error]
+        (freeze (io.read-chunk R)))
+      (io-test.check "timeout is reported before another backend call" 2
+        (freeze (<-address State 1)))
+      (io.read-chunk R)
+      (io-test.check "later operation can retry a reported timeout" 3
+        (freeze (<-address State 1)))
+      (io.close E)))
+
 (output "~A passed, ~A failed~%" (value io-test.passed) (value io-test.failed))

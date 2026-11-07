@@ -16,6 +16,8 @@ on:
       - docs/io.md
       - docs/framing.md
       - docs/io-sockets.md
+      - docs/deadlines.md
+      - docs/http-head.md
       - site/**
       - assets/**
       - .github/workflows/pages.yml

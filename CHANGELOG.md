@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Optional HTTP head framing preserves unread body bytes under an explicit byte limit. Monotonic
+  operation deadlines cover socket transfers across short progress and retries, with typed results,
+  injected clocks and transient reader timeout recovery.
+
 - Optional `lib/frame.shen` reads bounded binary frames across I/O chunks; `lib/io-socket.shen` adds
   owned TCP endpoints and flushing write shutdown over existing sockets. `tools/frame-echo.shen`
   demonstrates framed sessions with bounded payloads and one flushed reply per message.

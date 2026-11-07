@@ -57,7 +57,7 @@ writable destinations, including empty requests.
 | `io.read-exact E View []` | `[ok Length]`, `[eof Total]`, `[error Error Total]` |
 | `io.write-all E View []` | `[ok Length]`, `[error Error Total]` |
 
-For a nonempty request, successful N is positive and may be shorter than View. A short read is not EOF.
+For a nonempty request, successful N is positive and may be shorter than View. A short read is not EOF. Socket operations can use an installed [absolute deadline](deadlines.md).
 An error from a single transfer means no bytes delivered by that call; accumulated operations report the
 acknowledged total. Resume from that total, not the start. Bytes already read remain in the destination;
 undelivered bytes remain untouched. An unexpected backend exception or malformed result raises.
@@ -77,6 +77,7 @@ positive fixnums, at most 1048576 bytes, and cannot exceed the endpoint's own bo
 | --- | --- |
 | `io.read-chunk R` | `[chunk OwnedView]`, `[eof]` or `[error Error]`; consumes available input |
 | `io.peek R Count` | `[ok OwnedView]`, `[eof]` or `[error Error]`; fill up to Count without consuming |
+| `io.peek-some R` | `[ok OwnedView]`, EOF or error; wait only for some input, preserving it in the queue |
 | `io.consume R Count` | Consume only already available bytes, returning R |
 | `io.available R`, `io.position R` | Queued bytes and total bytes consumed since reader creation |
 | `io.read-into R View` | `[read N]`, `[eof]` or `[error Error]`; consume into a caller's range |
@@ -84,7 +85,9 @@ positive fixnums, at most 1048576 bytes, and cannot exceed the endpoint's own bo
 | `io.read-all R Limit` | `[ok OwnedView]` or `[error Error]`; aggregate up to the explicit limit |
 
 A peek count cannot exceed reader capacity. Peek can return a shorter view at EOF/error; queued bytes
-are delivered before the pending terminal condition, which is then remembered. A zero peek returns an
+are delivered before the pending terminal condition. EOF and hard errors are remembered; timeouts are
+transient after they have been reported, and a later reader operation can retry under a new budget.
+Consuming a queued prefix does not discard its pending timeout. A zero peek returns an
 empty owned view without probing. Returned views own their bytes and survive consumption, refill and
 endpoint close; they do not alias the refill buffer. A retained caller view is never a hidden mutable feed.
 

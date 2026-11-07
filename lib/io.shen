@@ -72,14 +72,14 @@
     [io-error Op Domain Code Resource Message N (append Secondary [Other])])
 
 \\ Endpoint slots: tag, name, mode, capacity, read/write/close callbacks, state,
-\\ remembered close result, reader/writer leases, in-flight flag, optional native guard.
+\\ remembered close result, reader/writer leases, in-flight flag, optional native guard and backend context.
 (define io.endpoint
   Name Mode Capacity Read Write Close ->
     (let Cap (io.capacity Capacity)
          _ (if (and (string? Name) (element? Mode [read write read-write]))
                true
                (error "io: invalid endpoint name or mode"))
-      (io.record [io.endpoint Name Mode Cap Read Write Close open [] [] [] false []])))
+      (io.record [io.endpoint Name Mode Cap Read Write Close open [] [] [] false [] []])))
 
 (define io.endpoint-check
   E -> (if (io.tag? E io.endpoint) E (error "io: not an endpoint")))
@@ -211,9 +211,23 @@
          R (io.record [io.reader E (buffer.new Cap) 0 0 [] 0])
       (do (address-> E 9 R) R)))
 
+(define io.timeout-result?
+  [retry-timeout _] -> true
+  _ -> false)
+
+(define io.reader-terminal
+  R -> (io.terminal-result R (<-address R 5)))
+
+(define io.terminal-result
+  R [pending-timeout Error] ->
+    (do (address-> R 5 [retry-timeout Error]) [error Error])
+  _ Terminal -> Terminal)
+
 (define io.reader-check
   R -> (if (io.tag? R io.reader)
-           (do (io.check (<-address R 1) read R) R)
+           (do (io.check (<-address R 1) read R)
+               (if (io.timeout-result? (<-address R 5)) (address-> R 5 []) true)
+               R)
            (error "io: not a reader")))
 
 (define io.available
@@ -240,6 +254,11 @@
 
 (define io.fill-step
   R Need [read N] -> (do (address-> R 4 (+ (<-address R 4) N)) (io.fill-reader R Need))
+  R _ [error Error] ->
+    (do (address-> R 5 (if (= (io.error-domain Error) timeout)
+                           [pending-timeout Error]
+                           [error Error]))
+        R)
   R _ Terminal -> (do (address-> R 5 Terminal) R))
 
 (define io.peek
@@ -252,7 +271,17 @@
          Available (- (<-address R 4) (<-address R 3))
       (if (or (> Available 0) (= N 0))
           [ok (buffer.wrap (buffer.bytes (buffer.slice B (<-address R 3) (io.min N Available))))]
-          (<-address R 5))))
+          (io.reader-terminal R))))
+
+\\ Unlike peek Count, this waits only for some input, then exposes an owned available span.
+(define io.peek-some
+  R ->
+    (let _ (io.reader-check R)
+         _ (io.fill-reader R 1)
+         N (- (<-address R 4) (<-address R 3))
+      (if (> N 0)
+          [ok (buffer.wrap (buffer.bytes (buffer.slice (<-address R 2) (<-address R 3) N)))]
+          (io.reader-terminal R))))
 
 (define io.consume
   R Count ->
@@ -271,7 +300,7 @@
       (if (> N 0)
           (let Out (buffer.wrap (buffer.bytes (buffer.slice (<-address R 2) (<-address R 3) N)))
             (do (io.consume R N) [chunk Out]))
-          (<-address R 5))))
+          (io.reader-terminal R))))
 
 (define io.read-into
   R V ->
@@ -286,7 +315,7 @@
                 (do (buffer.copy! V 0 (<-address R 2) (<-address R 3) N)
                     (io.consume R N)
                     [read N])
-                (<-address R 5))))))
+                (io.reader-terminal R))))))
 
 (define io.reader-exact
   R V ->
@@ -614,6 +643,7 @@
 (declare io.available [io.reader --> number])
 (declare io.position [io.reader --> number])
 (declare io.peek [io.reader --> [number --> io.peek-result]])
+(declare io.peek-some [io.reader --> io.peek-result])
 (declare io.consume [io.reader --> [number --> io.reader]])
 (declare io.read-chunk [io.reader --> io.chunk-result])
 (declare io.read-into [io.reader --> [buffer.view --> io.read-result]])

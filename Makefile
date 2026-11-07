@@ -192,7 +192,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets
+GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -315,6 +315,15 @@ test-io: $(BUILD)/shen-jit
 	  -l lib/io-socket.shen -l lib/frame.shen -l tools/frame-echo.shen -l tests/io_socket.shen | $(FFI_RESULT)
 	sh tests/frame_image.sh $(SHEN_JIT)
 	sh tests/io_socket_image.sh $(SHEN_JIT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l tests/deadline.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen \
+	  -l lib/http-head.shen -l tests/http_head.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
+	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l tests/io_deadline.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
+	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/http-head.shen \
+	  -e '(tc +)' -l tests/http_typed.shen | $(FFI_RESULT)
+	sh tests/http_image.sh $(SHEN_JIT)
 
 fuzz-native: $(BUILD)/shen-jit
 	python3 tests/native_fuzz.py
