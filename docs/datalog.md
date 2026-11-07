@@ -40,7 +40,7 @@ false
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
 | `(datalog.ask Db (Relation Term ...))` | The tuples that match, in no particular order, with variables, constants and `_` |
 | `(datalog.define Name Items)`, `(datalog.match Db Pattern)` | The same as `defdatalog` and `datalog.ask` with the program as data, where a variable is `[var "X"]` and `_` is `[any]` |
-| `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the KL that gives |
+| `(datalog.plans Name)`, `(datalog.code Name)` | Each rule's order of joins with no sizes to go by, and the code that gives: each kernel as written for `lib/native.shen`, and the KL that calls it |
 | `(datalog.stats Db)` | The rounds, how many plans were made, and each relation's tuples, the derivations that made them and its indexes |
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
 

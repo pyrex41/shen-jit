@@ -1560,6 +1560,32 @@ Now a tuple is u32 columns in a byte buffer, new tuples are a range of it, and t
 
 Insert, find, index and rehash are written with `while`, `for`, `when`, `unless`, `exit` and `and`, from `lib/native.shen`, in place of labels and jumps: 65 lines where there were 99, and no label left. Five runs each, in alternation: closure 115 to 124 ms against 123 to 131, the skewed join 121 to 126 against 120 to 128, small points-to 160 to 163 against 158 to 164, within noise. Fingerprint bugs planted in the structured kernels are caught as before.
 
+### Native joins (2026-11-07, Apple M3 Max, against the same joins as KL)
+
+The first real use of `lib/native.shen`'s structured control from a generator rather than by hand. Each join order is one kernel: a `for` for a scan, a probe and a `while` along the chain for a lookup, the head's insert inline, and a KL function around it that grows the head relation when the kernel says it is full and calls it again. 206 lines of code, beside the KL generator, which stays for what does not fit.
+
+| ms, two runs each, later runs | KL joins | Native |
+| --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 117 to 122 | 82 to 101 |
+| Closure, dense | 9.0 to 9.3 | 5.9 to 6.8 |
+| Nonlinear closure | 464 to 467 | 207 to 230 |
+| Same generation | 19.2 to 19.7 | 11.8 to 12.6 |
+| Skewed join (2,222,705) | 121 to 124 | 88 to 100 |
+| The kernel's call graph | 9.7 to 10 | 7.3 to 8.1 |
+| Mutual recursion, triangles | 0.7, 0.3 | 0.7 to 1.1, 0.3 |
+| Points-to small, orders a / b | 177 / 264 | 115 / 171 |
+| Points-to large, orders a / b / c | 780 / 1,027 / 1,032 | 506 to 536 / 717 to 720 / 670 to 728 |
+| Chain of four joins, orders a / b | 17.4 / 17.4 | 16.7 to 18.4 / 16.9 to 18.4 |
+
+- **Kept.** 1.2 to 2.2 times as fast where joins do the work, and the same where loading facts does. Nonlinear closure gains most, as it is 41 million derivations of which almost all are repeats, each now a probe without a call.
+- **Compiling costs more:** a four-rule program run over three facts, compiling every plan each time, took 0.90 ms against 0.25 with KL joins, 200 runs each. A run that makes 46 to 66 plans, points-to, shows no difference in its first run.
+- **A variable costs no register,** being read from its column at each use, and nothing showed a cost in that: a column read is one load from a buffer the kernel holds.
+- **Restarting.** A kernel cannot call to grow a relation, so it returns where its outermost scan stood, plus one. A first version resumed an inner scan's position when the plan began with a lookup, and so skipped tuples: 1 generated program in 300 found it. Only a scan at the first level resumes now; anything else starts again from the beginning, which repeats derivations and nothing else.
+- **Register limits.** Every name is a register, live for the whole kernel, and 16 word registers is the most: a four-atom chain needed 17 and fell back to KL, until the insert's offset temporary went, recomputed instead. Temporaries used only within one step share names across steps, which the generator must know is safe. With that, no plan in the tests or workloads falls back; a wider one would, correctly, and `datalog.*fallbacks*` counts them.
+- **What the structured forms did well:** a step's statements nest inside the previous step's loop, so the generator is a fold over the plan with no label bookkeeping; named loops let a probe or an insert exit itself inside any depth; the expander drops joins that cannot be reached, so the checker's refusal of unreachable code never came up.
+- **What they lacked:** reuse of registers by liveness, the one limit hit. An empty `and` is true, which let a scan with no checks generate a needless `when` until the generator left it out. Neither called for a change to `lib/native.shen` yet.
+- **Checked** against the reference and against the same programs with KL joins on 300 generated programs, against SWI-Prolog on 300, and on a plan that begins with a lookup and grows its head partway through an inner scan. Results on every workload match the KL joins' tuple counts.
+
 ### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
 
 The same rules and facts, written out for Soufflé; every result it finished matches ours. Its compiled programs are built from the C++ it generates with the flags of its own compile script, as that script's include paths fail in Homebrew's bottle. That bottle has no OpenMP, so Soufflé ran on one thread, as we do, and it keeps 64-bit values where we keep 32. Times in ms, best of three: ours is `datalog.run` with facts as a list, and Soufflé's its process less the same with no facts, which is its startup, about 15 ms. Building took it 3.0 to 3.7 s a program.

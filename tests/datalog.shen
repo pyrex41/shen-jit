@@ -15,9 +15,18 @@
 
 \* The reference and both kinds of plan give the same sorted tuples. *\
 (define dt.runs
-  Name Facts -> [(datalog.run-naive Name Facts) (datalog.run Name Facts) (dt.run-fixed Name Facts)])
+  Name Facts -> [(datalog.run-naive Name Facts) (datalog.run Name Facts) (dt.run-fixed Name Facts) (dt.run-kl Name Facts)])
 
 \* With plans that do not follow sizes. *\
+\* With joins as KL, not native kernels, compiled afresh. *\
+(define dt.run-kl
+  Name Facts -> (let _ (set datalog.*native* false)
+                     _ (datalog.forget-code Name)
+                     Db (datalog.run Name Facts)
+                     _ (set datalog.*native* true)
+                     _ (datalog.forget-code Name)
+                  Db))
+
 (define dt.run-fixed
   Name Facts -> (let _ (set datalog.*adaptive* false)
                      Db (datalog.run Name Facts)
@@ -211,7 +220,8 @@
 (let Db (datalog.run dt.reach (dt.chain 0 2000 []))
   (dt.check "plans again as sizes grow" (> (hd (tl (hd (tl (datalog.stats Db))))) 4) true))
 (dt.check "plans are there to read" (cons? (datalog.plans dt.dep)) true)
-(dt.check "code is there to read" (hd (hd (datalog.code dt.dep))) defun)
+(dt.check "code is there to read" (hd (hd (datalog.code dt.dep))) define-native)
+(dt.check "with the KL around it" (element? defun (map (function hd) (datalog.code dt.dep))) true)
 
 \* A rule whose order matters, written either way, gives one result. *\
 (defdatalog dt.order-a
@@ -313,6 +323,28 @@
 \* Too much allocation for GC stress, whose run sets this first, and the rest there has buffers moving. *\
 (if (trap-error (value dt.*light*) (/. E false)) ok (dt.kernel-test))
 
+\* A plan that begins with a lookup, whose head grows while an inner scan is part done: the kernel
+   starts again from the beginning, not from where the inner scan stood. *\
+(defdatalog dt.restart
+  (relation k [symbol integer])
+  (relation big [integer])
+  (relation out [integer integer])
+  (rule (out X Y) <-- (k a X) (big Y)))
+
+(define dt.upto-facts
+  _ 0 Acc -> Acc
+  Rel N Acc -> (dt.upto-facts Rel (- N 1) [[Rel N] | Acc]))
+
+(define dt.pairs-of
+  [] _ -> []
+  [X | Xs] Ys -> (append (map (/. Y [X Y]) Ys) (dt.pairs-of Xs Ys)))
+
+(dt.same "restarting a kernel" (append [[k a 1] [k a 2] [k b 3] [k a 3]] (dt.upto-facts big 40 []))
+  dt.restart out (dt.pairs-of [1 2 3] (map (/. F (hd (tl F))) (dt.upto-facts big 40 []))))
+
+\* Native kernels run, and the plans that fall back to KL are few. *\
+(dt.check "native kernels ran" (< (value datalog.*fallbacks*) 20) true)
+
 \* Errors, each when the program is defined. *\
 (dt.raises "undeclared" "no relation nope"
   (freeze (datalog.define dt.bad [[rule [nope a] []]])))
@@ -380,11 +412,12 @@
             Reference (datalog.run-naive Name Facts)
             Db (datalog.run Name Facts)
             Fixed (dt.run-fixed Name Facts)
+            Kl (dt.run-kl Name Facts)
             Name2 (dtg.numbered "dt.h" N)
             _ (datalog.define Name2 (append (dtg.items (dtg.shuffle Relations) [])
                                             (dtg.rule-items (dtg.shuffle (dtg.shuffle-bodies Rules)))))
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
-            _ (dt.compare-all N [Fixed Db] Reference Relations)
+            _ (dt.compare-all N [Fixed Db Kl] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
          (dt.generated (- N 1))))
 

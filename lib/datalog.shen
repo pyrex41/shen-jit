@@ -1017,8 +1017,9 @@
 (define datalog.callable
   Name -> (eval-kl [lambda x [Name x]]))
 
+\\ A kernel's form shows what it was written as; it is installed already.
 (define datalog.install
-  Forms -> (map (/. F (eval-kl F)) Forms))
+  Forms -> (map (/. F (if (= (hd F) define-native) skip (eval-kl F))) Forms))
 
 \\ The code for these steps, kept with the program, as [Closure | Forms]. There are only so many
 \\ orders a rule can join in.
@@ -1029,13 +1030,272 @@
        (if (cons? Entry)
            (tl Entry)
            (let Ctx [Relations Constants (get Name datalog.indexes)]
-                _ (set datalog.*forms* [])
-                Fn (datalog.gen-plan Steps Ctx (datalog.next-name Name))
+                Prefix (datalog.next-name Name)
+                Fn (datalog.gen-either Steps Ctx Prefix)
                 Forms (reverse (value datalog.*forms*))
                 _ (datalog.install Forms)
                 Code [(datalog.callable Fn) | Forms]
                 _ (shen.dict-> Cache Steps Code)
              Code))))
+
+\\ ---------------------------------------------------------------------------
+\\ Native joins. A plan becomes one kernel of word registers, written with lib/native.shen's
+\\ structured control, which looks up, compares and inserts inline and calls nothing. A variable
+\\ costs no register: it is read from its tuple's column where it is used. When a relation it adds
+\\ to has no room, the kernel gives where its outer loop stood, plus one, and a KL function grows
+\\ the relation and calls it again from there, as deriving a tuple twice does no harm. A plan the
+\\ registers cannot hold, or anything else the assembler refuses, stays KL.
+
+(set datalog.*native* true)
+(set datalog.*fallbacks* 0)
+
+(define datalog.gen-either
+  Steps Ctx Prefix
+  -> (if (value datalog.*native*)
+         (trap-error (do (set datalog.*forms* []) (datalog.native-plan Steps Ctx Prefix))
+                     (/. E (do (set datalog.*fallbacks* (+ 1 (value datalog.*fallbacks*)))
+                               (set datalog.*forms* [])
+                               (datalog.gen-plan Steps Ctx Prefix))))
+         (do (set datalog.*forms* []) (datalog.gen-plan Steps Ctx Prefix))))
+
+(define datalog.word-name
+  Prefix N -> (intern (cn Prefix (str N))))
+
+\\ A kernel's parameter, as [Name | KL form computing it from s and start], each once.
+(define datalog.param
+  Name Form -> (do (if (cons? (assoc Name (value datalog.*params*)))
+                       skip
+                       (set datalog.*params* (append (value datalog.*params*) [[Name | Form]])))
+                   Name))
+
+(define datalog.record-form
+  Slot -> [<-address s Slot])
+
+(define datalog.tuples-param
+  Slot -> (datalog.param (datalog.word-name "Tup" Slot) [<-address (datalog.record-form Slot) 2]))
+
+(define datalog.mask
+  -> 4294967295)
+
+\\ The word a term stands for: an interned value.
+(define datalog.native-value
+  [var V] Env _ -> (tl (assoc V Env))
+  C _ Constants -> (datalog.position C Constants 0))
+
+\\ The integer a term stands for, from the run's integers by value.
+(define datalog.native-integer
+  [var V] Env [_ _ _ N] -> [u64 (datalog.param (intern "Ints") [<-address s (+ 1 N)]) [shift-left (tl (assoc V Env)) 3]]
+  C _ _ -> C)
+
+(define datalog.native-test
+  = A B Env [R Constants | X] -> [= (datalog.native-value A Env Constants) (datalog.native-value B Env Constants)]
+  != A B Env [R Constants | X] -> [!= (datalog.native-value A Env Constants) (datalog.native-value B Env Constants)]
+  Op A B Env Ctx -> [Op (datalog.native-integer A Env Ctx) (datalog.native-integer B Env Ctx)])
+
+\\ Columns of the tuple whose first byte is Base in Tuples.
+(define datalog.column-word
+  Tuples Base I -> [u32 Tuples (datalog.offset-form Base (* 4 (- I 1)))])
+
+(define datalog.native-binds
+  [] _ _ Env -> Env
+  [[bind V I] | Cs] Tuples Base Env -> (datalog.native-binds Cs Tuples Base [[V | (datalog.column-word Tuples Base I)] | Env])
+  [_ | Cs] Tuples Base Env -> (datalog.native-binds Cs Tuples Base Env))
+
+\\ Checks come after binds, as a check can read a column bound earlier in the same atom.
+(define datalog.native-checks
+  [] _ _ _ _ -> []
+  [[check T I] | Cs] Tuples Base Env Constants
+  -> [[= (datalog.column-word Tuples Base I) (datalog.native-value T Env Constants)]
+      | (datalog.native-checks Cs Tuples Base Env Constants)]
+  [_ | Cs] Tuples Base Env Constants -> (datalog.native-checks Cs Tuples Base Env Constants))
+
+\\ Statements for these steps. Outer is the outermost scan's position, from which a kernel without
+\\ room starts again; none before the first step, and restart when that step is not a scan.
+(define datalog.native-steps
+  [] _ _ _ _ -> []
+  [[filter Op A B] | Steps] Ctx Env Level Outer
+  -> [[when (datalog.native-test Op A B Env Ctx) | (datalog.native-steps Steps Ctx Env Level Outer)]]
+  [[emit Rel | Terms] | _] Ctx Env _ Outer -> (datalog.native-insert Rel Terms Ctx Env Outer)
+  [[scan Rel Source Columns] | Steps] [Relations Constants Indexes N] Env Level Outer
+  -> (let Ctx [Relations Constants Indexes N]
+          Slot (datalog.relation-slot Rel Relations)
+          Stride (datalog.stride (datalog.arity-in Rel Relations))
+          Tuples (datalog.tuples-param Slot)
+          From (if (and (= Outer none) (= Level 1))
+                   (datalog.param (intern "Start") start)
+                   (datalog.param (datalog.word-name "From" Level) (if (= Source new) [<-address (datalog.record-form Slot) 5] 0)))
+          To (datalog.param (datalog.word-name "To" Level) [<-address (datalog.record-form Slot) 6])
+          P (datalog.word-name "P" Level)
+          B (datalog.word-name "B" Level)
+          Inner (datalog.native-binds Columns Tuples B Env)
+       [[for P From To
+          [word B [* P Stride]]
+          | (datalog.guarded (datalog.native-checks Columns Tuples B Inner Constants)
+              (datalog.native-steps Steps Ctx Inner (+ Level 1) (if (and (= Outer none) (= Level 1)) P (datalog.outer Outer))))]])
+  [[lookup Rel Keys Terms Columns] | Steps] [Relations Constants Indexes N] Env Level Outer
+  -> (let Ctx [Relations Constants Indexes N]
+          Slot (datalog.relation-slot Rel Relations)
+          Values (map (/. T (datalog.native-value T Env Constants)) Terms)
+       (if (datalog.whole-tuple? Rel Keys Relations)
+           (datalog.native-member Rel Slot Values Steps Ctx Env Level (datalog.outer Outer))
+           (datalog.native-chain Rel Slot Keys Values Columns Steps Ctx Env Level (datalog.outer Outer)))))
+
+\\ Only a scan at the outermost level can start again partway: below any other step, a kernel with
+\\ no room starts again from the beginning.
+(define datalog.outer
+  none -> restart
+  Outer -> Outer)
+
+\\ The tuple these values make, if the relation has it, by its own table.
+(define datalog.native-member
+  Rel Slot Values Steps [Relations Constants Indexes N] Env Level Outer
+  -> (let Stride (datalog.stride (datalog.arity-in Rel Relations))
+          Tuples (datalog.tuples-param Slot)
+          Table (datalog.param (datalog.word-name "Tab" Slot) [<-address (datalog.record-form Slot) 3])
+          Mask (datalog.param (datalog.word-name "Mask" Slot) [shen-jit.u32 [<-address (datalog.record-form Slot) 4] 8])
+          Q (datalog.word-name "Q" Level)
+          Probe (datalog.word-name "probe" Level)
+       [[word (protect Fp) [shift-right (datalog.hash-form Values) 32]]
+        [word (protect I) [bit-and (protect Fp) Mask]]
+        [while Probe true
+          [word (protect E) [u64 Table [shift-left (protect I) 3]]]
+          [when [= (protect E) 0] [exit Probe]]
+          [when [= [shift-right (protect E) 32] (protect Fp)]
+            [word Q [* [- [bit-and (protect E) (datalog.mask)] 1] Stride]]
+            [when [and | (datalog.equal-columns Tuples Q Values 1)]
+              [do | (datalog.native-steps Steps [Relations Constants Indexes N] Env (+ Level 1) Outer)]
+              [exit Probe]]]
+          [word (protect I) [bit-and [+ (protect I) 1] Mask]]]]))
+
+(define datalog.equal-columns
+  _ _ [] _ -> []
+  Tuples Base [V | Vs] I -> [[= (datalog.column-word Tuples Base I) V] | (datalog.equal-columns Tuples Base Vs (+ I 1))])
+
+(define datalog.equal-keys
+  _ _ [] [] -> []
+  Tuples Base [K | Ks] [V | Vs] -> [[= (datalog.column-word Tuples Base K) V] | (datalog.equal-keys Tuples Base Ks Vs)])
+
+\\ The tuples with these values for Keys, through an index: its table finds the first, and its chain
+\\ the rest.
+(define datalog.native-chain
+  Rel Slot Keys Values Columns Steps [Relations Constants Indexes N] Env Level Outer
+  -> (let Ctx [Relations Constants Indexes N]
+          Stride (datalog.stride (datalog.arity-in Rel Relations))
+          Field (datalog.index-slot Rel Keys Indexes)
+          Index [<-address (datalog.record-form Slot) Field]
+          Tuples (datalog.tuples-param Slot)
+          Table (datalog.param (intern (cn "Itab" (cn (str Slot) (cn "x" (str Field))))) [<-address Index 0])
+          Next (datalog.param (intern (cn "Inext" (cn (str Slot) (cn "x" (str Field))))) [<-address Index 1])
+          Mask (datalog.param (intern (cn "Imask" (cn (str Slot) (cn "x" (str Field))))) [<-address Index 2])
+          P (datalog.word-name "P" Level)
+          Q (datalog.word-name "Q" Level)
+          Probe (datalog.word-name "probe" Level)
+          Chain (datalog.word-name "chain" Level)
+          Inner (datalog.native-binds Columns Tuples Q Env)
+       [[word P 0]
+        [word (protect Fp) [shift-right (datalog.hash-form Values) 32]]
+        [word (protect I) [bit-and (protect Fp) Mask]]
+        [while Probe true
+          [word (protect E) [u64 Table [shift-left (protect I) 3]]]
+          [when [= (protect E) 0] [exit Probe]]
+          [when [= [shift-right (protect E) 32] (protect Fp)]
+            [word Q [* [- [bit-and (protect E) (datalog.mask)] 1] Stride]]
+            [when [and | (datalog.equal-keys Tuples Q Keys Values)]
+              [word P [bit-and (protect E) (datalog.mask)]]
+              [exit Probe]]]
+          [word (protect I) [bit-and [+ (protect I) 1] Mask]]]
+        [while Chain [> P 0]
+          [word Q [* [- P 1] Stride]]
+          [do | (datalog.guarded (datalog.native-checks Columns Tuples Q Inner Constants)
+                  (datalog.native-steps Steps Ctx Inner (+ Level 1) Outer))]
+          [word P [u32 Next [shift-left [- P 1] 2]]]]]))
+
+\\ Statements that run only when these checks hold.
+(define datalog.guarded
+  [] Statements -> Statements
+  Checks Statements -> [[when [and | Checks] | Statements]])
+
+\\ Adds the tuple these values make, as datalog.insert-kernel does, or gives where to start again.
+(define datalog.native-insert
+  Rel Terms [Relations Constants Indexes N] Env Outer
+  -> (let Slot (datalog.relation-slot Rel Relations)
+          Stride (datalog.stride (datalog.arity-in Rel Relations))
+          Values (map (/. T (datalog.native-value T Env Constants)) Terms)
+          Tuples (datalog.tuples-param Slot)
+          Table (datalog.param (datalog.word-name "Tab" Slot) [<-address (datalog.record-form Slot) 3])
+          Meta (datalog.param (datalog.word-name "Meta" Slot) [<-address (datalog.record-form Slot) 4])
+          Again (if (element? Outer [none restart]) 1 [+ Outer 1])
+       [[word (protect Count) [u64 Meta 0]]
+        [u64! Meta 24 [+ [u64 Meta 24] 1]]
+        [word (protect Fp) [shift-right (datalog.hash-form Values) 32]]
+        [word (protect I) [bit-and (protect Fp) [u64 Meta 8]]]
+        [while insert true
+          [word (protect E) [u64 Table [shift-left (protect I) 3]]]
+          [when [= (protect E) 0]
+            [unless [< (protect Count) [u64 Meta 16]] [return-word Again]]
+            [u64! Table [shift-left (protect I) 3] [bit-or [shift-left (protect Fp) 32] [+ (protect Count) 1]]]
+            [word (protect Pe) [* (protect Count) Stride]]
+            [do | (datalog.store-values Tuples Values 0)]
+            [u64! Meta 0 [+ (protect Count) 1]]
+            [exit insert]]
+          [when [= [shift-right (protect E) 32] (protect Fp)]
+            [word (protect Pe) [* [- [bit-and (protect E) (datalog.mask)] 1] Stride]]
+            [when [and | (datalog.equal-columns Tuples (protect Pe) Values 1)] [exit insert]]]
+          [word (protect I) [bit-and [+ (protect I) 1] [u64 Meta 8]]]]]))
+
+(define datalog.store-values
+  _ [] _ -> []
+  Tuples [V | Vs] Off -> [[u32! Tuples (datalog.offset-form (protect Pe) Off) V] | (datalog.store-values Tuples Vs (+ Off 4))])
+
+(define datalog.head-slot
+  [] _ -> (simple-error "datalog: a plan with no head")
+  [[emit Rel | _] | _] Relations -> (datalog.relation-slot Rel Relations)
+  [_ | Steps] Relations -> (datalog.head-slot Steps Relations))
+
+\\ The kernel, and the KL that calls it: W starts it where its first loop starts, and W.go grows the
+\\ relation it adds to and calls it again for as long as it runs out of room.
+(define datalog.native-plan
+  Steps [Relations Constants Indexes] Prefix
+  -> (let N (length Relations)
+          Ctx [Relations Constants Indexes N]
+          _ (set datalog.*params* [])
+          Body (datalog.native-steps Steps Ctx [] 1 none)
+          Params (value datalog.*params*)
+          Kernel (intern (cn Prefix ".k"))
+          Written (append (datalog.hash-setup) Body [[return-word 0]])
+          Code (shen-jit.assemble Kernel (map (function hd) Params) Written)
+          _ (shen-jit.install-code [defun Kernel Code])
+          Name (intern Prefix)
+          Go (intern (cn Prefix ".go"))
+          Head (datalog.head-slot Steps Relations)
+          First (datalog.first-start Steps Relations)
+          Call [Kernel | (map (function tl) Params)]
+          GoForm [defun Go [s start]
+                   [let x Call
+                     [if [= x 0] true [do [datalog.grow [<-address s Head]] [Go s [- x 1]]]]]]
+          Entry [defun Name [s] [Go s First]]
+          _ (set datalog.*forms* [Entry GoForm [define-native Kernel (map (function hd) Params) | Written]
+                                  | (value datalog.*forms*)])
+       Name))
+
+\\ Where the first loop starts: the new tuples or all of them; 0 if the plan begins with no loop.
+(define datalog.first-start
+  [[scan Rel new _] | _] Relations -> [<-address [<-address s (datalog.relation-slot Rel Relations)] 5]
+  [[scan _ _ _] | _] _ -> 0
+  [[filter | _] | Steps] Relations -> (datalog.first-start Steps Relations)
+  _ _ -> 0)
+
+\\ The integers of a run's values, by number, for native comparisons; 0 for what is not one.
+(define datalog.ints-bytes
+  Values N -> (let
+                 B (shen-jit.bytes (* 8 (if (> N 0) N 1)))
+              (datalog.fill-ints Values B 0 N)))
+
+(define datalog.fill-ints
+  _ B N N -> B
+  Values B I N -> (let V (<-address Values I)
+                       _ (if (datalog.fixnum? V) (shen-jit.s64! B (* 8 I) V) skip)
+                    (datalog.fill-ints Values B (+ I 1) N)))
 
 \\ The KL of the plan with no sizes to go by.
 (define datalog.code
@@ -1321,10 +1581,11 @@
           Interned (shen.dict 8)
           _ (datalog.intern-all Constants Interned)
           N (length Relations)
-          S (absvector (+ 1 N))
+          S (absvector (+ 2 N))
           _ (datalog.fill-state Relations S 1)
           _ (datalog.load-facts Facts Relations S Interned)
           _ (address-> S 0 (datalog.values-vector Interned))
+          _ (address-> S (+ 1 N) (datalog.ints-bytes (<-address S 0) (shen.dict-count Interned)))
           _ (datalog.merge-state S 1 N)
           Run [Name Relations Constants S]
           _ (set datalog.*plans* 0)

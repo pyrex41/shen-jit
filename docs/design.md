@@ -277,14 +277,17 @@ same bounds check and access. A pointer that is dead or has no length has length
 by strongly connected components in dependency order, and each rule as an order of joins, the atom with the most columns known going next. In a
 recursive component a rule has one variant for each of its atoms in that component, which reads that relation's new tuples and goes first, as a new
 derivation must use a new tuple somewhere. Join order is chosen as a run goes, from the sizes of the relations, and again when one has doubled: the next atom is the one expected to give the fewest tuples for what is known, from
-an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes KL through `eval-kl`, with a function for each atom's loop, so that a loop is a self tail call,
-kept with the program, as a rule has only so many orders.
+an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes code, described below, kept with the program, as a rule has only so many orders.
 
 Values are interned, the program's own constants first, so that generated code can hold their numbers. A relation's tuples are u32 columns one after another in a byte buffer, which the collector does not scan, with the
 new tuples and those for the next round as ranges of it. A round reads only what was there when it began, so a loop can keep the buffer it started with while growing replaces the relation's. A table of 64-bit entries, open addressed, deduplicates: each holds the top half of its hash, which
 also says where it goes when the table grows, and the tuple's position plus one. An index is such a table by key, for the first tuple with that key, and a chain of u32s for the rest, made for each set of columns this run's plans look up, when first needed. Keys that are a whole tuple use
-the relation's own table. Inserting, finding, indexing and growing are kernels of word registers from `lib/native.shen`'s assembler, one for each shape of tuple or key, and the joins around them are KL, which calls them. `datalog.run-naive` works from the definition, over lists,
-and shares only the checker.
+the relation's own table. Inserting, finding, indexing and growing are kernels of word registers from `lib/native.shen`'s assembler, one for each shape of tuple or key.
+
+Each join order is a kernel too, written with that library's structured control: a `for` over a scanned range, a probe and a `while` along an index's chain for a lookup, and the head's insert inline, so that it calls nothing. A variable costs no register,
+as it is read from its tuple's column where it is used. When the relation it adds to has no room, the kernel returns where its outermost scan stood, plus one, and a KL function around it grows the relation and calls it again from there, which is sound as deriving a
+tuple twice does no harm; below a first step that is not a scan, it starts again from the beginning. A plan that needs more registers than the assembler has, or that it refuses for any other reason, is compiled as KL through `eval-kl` instead, with a function for each atom's loop.
+`datalog.run-naive` works from the definition, over lists, and shares only the checker.
 
 ## Left out on purpose
 
