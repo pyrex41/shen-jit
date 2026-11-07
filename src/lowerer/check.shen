@@ -18,6 +18,13 @@
 \\ 4. Unit cases with expected instruction lists, malformed inputs that the
 \\    lowerer must reject, and broken code objects that this checker must
 \\    reject.
+\\ 5. Checks that normalization's output, for every definition and unit case,
+\\    is the language the emitter takes: only its nodes, of their shapes,
+\\    each variable bound where it is used, and each primitive given its
+\\    arity. Most bad shapes would make the emitter loop, and an unbound
+\\    variable would fail check 2 as a capture, but a dynamic call with two
+\\    arguments, or a binder left out of scope, which makes its uses
+\\    constants, would make code that checks 2 and 3 accept.
 
 (set *hush* true)
 (load "src/lowerer/host.shen")
@@ -154,6 +161,48 @@
 (define shen-jit.check.entry-state
   N -> (let Params (shen-jit.check.range 2 (+ N 1))
          [(append [1 | Params] (map (/. P [param P]) Params)) | []]))
+
+\\ ---------------------------------------------------------------------------
+\\ Normalized code (see shen-jit.lower.norm). At most one failure for each
+\\ definition: the checks stop at the first.
+
+(define shen-jit.check.normalized
+  [defun F Params Body] -> (do (set stage0.lower.*inline-depth* 0)
+                               (set stage0.lower.*fresh* 0)
+                               (shen-jit.check.norm F Params
+                                                    (stage0.lower.norm Params (stage0.lower.share Body))))
+  X -> (do (set stage0.lower.*inline-depth* 0)
+           (set stage0.lower.*fresh* 0)
+           (shen-jit.check.norm eval-kl [] (stage0.lower.norm [] X))))
+
+(define shen-jit.check.norm
+  W S [const X] -> (shen-jit.check.assert (not (element? X S)) W "bound variable as a constant" X)
+  W S [var X] -> (shen-jit.check.assert (element? X S) W "unbound variable" X)
+  W S [if C X Y] -> (shen-jit.check.norms W S [C X Y])
+  W S [and X Y] -> (shen-jit.check.norms W S [X Y])
+  W S [or X Y] -> (shen-jit.check.norms W S [X Y])
+  W S [do X Y] -> (shen-jit.check.norms W S [X Y])
+  W S [let X V Body] -> (and (shen-jit.check.binder W X) (shen-jit.check.norm W S V)
+                             (shen-jit.check.norm W [X | S] Body))
+  W S [lambda X Body] -> (and (shen-jit.check.binder W X) (shen-jit.check.norm W [X | S] Body))
+  W S [freeze X] -> (shen-jit.check.norm W S X)
+  W S [prim Op Args] -> (and (shen-jit.check.norms W S Args)
+                             (shen-jit.check.assert (= (length Args) (shen-jit.check.prim-arity Op))
+                                                    W "primitive arity" [Op | Args]))
+  W S [call F Args] -> (and (shen-jit.check.binder W F) (shen-jit.check.norms W S Args))
+  W S [apply F] -> (shen-jit.check.norm W S F)
+  W S [apply F X] -> (shen-jit.check.norms W S [F X])
+  W S [trap X E H] -> (and (shen-jit.check.norm W S X) (shen-jit.check.binder W E)
+                           (shen-jit.check.norm W [E | S] H))
+  W _ X -> (shen-jit.check.fail W "not normalized" X))
+
+(define shen-jit.check.norms
+  _ _ [] -> true
+  W S [X | Xs] -> (and (shen-jit.check.norm W S X) (shen-jit.check.norms W S Xs))
+  W _ X -> (shen-jit.check.fail W "improper list" X))
+
+(define shen-jit.check.binder
+  W X -> (shen-jit.check.assert (shen-jit.symbol? X) W "not a symbol" X))
 
 \\ ---------------------------------------------------------------------------
 \\ Unit cases: [Form Sealed Expected], where Sealed pairs names with arities
@@ -322,6 +371,7 @@
        (do (shen-jit.check.assert (shen-jit.check.same? Code (shen-jit.check.form Expected))
                                     "unit" "unexpected lowering" [Form Got])
            (shen-jit.check.lowered Got)
+           (shen-jit.check.normalized (shen-jit.check.form Form))
            (map (/. P (put (hd P) shen-jit.check.arity -1)) Sealed))))
 
 \\ Inlining: a call to a sealed g with an inline body becomes the body. The
@@ -397,6 +447,7 @@
        (do (shen-jit.check.assert (shen-jit.check.same? Read Expected) File
                                     "sbc file differs from the lowering" File)
            (map (/. D (shen-jit.check.lowered D)) Read)
+           (map (/. D (shen-jit.check.normalized D)) Defuns)
            (output "~A: ~A defuns checked~%" File (length Read)))))
 
 (shen-jit.check.main (value *argv*))
