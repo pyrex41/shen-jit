@@ -753,6 +753,13 @@ that. Its readings decided nothing below.
   its problem files gave the same 35 counts and unproved goals on Shen/JIT and Shen/Scheme 0.52, in about a second each.
   Under that limit the counts change with load, so they say nothing. `tests/prolog-unify.shen` also compared the reader's
   1.0, which is the integer 1, so a unifier comparing numbers by identity passed 1495 of 1495; with a computed real it fails 6.
+- **`(when (= X Y))` compares without copying** (2026-11-07, Apple M5, load 15-40, instructions retired, 3 alternating
+  rounds against 3a474bf). The Prolog compiler makes it `(= (shen.deref X B) (shen.deref Y B))`, which copies both terms
+  first; THORN's `loop?` runs it at every predicate call whose hypotheses hold the negated literal, 705,000 times copying
+  9.8 million pairs on thm13. A lowering rule calls `shen-jit.deref=`, which dereferences as it compares, 8 lines in the
+  port: thm13 25.85-25.96 to 24.92-25.02 G, rcc10 18.86-18.97 to 18.30-18.44 G, THORN `meaning` (rewriting on) 55.04-55.33
+  to 52.05-52.20 G, steam 0.5-1% fewer, and the kernel suite, stlib build, yql, L and `ec` level (yql, L and `ec` never reach
+  it). The kernel's own Prolog compares a dereferenced term only with a constant, which the rule leaves alone.
 
 ### Native code written by hand
 
