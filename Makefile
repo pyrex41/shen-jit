@@ -436,7 +436,7 @@ bench-independent: all
 
 # Numeric programs in C, in Shen with boxed reals, and in Shen with real registers.
 NUMERIC_RESULT := grep -a '^[a-z]* [0-9.e-]* s check'
-# Datalog's workloads: a generated graph of each shape, and the call graph of the kernel's KL.
+# Datalog's workloads: a generated graph of each shape, and the call graph of the kernel's KL, closed and analysed.
 bench-datalog: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "$(KERNEL_DIR)/klambda")' < /dev/null | \
 	  grep -a ' | \|^facts\|uncaught'

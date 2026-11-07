@@ -1617,6 +1617,14 @@ The first real use of `lib/native.shen`'s structured control from a generator ra
 - **Generated programs** sometimes add an aggregate with keys, constants, `_` and variables of its own, which may repeat; a rule with one is dropped whole when the program would not be stratified. Of 300, 44 keep one, 5 of them comparing. They agree with the reference, KL joins and SWI-Prolog. Planted, a min that keeps the larger fails 5 checks and a chain that skips its update 19.
 - **Nothing lost:** the workloads, with no aggregates, are within noise of before.
 
+### An analysis of the kernel's call graph (2026-11-07, Apple M3 Max)
+
+A workload that uses what the last three entries added, on the same 731 functions and 4,730 calls as the call graph: what is dead (negation), what calls nothing and what is called but never defined (negation with `_`), fan-in and fan-out (count), the hubs with 20 callers or more, each function's call depth from a root bounded at 12 (arithmetic), and the shallowest (min). Eleven rules, 27 rounds, 25 plans.
+
+- **Agreed** with the reference on the whole graph, in 1.3 s, with KL joins, and with a version written by hand for SWI-Prolog, on all 4,332 tuples of its nine relations.
+- **Its time is loading:** 1.9 ms a run, of which 1.3 ms is interning and storing the facts, which a program with no rules takes alone; the rules take about 0.6 ms. KL joins take 1.9 to 2.0 ms, so native kernels gain little here, where the relations are small. Its first run takes 4.3 ms against 2.9 with KL, which is compiling 25 kernels.
+- **So what would help such an analysis** is loading, not joins: interning symbols through a dictionary, one fact at a time. Not tried.
+
 ### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
 
 The same rules and facts, written out for Soufflé; every result it finished matches ours. Its compiled programs are built from the C++ it generates with the flags of its own compile script, as that script's include paths fail in Homebrew's bottle. That bottle has no OpenMP, so Soufflé ran on one thread, as we do, and it keeps 64-bit values where we keep 32. Times in ms, best of three: ours is `datalog.run` with facts as a list, and Soufflé's its process less the same with no facts, which is its startup, about 15 ms. Building took it 3.0 to 3.7 s a program.

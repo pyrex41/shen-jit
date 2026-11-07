@@ -69,6 +69,34 @@
   (rule (live G) <-- (live F) (calls F G) (defines G))
   (rule (errors F) <-- (reaches F simple-error) (defines F)))
 
+\* The same call graph, asked what an analysis asks: what is dead, what calls nothing defined,
+   what is called and never defined, fan-in and fan-out, the hubs, and each function's shortest
+   call depth from a root, bounded. Negation, aggregates and arithmetic. *\
+(defdatalog db.analysis
+  (relation defines [symbol])
+  (relation calls [symbol symbol])
+  (relation root [symbol])
+  (relation live [symbol])
+  (relation dead [symbol])
+  (relation leaf [symbol])
+  (relation undefined [symbol])
+  (relation fan-out [symbol integer])
+  (relation fan-in [symbol integer])
+  (relation hub [symbol])
+  (relation depth [symbol integer])
+  (relation shallowest [symbol integer])
+  (rule (live F) <-- (root F))
+  (rule (live G) <-- (live F) (calls F G) (defines G))
+  (rule (dead F) <-- (defines F) (not (live F)))
+  (rule (leaf F) <-- (defines F) (not (calls F _)))
+  (rule (undefined G) <-- (calls _ G) (not (defines G)))
+  (rule (fan-out F N) <-- (defines F) (= N (count (calls F _))))
+  (rule (fan-in G N) <-- (defines G) (= N (count (calls _ G))))
+  (rule (hub G) <-- (fan-in G N) (>= N 20))
+  (rule (depth F 0) <-- (root F))
+  (rule (depth G D) <-- (depth F D0) (calls F G) (defines G) (= D (+ D0 1)) (<= D 12))
+  (rule (shallowest F M) <-- (live F) (= M (min D (depth F D)))))
+
 (define db.random-edges
   0 _ Acc -> Acc
   M N Acc -> (db.random-edges (- M 1) N [[edge (db.random N) (db.random N)] | Acc]))
@@ -161,5 +189,6 @@
            (db.row "triangles" db.triangles Dense triangle)
            (db.row "skewed join" db.skew Skew two)
            (db.row "kernel call graph" db.calls Calls reaches)
+           (db.row "kernel analysis" db.analysis Calls depth)
            (db.naive "closure, 300 edges" db.closure (db.random-edges 300 200 []) path)
            ok)))
