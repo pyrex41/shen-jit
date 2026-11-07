@@ -271,11 +271,12 @@ if it had been made then. *Deviation:* until then, reading the
   working directory, as in Shen/Scheme. Startup does not change it, and
   `shen-jit.save-executable` saves it as "".
 - `(read-file-as-bytelist Path)` and `(read-file-as-string Path)` read the
-  whole file in C, as Shen/Scheme's overrides do, with the path resolved and
-  failures reported as for `open`. The kernel's read one byte at a time.
-- `(read-byte S)`: a byte from 0 to 255, or -1 at end of file or on a read error. A
-  directory opens as an input stream, and on macOS reads as empty, and so do the
-  whole-file reads of one. *Deviation:* Shen/Scheme raises an error when reading it.
+  whole file in C, as Shen/Scheme's overrides do, with the path resolved as for
+  `open`. An open failure raises; a read failure raises with the system's message
+  instead of returning partial data. The kernel's read one byte at a time.
+- `(read-byte S)`: a byte from 0 to 255, or -1 at end of file. A file read error
+  raises with the system's message. On systems that open a directory as an input
+  stream, reading it raises rather than treating it as empty.
 - `(write-byte B S)`: B from 0 to 255; returns B. Output is buffered, so a failed write raises
   an error here only once the buffer fills, or else from `close`.
 - Reading from an output stream, writing to an input stream, or using a closed

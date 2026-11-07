@@ -962,6 +962,14 @@ static V open_file(VM *vm)
     return s;
 }
 
+/* A failed file operation, with its error saved before cleanup. */
+static V raise_io_failed(VM *vm, const char *who, int error)
+{
+    char text[128];
+    snprintf(text, sizeof text, "%s: %s", who, strerror(error ? error : EIO));
+    return sj_raise_text(vm, text);
+}
+
 /* shen-jit.read-file, behind the port's read-file-as-bytelist and
    read-file-as-string: a whole file, read in C, as a list of its bytes when
    the second argument is true and as a string otherwise. The kernel's read
@@ -976,8 +984,16 @@ static V read_file(VM *vm)
         return sj_raise_value(vm, "open: cannot open ~S", vm->args[0]);
     size_t len = 0, cap = 1 << 16;
     char *text = malloc(cap);
-    for (size_t n; text && (n = fread(text + len, 1, cap - len, f)) > 0;) {
+    int read_error = 0;
+    while (text) {
+        size_t n = fread(text + len, 1, cap - len, f);
+        if (ferror(f)) {
+            read_error = errno ? errno : EIO;
+            break;
+        }
         len += n;
+        if (!n)
+            break;
         if (len == cap) {
             char *more = realloc(text, cap *= 2);
             if (!more)
@@ -988,6 +1004,10 @@ static V read_file(VM *vm)
     fclose(f);
     if (!text)
         return sj_raise(vm, "out of memory");
+    if (read_error) {
+        free(text);
+        return raise_io_failed(vm, "read-file", read_error);
+    }
     V v = V_NIL;
     if (!bytes) {
         v = make_string(vm, text, len);
@@ -1048,14 +1068,6 @@ static V append(VM *vm)
     return tagged(p, TAG_PAIR);
 }
 
-/* A failed write, by what the system says. */
-static V raise_write_failed(VM *vm, const char *who)
-{
-    char text[128];
-    snprintf(text, sizeof text, "%s: %s", who, strerror(errno));
-    return sj_raise_text(vm, text);
-}
-
 static V close_stream(VM *vm, V s)
 {
     if (!is_type(s, T_STREAM))
@@ -1066,7 +1078,7 @@ static V close_stream(VM *vm, V s)
         int failed = (o[STREAM_FLAGS] & STREAM_KIND_MASK) == STREAM_FILE ? fclose(f) : fflush(f);
         o[STREAM_FLAGS] &= ~(uint64_t)STREAM_OPEN;
         if (failed == EOF)
-            return raise_write_failed(vm, "close");
+            return raise_io_failed(vm, "close", errno);
     }
     return V_NIL;
 }
@@ -1159,6 +1171,8 @@ static V read_byte(VM *vm, V s)
     if (f == stdin)
         return read_stdin(vm);
     int c = fgetc(f);
+    if (c == EOF && ferror(f))
+        return raise_io_failed(vm, "read-byte", errno);
     return fix(c == EOF ? -1 : c);
 }
 
@@ -1207,7 +1221,7 @@ static V write_byte(VM *vm, V b, V s)
     if (!is_fix(b) || fixval(b) < 0 || fixval(b) > 255)
         return sj_raise_value(vm, "write-byte: ~S is not a byte", b);
     if (fputc((int)fixval(b), f) == EOF)
-        return raise_write_failed(vm, "write-byte");
+        return raise_io_failed(vm, "write-byte", errno);
     return b;
 }
 

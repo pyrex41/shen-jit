@@ -16,6 +16,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- File read errors raise instead of looking like end of file: whole-file reads no longer return empty or
+  partial data on failure, and `read-byte` reports failed file reads.
 - Loading code with more than 255 parameters or call arguments, or a capture index above 255, reports which limit
   was exceeded. Reported by @pyrex41 in [#18](https://github.com/tizoc/shen-jit/pull/18).
 

@@ -1013,6 +1013,18 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
 - **`SHEN_JIT_MAX_HEAP`** raises a catchable "out of memory". At the limit the last tenth of the heap is a reserve: without one, a heap
   full of live data left no room for the error, and the handler received `[]`.
 
+### File read errors (2026-11-07, macOS arm64)
+
+- Reading a directory returned an empty string or byte list, or -1 through `read-byte`, although stdio set
+  its error indicator. `read_file` now checks that indicator after each `fread`, saves the error before
+  closing, and frees its buffer before raising rather than returning partial data. The ordinary file
+  path of `read-byte` checks it when `fgetc` returns EOF too. Actual EOF and empty files keep their results.
+- Against the previous binary, four CLI regressions failed and the runtime test reported two failed checks.
+  The CLI reads a directory through both whole-file helpers and twice through a stream on POSIX; a
+  write-only stdio file exercises a failed read in the C runtime test without relying on directory opening.
+  Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
+  196 CLI checks. This changes error handling, with no performance claim.
+
 ### Byte buffers and bit operations (2026-11-03)
 
 - **Decision:** checked primitives on tagged values, with buffers as objects in the Shen heap, which the collector frees and saved

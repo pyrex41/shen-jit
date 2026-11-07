@@ -1,6 +1,7 @@
 /* Runtime tests: collector, stack invariants, symbols and the image
    round trip over every object family; and the file stream sweep. */
 #include "../src/runtime/reader.h"
+#include "../src/runtime/ops.h"
 
 #include <stdarg.h>
 #include <stdlib.h>
@@ -481,8 +482,35 @@ static void test_file_sweep(void)
     vm_destroy(vm);
 }
 
+/* A failed stdio read must not look like EOF. A write-only file gives a
+   read error on every platform, including those that cannot open directories. */
+static void test_file_read_error(void)
+{
+    VM *vm = vm_create(1024, 1024);
+    const char *path = "runtime-read-error.tmp";
+    FILE *f = fopen(path, "wb");
+    CHECK(f);
+    if (!f) {
+        vm_destroy(vm);
+        return;
+    }
+    vm->args[0] = make_stream(vm, STREAM_FILE | STREAM_OPEN, f);
+    CHECK(sj_primitive(vm, P_READ_BYTE) == V_CLEARED);
+    CHECK(ferror(f));
+    if (is_object(vm->exception) && obj_type(vm->exception) == T_EXCEPTION) {
+        V message = ptr(vm->exception)[EXC_MESSAGE];
+        CHECK(string_length(message) > 11 && memcmp(string_bytes(message), "read-byte: ", 11) == 0);
+    } else {
+        CHECK(false);
+    }
+    CHECK(sj_primitive(vm, P_CLOSE) == V_NIL);
+    CHECK(remove(path) == 0);
+    vm_destroy(vm);
+}
+
 int main(void)
 {
+    test_file_read_error();
     test_file_sweep();
     test_loader();
     test_long_list();

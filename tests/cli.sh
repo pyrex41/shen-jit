@@ -332,6 +332,32 @@ followed read-string "$dir/files.out" "ab" "[97"
 check read-missing "$dir/files.out" 'open: cannot open "no such file"'
 check userdefs "$dir/files.out" "[f2 f1]"
 
+# Empty files are successful reads, and repeated EOF reads still return -1.
+: > "$dir/empty.txt"
+"$SHEN" eval -e "(output \"empty-string: ~A~%\" (= (read-file-as-string \"$dir/empty.txt\") \"\"))" \
+    -e "(output \"empty-bytes: ~A~%\" (= (read-file-as-bytelist \"$dir/empty.txt\") []))" \
+    -e "(let S (open \"$dir/empty.txt\" in) A (read-byte S) B (read-byte S) _ (close S) [A B])" \
+    > "$dir/empty.out" 2>&1
+check read-empty-string "$dir/empty.out" "empty-string: true"
+check read-empty-bytes "$dir/empty.out" "empty-bytes: true"
+check read-empty-stream "$dir/empty.out" "[-1 -1]"
+
+# A directory opens on POSIX, but the read fails. Check the read's message,
+# so an open failure or a silently empty result cannot pass.
+if [ "$posix" = yes ]; then
+    "$SHEN" eval \
+        -e "(output \"string: ~A~%\" (trap-error (read-file-as-string \"$dir\") (/. E (error-to-string E))))" \
+        -e "(output \"bytes: ~A~%\" (trap-error (read-file-as-bytelist \"$dir\") (/. E (error-to-string E))))" \
+        -e "(let S (open \"$dir\" in)
+              (do (output \"byte: ~A~%\" (trap-error (read-byte S) (/. E (error-to-string E))))
+                  (output \"byte-again: ~A~%\" (trap-error (read-byte S) (/. E (error-to-string E))))
+                  (close S)))" > "$dir/read-error.out" 2>&1
+    contains read-error-string "$dir/read-error.out" "string: read-file: "
+    contains read-error-bytes "$dir/read-error.out" "bytes: read-file: "
+    contains read-error-byte "$dir/read-error.out" "byte: read-byte: "
+    contains read-error-byte-again "$dir/read-error.out" "byte-again: read-byte: "
+fi
+
 # Lambda forms are made when fn first asks for them (docs/overrides.md):
 # fn on loaded definitions, after a change of arity, and gensym numbered as
 # when every form was made on reading.
