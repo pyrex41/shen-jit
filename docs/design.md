@@ -271,6 +271,20 @@ Memory outside the heap is a pointer with a length, and the byte primitives take
 is unchanged. A loop that calls nothing and reads through a parameter it never changes works these out once on the way in ([bytecode.md](bytecode.md), "Byte buffers and bit operations"). Otherwise, what is not a buffer leaves through an out-of-line block that tests for a pointer, loads its length and address into the registers the buffer's length and base would be in, and comes back for the
 same bounds check and access. A pointer that is dead or has no length has length 0, so nothing else needs to test for that.
 
+## Datalog
+
+`lib/datalog.shen` is Shen, loaded on request, and the JIT knows nothing of it. A program is checked into relations and rules, and planned: relations
+by strongly connected components in dependency order, and each rule as an order of joins, the atom with the most columns known going next. In a
+recursive component a rule has one variant for each of its atoms in that component, which reads that relation's new tuples and goes first, as a new
+derivation must use a new tuple somewhere. Each plan becomes KL through `eval-kl`, with a function for each atom's loop, so that a loop is a self tail call,
+compiled once and kept with the program.
+
+Rules make no values, so the values of a run are known once its facts are read. They are interned, the program's own constants first, so that
+generated code can hold their numbers. A tuple is then one integer, with 12, 20 or 30 bits to a column, if the widest relation and the number of values allow,
+and otherwise a vector; each layout a program meets is compiled once. A relation is a set for deduplication, a list of all its tuples, the new
+ones, those for the next round, and a dictionary for each set of columns its lookups use. `datalog.run-naive` works from the definition, over lists,
+and shares only the checker.
+
 ## Left out on purpose
 
 - **An interpreter.** A target without an SLJIT backend could add one: the slot layout and instructions do not depend on the JIT. It would be

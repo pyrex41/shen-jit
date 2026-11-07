@@ -1484,6 +1484,37 @@ First libraries, to test whether declarations cover real use: 128 and 206 lines 
 Not run as of 2026-11-05: static musl, upstream clang's function sanitizer on the casts (Apple clang 17 does not check),
 the old-glibc container on GitHub's runners, and sockets beyond loopback.
 
+## Datalog
+
+### The first version (2026-11-07, Apple M3 Max, against SWI-Prolog 10.0.2)
+
+`lib/datalog.shen`, about 900 lines of code with its plain evaluator, needing no other library. Chosen as the first application library because it depends on nothing else and has
+independent oracles.
+
+- **Shen forms, no textual syntax.** Variables are already Shen's, and a program stays data. Soufflé's notation would have
+  needed a parser for no gain yet.
+- **Generated KL only, no plan interpreter.** Two execution paths would be more code, and compiling is cheap: for the program behind the kernel call
+  graph, 20 functions, 0.008 ms to check and plan and 0.11 ms to generate and install, each over 500 rounds, and its first run takes 0.36 ms more than the next, which is the JIT.
+  So a one-shot query pays nothing to speak of, and no interpreter was built to compare.
+- **Functions, not closures, for loops.** Each atom's loop is a named function, a self tail call taking what it passes on as parameters. They are named per
+  program and layout, so they are bounded and show in a backtrace. Closures were not measured.
+- **Packed tuples, kept.** Against vectors, in ms, packed then vector: closure over 3000 random edges (1,388,324 tuples) 287 to 348, 386 to 642;
+  dense closure 14, 21.5; nonlinear closure 785, 1465; same generation 26, 40; a skewed join (2,222,705 tuples) 329, 560; the call graph 18, 24. A vector must
+  stay for wide relations, so both exist; the cost is a form for each of tuples, columns and keys. Rounding the bits to 12, 20 or 30 lets shifts and masks be immediates
+  and bounds the layouts a program meets to four.
+- **Retained tuples did not call for a byte-buffer engine.** 177 MB resident at 1,388,324 tuples, with one index. Not needed for anything measured.
+- **Not tried:** telling new from old tuples in the atoms around the one read as new. Nonlinear closure makes 41,142,395 derivations for 88,803 tuples, which is where it would help,
+  and is the slowest row even so. Costs of atoms in choosing the join order: the planner goes by columns known alone.
+- **The bug tests found:** a relation could appear several times in its component, and merging it again wiped its new tuples, losing results. All layouts agreed and the fixtures
+  by hand passed; only generated programs against the reference showed it, in about 3% of them.
+- **Does it notice?** 13 planted bugs, one at a time, each failed `make test-datalog`, from a missing second round to a dropped filter. It takes 0.23 s, and 62 s under `SHEN_JIT_GC_STRESS=1000`, which passes.
+- **Against an engine sharing nothing:** SWI-Prolog's tabling agrees on 300 generated programs (3,787 tuples), and on the larger workloads. Soufflé was not available.
+- **Its speed, as a reference.** Evaluation alone, with the same programs and facts, in ms, ours then SWI-Prolog's: skewed join (2,230,489 tuples) 357, 517; mutual recursion (3,032) 0.8, 1.8; sparse closure (1,391,323) 280, 1,002;
+  dense closure (90,292) 16, 84; nonlinear closure (90,292) 806, 7,695; same generation (52,332) 28, 262; triangles (1,506) 0.4, 13.6; the call graph (132,214) 20, 701. Ours is `datalog.run` and reading every tuple back, best of 3, by wall clock, with interning the facts included.
+  Theirs is every table and every answer enumerated with printing removed, the middle of 3 fresh processes, by CPU time, leaving out 14 to 44 ms of startup and loading. Not like for like: tabling is a general mechanism working top-down inside a full Prolog, the rules ran as written
+  there while ours reorders joins, and hand-ordered Prolog was not tried. The call graph's gap may come from one table for each bound first argument, which was not measured. The rows closest together spend their time hashing and allocating tuples.
+- **The call graph:** 731 functions and 4,730 calls from the kernel's KL give 125,617 pairs reached in 48 rounds, in 18 ms.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

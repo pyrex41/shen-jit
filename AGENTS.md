@@ -19,7 +19,7 @@ checkout's own workflow, and git ignores it.
 | `docs/` | The guide's source, and how it works |
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
-| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, and `handle.shen`, which releases memory once nothing reaches it |
+| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, and `datalog.shen`, relations and recursive rules |
 | `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, and `release-notes.sh` prints a version's section of the changelog |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
@@ -56,7 +56,7 @@ A commit message says what changed and what it measured.
 Run the fast tier after every change; it takes about 20 s and catches nearly everything:
 
 ```bash
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-io test-http test-ffi test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-io test-http test-datalog test-ffi test-overrides
 ```
 
 `make test-overrides` (a second) runs each kernel function that the port replaces beside the kernel's own definition, taken from the KLambda, over generated values, as compiled and through C. They must agree exactly: 1 and 1.0 differ, and a value and an error, but not the text of two errors. What differs on purpose is listed in `o.known` in `tests/overrides.shen`, with its reason, as narrowly as it can be. A difference that no longer shows fails, and so does a new override that the test does not name, so a new one joins it there or `o.left-out`.
@@ -72,6 +72,7 @@ CI runs the heavier suites on every push, or the same thing natively, so leave t
 - `make test-san` (sanitizers): changes to C code that handles memory.
 - `make test-x86` (x86-64 under Rosetta): new kinds of SLJIT instructions or calls in the JIT, and changes to how `src/runtime/ffi.c` calls C.
 - `make fuzz-native` (mutated code objects, a few minutes): changes to what the JIT assumes about bytecode, which the checker in `lib/native.shen` must then enforce for code written by hand.
+- `make test-datalog-swipl` (about 6 s, needs `swipl`, not in CI): changes to how `lib/datalog.shen` evaluates. `make test-datalog` compares with its own plain evaluator, and this with an engine that shares nothing with it. `make bench-datalog` times its workloads.
 - `make test-differential` (about a minute): changes to a primitive, inline or in C, to what the JIT does around one, or to handlers. It runs each primitive over generated values, however it is compiled, and again with `SHEN_JIT_SLOW_PRIMS=1`, which sends every primitive to C, and checks properties of `=`, the comparisons, arithmetic, strings, stores and bit operations. A new primitive joins `d.prims` in `tests/differential.shen`. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass: either may be wrong.
 - `make test-linux` (every suite on Linux arm64 and x86-64, in Docker, built with gcc from a release tarball, without a host): changes that may differ by
   platform or compiler. gcc evaluates a call's arguments in another order than clang, which shows a value read before an allocation that moves it, and Linux's AddressSanitizer also reports leaks.
