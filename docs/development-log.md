@@ -1115,6 +1115,36 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Complete HTTP requests, bounded bodies and responses (2026-11-07, M3 Max, macOS arm64)
+
+- Added `lib/http-request.shen` for a strict HTTP/1.1 origin-form/OPTIONS-star subset: owned metadata,
+  ordered repeated fields, exactly one valid Host, bounded decimal Content-Length and explicit rejection
+  of duplicate lengths, transfer coding, expectations, upgrades and ambiguous framing. Header limits
+  include line lengths/counts. Body readers fill one bounded allocation and return a new complete request,
+  preserving unread suffixes and remembering failure rather than restarting a partial protocol body.
+- The largest fixnum exposed overflow in the kernel mod helper used to derive decimal bounds: it doubles
+  a divisor past that range. The parser splits the rare large-bound calculation at 2^60, then checks each
+  digit before multiplying. Max-length metadata and the immediately larger value now succeed/reject
+  predictably without overflow. No arithmetic primitive or runtime change was needed.
+- `lib/http-response.shen` validates all application fields before producing owned wire bytes. It supplies
+  Content-Length and Connection: close, suppresses HEAD payloads, omits length for 204/304 and uses zero
+  for 205. Framing fields and CRLF/control injection are rejected. Descriptions borrow body views until
+  encoding; encoded output owns its bytes, including when the original source was read-only foreign memory.
+- `lib/http-server.shen` handles one request on an owned socket with fresh absolute head/body/write
+  budgets. It reads the bounded body before dispatch, sends an empty rejection or pre-output 500 on
+  application failure, and never appends a second response after partial output. Original failure remains
+  primary if sending a rejection or closing also fails. A native seconds clock and a Shen UTC formatter
+  add Date when absent, with no locale or C tm-layout dependency. `tools/http-echo.shen` is the runnable
+  echo/health example. There is no accept loop, task pool, chunked coding or connection reuse yet.
+- `make test-http` passes 247 checks: 197 parser/body/response cases including every small transport
+  split, 46 native connection/ownership/Date checks, a typed client and 3 image/GC/type checks. Cases
+  include malformed/smuggling heads, binary bodies, truncation, HEAD/bodyless statuses, handler failure,
+  partial output, foreign ownership and every-allocation GC. The independent standard-library HTTP client
+  passes 19 wire cases, including slow input and rejection before a promised body is sent.
+- The full fast tier, examples, rendered guide links and publication scan pass. CI and the Linux source
+  tarball suites run test-http, with native cases explicitly skipped on static builds. The public API
+  reference lives on docs/http.md, linked from the guide; pure parsing and encoding stay FFI-independent.
+
 ### HTTP head framing and operation deadlines (2026-11-07, M3 Max, macOS arm64)
 
 - Added `lib/http-head.shen`: capture one CRLFCRLF-terminated block over our I/O reader, with an

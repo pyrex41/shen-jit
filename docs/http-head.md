@@ -4,7 +4,7 @@
 CRLFCRLF, using our [chunk I/O](io.md) reader. It scans each incoming span once, retains delimiter state
 across splits, and leaves body or subsequent bytes in the reader. It uses no kernel stream or C parser.
 
-This is byte framing for a later complete parser. It does not validate request-line syntax, field names,
+This is byte framing for the [complete request parser](http.md). It does not validate request-line syntax, field names,
 Host, Content-Length, Transfer-Encoding or other HTTP semantics, and does not decide message body length.
 An accepted block is not by itself a validated HTTP request. The protocol boundary follows the message
 structure in [RFC 9112](https://www.rfc-editor.org/rfc/rfc9112.html#section-2.1); the initial framing policy
@@ -76,7 +76,8 @@ budget on the endpoint before reading:
 Load `ffi.shen`, `socket.shen`, `buffer.shen`, `io.shen`, `deadline.shen`, `clock.shen`,
 `io-socket.shen` and `http-head.shen` for that function. A new response phase can install a fresh budget;
 reads that return short prefixes do not create new header budgets. Cancellation, connect/accept/DNS
-budgets, request syntax, body framing, response encoding and a listener loop are separate work.
+budgets, [request parsing, bounded bodies and response encoding](http.md) are available above this layer;
+a listener loop remains separate work.
 
 ## Types and capture example
 

@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Optional HTTP/1.1 request parsing, bounded Content-Length bodies, response encoding and a one-request
+  socket driver with per-phase deadlines, typed APIs and a small echo/health example. Ambiguous framing
+  is rejected; HEAD/bodyless responses, partial output failure and owned body bytes have explicit rules.
+
 - Optional HTTP head framing preserves unread body bytes under an explicit byte limit. Monotonic
   operation deadlines cover socket transfers across short progress and retries, with typed results,
   injected clocks and transient reader timeout recovery.

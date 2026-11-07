@@ -93,8 +93,8 @@ can accept a peer, close its listener, then run the [binary framing](framing.md)
 
 The handler owns the connected endpoint, echoes each complete frame and flushes before accepting the
 next message. It returns after peer EOF or failure. A real server still needs a connection cap and an
-accept loop; [HTTP head framing](http-head.md) and deadlines are available, while request semantics,
-body framing and response handling remain separate work.
+accept loop. [HTTP head framing](http-head.md) and deadlines support the
+[complete requests, bounded bodies and responses](http.md) provided by the one-request HTTP driver.
 
 `make test-io` tests loopback transfer, large framed echo, half-close, failed-flush retention, native error
 capture, repeated close, image invalidation and targeted every-allocation GC. No external network service

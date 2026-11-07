@@ -14,6 +14,7 @@ local PAGES = {
   ['io-sockets'] = 'Socket I/O endpoints',
   deadlines = 'Operation deadlines',
   ['http-head'] = 'HTTP head framing',
+  http = 'HTTP requests and responses',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 
