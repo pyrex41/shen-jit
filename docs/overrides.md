@@ -42,6 +42,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.+string?` | Behind string patterns: tests the type before comparing with `""`, where the kernel's compares first; the same answer for every value |
 | `fn` | One lookup, and it makes lambda forms when first asked for them |
 | `read-file` | Skips a `#!` line |
+| `shen.str->bytes` | Copies the string into one byte buffer and reads it backwards to build the list, avoiding repeated copies of the remaining string in `read-from-string` |
 | `shen.make-prolog-variable`, `shen.deref`, `shen.bindv`, `shen.unwind` | A variable is an immediate value holding its binding's offset, so these use `shen-jit.pvar` and `shen-jit.pvar-offset` |
 | `shen.<-out`, `shen.hds=?` | Small enough to inline into their callers across the kernel, 59 and 35 functions, and into user `defcc` code |
 | `shen.<shortnatters>`, `shen.<whitespaces>`, `shen.<digits>`, `shen.<alphanums>` | Loops over a run of bytes, where the kernel's rules call a rule and build a parse result per byte. Same results, including where a comment ends at a tab |

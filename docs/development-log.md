@@ -656,6 +656,13 @@ all that Shen/Scheme and the earlier prototype replace.
   `shen.+string?` testing the type first: failing patterns 0.57-0.62.
 - **Reader rules** (2026-11-02, Apple M3 Max). Loops over runs of bytes where the kernel's rules build a parse result
   per byte. Reading 1,000 definitions 10.6 → 5.8 ms; 13 packaged kernel sources 26 → 22 ms (Shen/Scheme 86).
+- **Strings to byte lists** (2026-11-07, Apple M3 Max, against the build before, three interleaved rounds).
+  Reported by @pyrex41 in #16. The kernel's `shen.str->bytes` takes `tlstr` at every byte, copying the rest
+  of the string each time. The port now reads one byte buffer backwards into a list. Five passes of
+  `read-from-string` over eight existing sources (core, macros, reader, sys, prolog, types, writer and the
+  lowerer; 150410 bytes together) retired 21.04 to 1.54 G instructions, with the same number of forms.
+  The kernel suite and reading those files from disk were within 0.2%. Empty strings, UTF-8, embedded NUL
+  and the non-string error are checked in the eval cases.
 - **`append` in C, `reverse` not** (Apple M3 Max, against the kernel's). `append` copies in one pass into the free
   space (2026-11-02): 32 elements 61 → 32 ns (Shen/Scheme 43), one element 0.5 ns slower. The same for `reverse`
   (2026-11-03) was rejected: 37 → 32 ns at 32 elements, but 2.4 → 3.3 ns at one and 233 → 320 ns at 256.

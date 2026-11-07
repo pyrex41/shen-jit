@@ -1088,3 +1088,6 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value (a c b q) ((lambda X (lambda Y (cons a (cons X (cons b Y))))) c (cons q ())))
 (value (0 1 0 2 1 3 4 5 4 6 7 8 9 10 11 12 2) (let B (shen-jit.lower.builder f 0 ()) (map (lambda X (shen-jit.lower.constant B X)) (cons a (cons (+ 0.5 7.5) (cons a (cons 8 (cons (+ 0.5 7.5) (cons "a" (cons (cons a ()) (cons (cons (+ 0.5 7.5) ()) (cons (cons a ()) (cons (cons 8 ()) (cons (r.nan) (cons (r.nan) (cons (n.neg0) (cons (- 0.5 0.5) (cons 0 (cons (cons n (cons "8" ())) (cons 8 ()))))))))))))))))))))
 (value (0 1 2 3 4 5 6 0 2 4 7) (let B (shen-jit.lower.builder f 0 ()) (let F (lambda X X) (map (lambda X (shen-jit.lower.constant B X)) (cons (cons a b) (cons (cons a (cons b ())) (cons (cons () ()) (cons () (cons true (cons "true" (cons (cons F ()) (cons (cons a b) (cons (cons () ()) (cons true (cons (cons F ()) ())))))))))))))))
+(value () (shen.str->bytes ""))
+(value (104 195 169 226 130 172 0) (shen.str->bytes (cn "hé€" (n->string 0))))
+(error (shen.str->bytes 7))

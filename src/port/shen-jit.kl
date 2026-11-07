@@ -545,6 +545,20 @@ kernel's shen.<alphanum> and shen.<alphanums>, without their rule calls."
         (shen.comb (hd Rest) (cn (n->string (hd Bytes)) (hd (tl Rest)))))
       (shen.comb Bytes "")))
 
+"The reader's string-to-byte-list conversion reads one buffer backwards,
+instead of copying the remaining string with tlstr at each byte."
+
+(defun shen.str->bytes (S)
+  (if (string? S)
+      (let Buffer (shen-jit.string->bytes S)
+        (shen-jit.buffer->list Buffer (- (shen-jit.bytes-length Buffer) 1) ()))
+      (shen.f-error shen.str->bytes)))
+
+(defun shen-jit.buffer->list (Buffer I Acc)
+  (if (< I 0)
+      Acc
+      (shen-jit.buffer->list Buffer (- I 1) (cons (shen-jit.u8 Buffer I) Acc))))
+
 "An atom is a string, a number or a symbol, tried in that order. Every
 alternative of shen.<number> starts with a digit or one of - + . (bytes 45,
 43 and 46), so the kernel's number rules, five calls deep, are tried only
