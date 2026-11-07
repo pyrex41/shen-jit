@@ -626,6 +626,9 @@ typedef struct {
         uint64_t pairs;
     } *at_label;
     const size_t *label_pos; /* each label's offset in the bytecode */
+    /* Scratch buffers shared by dead_after's walks of this code. */
+    size_t *todo;
+    unsigned char *seen;
     /* The handlers pushed by this code that are active here, innermost
        last: each one's label, with NONE for one that reads the exception. */
     uint32_t *handlers;
@@ -1323,8 +1326,7 @@ static int kept_for(const Emit *e, uint32_t s)
     return free;
 }
 
-static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
-                       size_t after, uint32_t target, uint32_t s);
+static bool dead_after(Emit *e, size_t after, uint32_t target, uint32_t s);
 static bool type_test(uint32_t prim);
 static bool identity_operand(const Emit *e, uint32_t x);
 static bool string_operand(const Emit *e, uint32_t x);
@@ -1343,7 +1345,7 @@ static bool inline_eq_operand(const Emit *e, uint32_t x)
    nothing reads the slot or collects while only CACHE holds the value; and
    dst must be dead after them and where the test jumps. That is the shape
    of factorised pattern matching. */
-static bool dead_store(const Emit *e, uint32_t dst)
+static bool dead_store(Emit *e, uint32_t dst)
 {
     const uint32_t *w = e->words;
     size_t n = e->nwords, i = e->next;
@@ -1358,19 +1360,19 @@ static bool dead_store(const Emit *e, uint32_t dst)
                                            (test[5] == dst && inline_eq_operand(e, test[4])));
     size_t after = (size_t)(branch - w) + insn_length(branch);
     if (!(by_type || by_identity) || after >= n ||
-        !dead_after(w, n, e->label_pos, after, branch[2], test[1]))
+        !dead_after(e, after, branch[2], test[1]))
         return false;
     const uint32_t *take = w + after;
     if (test[2] == P_CONSP && take[0] == OP_PRIM && (take[2] == P_HD || take[2] == P_TL) && take[4] == dst)
         after += insn_length(take);
-    return dead_after(w, n, e->label_pos, after, branch[2], dst);
+    return dead_after(e, after, branch[2], dst);
 }
 
 /* Whether the next instruction is the only one to read slot dst, from
    CACHE, with nothing between that could collect or read the frame: a
    return of it, or the next cons of a run, which has room already, when
    that cons overwrites dst or dst is dead after it. */
-static bool consumed_next(const Emit *e, uint32_t dst)
+static bool consumed_next(Emit *e, uint32_t dst)
 {
     const uint32_t *w = e->words, *q = w + e->next;
     if (slot_kind(e, dst) != SLJIT_MEM1(FP) || e->next >= e->nwords)
@@ -1378,7 +1380,7 @@ static bool consumed_next(const Emit *e, uint32_t dst)
     if (q[0] == OP_RETURN)
         return q[1] == dst;
     return q[0] == OP_PRIM && q[2] == P_CONS && e->reserved && (q[4] == dst || q[5] == dst) &&
-           (q[1] == dst || dead_after(w, e->nwords, e->label_pos, e->next + insn_length(q), NONE, dst));
+           (q[1] == dst || dead_after(e, e->next + insn_length(q), NONE, dst));
 }
 
 /* Whether a result for slot dst can go straight to its register: a loop
@@ -3041,13 +3043,15 @@ static bool writes_slot(const uint32_t *p, uint32_t s)
 /* Whether slot s is written before it is read on every path from the two
    successors of a jump-if-false, or from after alone when target is NONE.
    It visits each instruction once, so the walk ends, also round a loop. */
-static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
-                       size_t after, uint32_t target, uint32_t s)
+static bool dead_after(Emit *e, size_t after, uint32_t target, uint32_t s)
 {
-    unsigned char *seen = calloc(n + 1, 1);
-    size_t *todo = malloc((n + 2) * sizeof *todo), ntodo = 0;
+    const uint32_t *w = e->words;
+    const size_t *label_pos = e->label_pos;
+    size_t n = e->nwords, *todo = e->todo, ntodo = 0;
+    unsigned char *seen = e->seen;
     bool dead = seen && todo;
     if (dead) {
+        memset(seen, 0, n);
         todo[ntodo++] = after;
         if (target != NONE)
             todo[ntodo++] = label_pos[target];
@@ -3081,8 +3085,6 @@ static bool dead_after(const uint32_t *w, size_t n, const size_t *label_pos,
                 dead = false; /* the stack is full, so assume the worst */
         }
     }
-    free(seen);
-    free(todo);
     return dead;
 }
 
@@ -3484,6 +3486,8 @@ static void *compile_code(VM *vm, V code)
               .arity = co[CODE_ARITY] & UINT32_MAX, .cbase = co[CODE_CBASE], .nconst = co[CODE_NCONST],
               .code = code, .cached = NONE, .post = NONE, .kept = {NONE, NONE}, .kept_post = {NONE, NONE},
               .entry = NONE, .label_pos = label_pos};
+    e.seen = calloc(nwords + 1, sizeof *e.seen);
+    e.todo = malloc((nwords + 2) * sizeof *e.todo);
     e.labels = calloc(nlabels + 1, sizeof *e.labels);
     e.fixups = calloc(6 * ninsns + 2, sizeof *e.fixups);
     e.handlers = calloc(ninsns + 1, sizeof *e.handlers);
@@ -3624,7 +3628,7 @@ static void *compile_code(VM *vm, V code)
             size_t after = i + insn_length(p);
             if (fusable(p[2]) && after < nwords && next[0] == OP_JUMP_IF_FALSE &&
                 next[1] == p[1] &&
-                dead_after(words, nwords, label_pos, after + insn_length(next), next[2], p[1])) {
+                dead_after(&e, after + insn_length(next), next[2], p[1])) {
                 /* An exit test, in code that loops: the jump's fall-through
                    is only a return, followed by the label it jumps to.
                    Elsewhere the return is as likely as the rest, as in the
@@ -3853,6 +3857,8 @@ done:
     free(e.selfs);
     free(e.guards);
     free(e.raises);
+    free(e.seen);
+    free(e.todo);
     free(marks);
     return native;
 }

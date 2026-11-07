@@ -135,6 +135,8 @@ Some refinements are built on that:
   its first branch starts with it cached. The slot, not the register, is the root, so whatever may collect
   reloads CACHE from the slot.
 - **A result read only from CACHE is not stored,** when nothing between it and its one reader could collect.
+  Liveness walks share a work stack and an array of visited marks for one compilation, clearing the marks
+  before each walk. If either buffer could not be allocated, the store is kept.
 - **Tests branch directly.** A Boolean primitive followed by a jump on its result branches on the comparison and stores
   nothing, and after a `cons?` that falls through, `hd` and `tl` of that slot need no test. A run of conses, as a chain
   with constant heads lowers to, checks room once and passes each pair on in CACHE.

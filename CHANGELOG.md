@@ -7,6 +7,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The JIT reuses scratch buffers across liveness checks while compiling each code object.
+  Reported by @pyrex41 in [#17](https://github.com/tizoc/shen-jit/pull/17).
 - Converting strings to byte lists for `read-from-string` takes time linear in the string's length.
   Reported by @pyrex41 in [#16](https://github.com/tizoc/shen-jit/pull/16).
 - Compiling code with many distinct constants no longer searches all of them for each new one: a list of 32000
