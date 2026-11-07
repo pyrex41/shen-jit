@@ -153,8 +153,13 @@ PASS tlstr-9
 PASS tlstr-17
 PASS tlstr-18
 PASS tlstr-empty
+PASS pvar-is-pvar
+PASS pvar-not-pvar
+PASS pvar-equal
+PASS pvar-differ
+PASS pvar-print
 PASS seal-redefine-kernel (deviation)
 PASS seal-open-call (deviation)
 PASS seal-kernel-call
 
-158 passed, 0 failed (shen-scheme)
+163 passed, 0 failed (shen-scheme)

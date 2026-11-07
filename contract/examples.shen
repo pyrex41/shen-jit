@@ -236,6 +236,13 @@
   [tlstr-18 [tlstr "abcdefghijklmnopqr"] [value "bcdefghijklmnopqr"]]
   [tlstr-empty [tlstr ""] [error]]
 
+  \\ Prolog variables.
+  [pvar-is-pvar [shen.pvar? [shen.make-prolog-variable 5]] [value true]]
+  [pvar-not-pvar [shen.pvar? 5] [value false]]
+  [pvar-equal [= [shen.make-prolog-variable 5] [shen.make-prolog-variable 5]] [value true]]
+  [pvar-differ [= [shen.make-prolog-variable 5] [shen.make-prolog-variable 6]] [value false]]
+  [pvar-print [shen.app [shen.make-prolog-variable 5] "" shen.s] [value "Var5"]]
+
   \\ Sealing: kept last, because Shen/Scheme lets it redefine a kernel
   \\ function. In shen-jit kernel functions are sealed: redefining one
   \\ raises an error, so every call keeps the kernel's definition.

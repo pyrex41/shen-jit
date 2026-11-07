@@ -813,6 +813,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
 | `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl` and the FFI's tests under AddressSanitizer and UBSan |
 | `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
+| `make test-differential` | Each primitive over generated values, however it is compiled and through C, and properties they must keep. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |
 | `make test-ctrlc-windows` | A real Ctrl-C to the REPL on Windows, through a console |
 | `make test-linux` | Every suite on Linux arm64 and x86-64, in Docker, from a source tarball. Needs pandoc, as `make dist` does |

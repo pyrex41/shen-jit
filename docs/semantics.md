@@ -34,11 +34,17 @@ A word at the start of a heap object is therefore either a header (`111`) or
 the head of a pair. The collector's scan and the image's relocation pass rely on
 this. Objects are 8-byte aligned and at least two words long.
 
-Special values: the empty list, `true`, `false`, the cleared stack value (also
-used for unbound cells) and the forwarding marker used during collection. The
-cleared value and the forwarding marker are never visible to Shen code.
-`(fail)` is the symbol `shen.fail!`, as defined by the kernel, not a
-special value.
+Special values: the empty list, `true`, `false`, Prolog variables, the cleared
+stack value (also used for unbound cells) and the forwarding marker used during
+collection. The cleared value and the forwarding marker are never visible to Shen
+code. `(fail)` is the symbol `shen.fail!`, as defined by the kernel, not a special
+value.
+
+A Prolog variable holds the offset of its binding in the Prolog vector, from 0 to
+2^56-1. As an optimisation it is this immediate value and not the kernel's absvector, so
+it allocates nothing and `absvector?` is false of it. `shen.pvar?` is true of it and of
+nothing else, two are `=` when their offsets are, and it prints as the kernel's
+`shen.pvar` prints one: `Var` and the offset.
 
 Object families, each identified by a type field in its header, which also
 states which fields hold values:
@@ -46,17 +52,19 @@ states which fields hold values:
 | Family | Contents |
 | --- | --- |
 | String | Byte length and bytes; immutable. |
+| Byte buffer | Byte length and bytes, which can be stored to, and which the collector does not scan. |
 | Symbol | Name string, name hash, global cell index. |
 | Real | IEEE double. |
 | Absvector | Length and that many values. |
 | Closure | Code object and captured values; a `defun` is a closure with no captures. Raw native entry. |
-| Primitive | Primitive table index and arity. Raw native entry. |
+| Foreign function | A C function, its description and arity. Raw native entry and address. |
 | Code object | Bytecode, constant slot base, frame size, arity, name. Raw native code pointer. |
 | Exception | Message string, and a value that goes before it, or none. An error raised from C keeps the offending value apart; `error-to-string` builds the full message the first time it is asked. |
 | Stream | Kind, direction, open flag; raw OS handle. |
+| Pointer | Kind and what keeps it alive; raw address and length. Its header says whether it is read only. |
 
 There is no partial-application object: KLambda named calls are saturated (see
-section 9), so only closures and primitives are ever applied.
+section 9), so only closures and foreign functions are ever applied.
 
 Symbols are ordinary heap objects. The hash is computed from the name bytes when
 the symbol is created, so it never depends on an address. The intern table is a
@@ -126,22 +134,22 @@ bytes; source text and files pass through as UTF-8 bytes without decoding.
 ## 5. Pairs and absvectors
 
 - `cons` accepts any two values; `hd` and `tl` of a non-pair raise an error.
-- `(absvector N)`: N must be a non-negative fixnum. Every element starts as the
+- `(absvector N)`: N must be a fixnum from 0 to below 2^48. Every element starts as the
   symbol `shen.fail!`, as in Shen/Scheme, so the `vector` override need not
   fill elements again.
 - `(<-address V N)` and `(address-> V N X)`: N must be within 0 to length-1;
   `address->` returns V. Out-of-range indices and non-vectors raise errors.
 
-The kernel catches out-of-range `<-address` errors to implement `vector?`,
-`tuple?` and `shen.pvar?`, `pos` past the end in `shen.string->byte`, and
-`value` of an unbound symbol in `bound?`. These errors must be cheap to raise
-and catch.
+The kernel catches `pos` past the end in `shen.string->byte` and `value` of an
+unbound symbol in `bound?`, and programs catch such errors too, so they must be
+cheap to raise and catch.
 
 ## 6. Equality and hashing
 
 `(= A B)` is true when A and B are numbers with the same mathematical value,
-strings with the same bytes, pairs whose heads and tails are `=`, absvectors of
-the same length whose elements are `=`, or the same symbol, special, procedure,
+strings or byte buffers with the same bytes, pairs whose heads and tails are `=`,
+absvectors of the same length whose elements are `=`, pointers of the same kind and
+address that are both read only or both not, or the same symbol, special, procedure,
 stream or exception. Closures compare by identity.
 
 `=` follows a term as deep as it goes, without overflowing the C stack, and it
@@ -153,7 +161,8 @@ comparisons waiting or 2^31 steps.
 `(hash X N)`, for a positive N, returns an integer from 0 to N inclusive, as the
 kernel's port performance guide states, and is consistent with `=`: numbers
 hash by mathematical value (8, 8.0 and -0.0/0.0 agree), strings by bytes,
-symbols by their stored name hash, pairs and absvectors by their elements.
+symbols by their stored name hash, pairs and absvectors by their elements, byte
+buffers as strings of the same bytes, and pointers by kind and address.
 Procedures, streams and exceptions hash by family, since a moving collector
 gives them no stable address. *Deviation:* Shen/Scheme's hash distinguishes 8
 from 8.0.
@@ -215,8 +224,8 @@ error; a non-symbol raises an error.
   binding never invalidates existing closures or active frames; open calls see
   the new binding on their next call, and the arity may change.
 - **Fixed names** are lowered directly and cannot be redefined: `defun` of one
-  raises an error. They are the 39 KLambda primitives listed in the design
-  document (`input+` is not one; the port defines it), the special forms `if`, `and`, `or`, `cond`, `let`, `lambda`,
+  raises an error. They are the 39 KLambda primitives (`input+` is not one; the port
+  defines it), the special forms `if`, `and`, `or`, `cond`, `let`, `lambda`,
   `defun`, `freeze`, `type` and `trap-error`, and the kernel functions `do` and
   `thaw`. *Deviation:* Shen/Scheme accepts such a `defun` but its compiled
   calls ignore it.
@@ -305,14 +314,14 @@ Shen/Scheme also uses, so Shen/JIT needs no command-line parser in C.
 ## 14. Memory, stack and compilation failures
 
 - **Heap.** When a collection does not free enough space, the heap grows.
-  If growth fails, the allocation raises a catchable "out of memory" error,
-  using a preallocated exception; the heap stays consistent because its regions
-  are always the same size. The process aborts only if the collector itself
+  If growth fails, or `SHEN_JIT_MAX_HEAP` is reached, the allocation raises a
+  catchable "out of memory" error, from room kept back for it; the heap stays
+  consistent because its regions are always the same size. The process aborts only if the collector itself
   cannot complete.
 - **The heap's size,** what a collection keeps and the room for new objects
   together, starts at 32 MiB and grows after a collection to five times what
   is live, if that is more. It never shrinks in the first version.
-- **Large objects:** vectors and strings of 32K words or more are allocated
+- **Large objects:** vectors, strings and byte buffers of 32K words or more are allocated
   apart and never copied; collections mark them, scan them in place and
   free the dead ones. They count as live data for that rule, and once
   toward `SHEN_JIT_MAX_HEAP`. An image holds them inside its heap.

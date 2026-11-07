@@ -101,8 +101,7 @@ Boolean) as an immediate, and reads any other from its constant cell.
 | `(jump-unless-entry S N L)` | Continue at L unless slot S holds a closure whose code has `(entry N _)`. |
 | `(inline F N)` | The next N instructions are a body of F inlined here: no code, but backtraces name F for errors raised in them. Not in stage 0 code. |
 
-Primitive names are the KLambda primitives listed under "Primitive contract"
-in [semantics.md](semantics.md), except `eval-kl` (see below),
+Primitive names are the 39 KLambda primitives, except `eval-kl` (see below),
 plus:
 
 - `raise-cond`: arity 0, raises the "no clause applies" error for `cond`;
@@ -149,6 +148,8 @@ plus:
   handle the pointers such functions pass around, and `shen-jit.errno`, `shen-jit.c-errno` (arity 0) what
   the last one left. `shen-jit.pointer-read-only` (arity 1) marks one against stores. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
   tell Shen when a pointer has died, and `shen-jit.collect` (arity 0) collects. [ffi.md](ffi.md) has their use.
+- `shen-jit.integer?`: arity 1, the kernel's `integer?` as a primitive: true of a fixnum and of a
+  real with no fraction.
 - `shen-jit.vector?`: arity 1, the kernel's `vector?` without its
   `trap-error`: true for an absvector with at least one element whose element
   0 is a number at least 0. The port's `vector?` and `shen.+vector?` use it.
