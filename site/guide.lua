@@ -15,6 +15,7 @@ local PAGES = {
   deadlines = 'Operation deadlines',
   ['http-head'] = 'HTTP head framing',
   http = 'HTTP requests and responses',
+  datalog = 'Datalog',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 
