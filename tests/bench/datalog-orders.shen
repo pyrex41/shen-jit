@@ -1,5 +1,5 @@
 \* What the order of a rule's atoms costs, under fixed plans and plans made from sizes as it runs.
-   Each program comes in two orders, a and b: the same rules with the atoms in another order.
+   Each program comes in more than one order: the same rules with the atoms in another order.
    Usage: shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e '(do.run chain-a true)' *\
 
 \* A chain of joins where one relation is small, written from either end. *\
@@ -42,6 +42,12 @@
   -> (append (do.points-to-relations)
        [[rule [vpt [var "V"] [var "H"]] [[load [var "V"] [var "B"] [var "F"]] [hpt [var "O"] [var "F"] [var "H"]] [vpt [var "B"] [var "O"]]]]
         [rule [hpt [var "O"] [var "F"] [var "H"]] [[vpt [var "W"] [var "H"]] [vpt [var "B"] [var "O"]] [store [var "B"] [var "F"] [var "W"]]]]]))
+
+\* As points-to analyses are usually written: each statement first, then what it reaches. *\
+(define do.points-to-c
+  -> (append (do.points-to-relations)
+       [[rule [vpt [var "V"] [var "H"]] [[load [var "V"] [var "B"] [var "F"]] [vpt [var "B"] [var "O"]] [hpt [var "O"] [var "F"] [var "H"]]]]
+        [rule [hpt [var "O"] [var "F"] [var "H"]] [[store [var "B"] [var "F"] [var "W"]] [vpt [var "B"] [var "O"]] [vpt [var "W"] [var "H"]]]]]))
 
 (define do.triples
   _ 0 _ _ Acc -> Acc
@@ -92,4 +98,6 @@
   small-a A -> (do.case "points-to small, order a" (do.points-to-a) (do.small) vpt A)
   small-b A -> (do.case "points-to small, order b" (do.points-to-b) (do.small) vpt A)
   large-a A -> (do.case "points-to large, order a" (do.points-to-a) (do.large) vpt A)
-  large-b A -> (do.case "points-to large, order b" (do.points-to-b) (do.large) vpt A))
+  large-b A -> (do.case "points-to large, order b" (do.points-to-b) (do.large) vpt A)
+  small-c A -> (do.case "points-to small, order c" (do.points-to-c) (do.small) vpt A)
+  large-c A -> (do.case "points-to large, order c" (do.points-to-c) (do.large) vpt A))

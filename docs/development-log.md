@@ -1556,6 +1556,27 @@ Now a tuple is u32 columns in a byte buffer, new tuples are a range of it, and t
 - **Not tried:** sorted arrays merged each round, in place of the tables; Free Join; keeping the two columns of a small tuple in the table entry, which would avoid reading the buffer on a repeat; native join loops; growing tables by more than double, which would trade memory for rehashing.
 - **Checked** against SWI-Prolog on 300 generated programs and on three larger workloads (51,834 to 132,214 tuples), against the Python evaluator on points-to, and under `SHEN_JIT_GC_STRESS=1000` in 57 s without the kernel test, whose allocation is too much there.
 
+### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
+
+The same rules and facts, written out for Soufflé; every result it finished matches ours. Its compiled programs are built from the C++ it generates with the flags of its own compile script, as that script's include paths fail in Homebrew's bottle. That bottle has no OpenMP, so Soufflé ran on one thread, as we do, and it keeps 64-bit values where we keep 32. Times in ms, best of three: ours is `datalog.run` with facts as a list, and Soufflé's its process less the same with no facts, which is its startup, about 15 ms. Building took it 3.0 to 3.7 s a program.
+
+| ms | Ours | Soufflé compiled | Soufflé interpreted |
+| --- | --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 129 | 429 | 551 |
+| Closure, dense | 9.6 | 36 | 49 |
+| Nonlinear closure | 501 | 673 | 1,373 |
+| Same generation | 21 | 53 | 77 |
+| Mutual recursion | 0.8 | 0.2 | 1.1 |
+| Triangles | 0.3 | 0.1 | 0.3 |
+| Skewed join (2,222,705) | 160 | 104 | 192 |
+| The kernel's call graph | 11 | 44 | 57 |
+| Points-to small, order a / b / c | 191 / 215 / 189 | 1,394 / over 100 s / 211 | 2,945 / over 100 s / 363 |
+| Points-to large, order a / b / c | 704 / 804 / 665 | 16,525 / over 100 s / 860 | 35,200 / over 100 s / 1,403 |
+
+- **Soufflé joins in the order written,** and orders a and b, made up for testing our planner, are bad for it. Order c is how points-to analyses are written. Its profile-guided schedule, statistics taken on the small case and applied to the large one, gave about 1,090 ms from order a and from order c, against 860 for order c as written.
+- **So on one thread:** ours is ahead on the closures, same generation, the call graph and points-to, 1.3 times Soufflé's best schedule there, and behind on the skewed join, at 1.5 times its time, and on runs under a millisecond.
+- **Not measured:** Soufflé in parallel, which is where it is built to go further; a build with 32-bit values; its magic sets.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
