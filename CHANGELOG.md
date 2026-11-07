@@ -13,6 +13,8 @@ All notable changes to this project are documented in this file. The format is b
   Reported by @pyrex41 in [#16](https://github.com/tizoc/shen-jit/pull/16).
 - Compiling code with many distinct constants no longer searches all of them for each new one: a list of 32000
   numbers takes about a thirtieth of what it did.
+- Compiling and loading a long definition takes far less time when it has many inlined calls, many closures or a
+  long Prolog clause body, each of which made the time grow with the square of the definition's size.
 
 ### Fixed
 

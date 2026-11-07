@@ -329,6 +329,19 @@ Lowering rules, the collector and the kernel port have their own sections.
   **Rejected: last-read pruning and generation marks.** On the same real workloads, the full #17 analysis
   added no benefit over buffer reuse, and generation marks matched clearing the bytes. A separate trial
   with a 4096-step work limit and no visited array made the kernel suite about 7.5% worse.
+- **Long definitions in linear time** (2026-11-07, Apple M5, load 25 to 45, instructions retired, the table against the build before the constants' index; for the lowerer alone, main's lowerer and this one loaded into the same host). Five costs grew with the square of a definition's size. Fixing them: `mark` took the `length` of all instructions before and after each inlined call, and the builder now counts them. `add-code` appended each closure's code to the list, and now pushes it and keeps a count. In a named tail call, the test of whether a later argument reads a parameter's slot built a `union` of the variables of all later arguments at every argument. It now walks them once and stops at the first, and only when some variable of the code is in that slot, which in a frozen continuation none is. That nesting is what a Prolog clause body makes. `prim-arity` and `fixed?` scanned the 132 fixed names on every named call, and now look in a `shen.dict`, made on first use. The loader's `build_code` took each nested code with `nth` from the start. Each script below evaluates each definition, reading and installing included, and the figure after "read" is reading alone:
+
+  | Definition | Main | This build | Read |
+  | --- | --- | --- | --- |
+  | A list of 6,400 inlined calls | 11.01 G | 5.01 G | 0.43 G |
+  | 4,000 nested inlined calls | 2.28 | 0.36 | 0.27 |
+  | A 400-clause `defprolog` | 2.37 | 1.62 | 1.40 |
+  | A Prolog clause with 400 goals | 1.15 | 0.25 | 0.25 |
+  | 3,200 lambdas | 0.76 | 0.49 | 0.44 |
+  | 6,400 lambdas | 1.95 | 0.80 | 0.65 |
+  | 12,800 lambdas | 5.95 | 1.39 | 1.16 |
+
+  What the 6,400 calls still cost there was the search of the constant pool, which the index above now removes. The loader alone, this build with main's `loader.c`: 12,800 lambdas 1.73 to 1.39 G, 6,400 0.87 to 0.80. With the index and the reused liveness buffers, and the fixed names in a `shen.dict`, three alternating runs each: kernel suite 3.106-3.174 to 2.951-2.961 G, building the standard library's executable 0.823-0.839 to 0.760-0.765 G. Before those two, three runs each: lowering the standard library 1.147-1.150 to 1.046-1.051 G, kernel suite 3.153-3.174 to 2.975-2.988 G. proof-bench, 3 runs, same inference counts: steam 3.57-3.59 to 3.47-3.62 G, yql 4.49-4.61 to 4.44-4.61, thm13 25.83-26.33 to 26.14-26.35, rcc10 19.18-19.27 to 18.87-19.12, which is noise either way. The lowered output is the same: the generated files changed only for the lowerer itself, and with `Sealed` empty, where inlined code is marked, 15 shapes and the standard library's 326 definitions lower the same under both lowerers. **Rejected: walking the later arguments without the slot test first.** The Prolog clause stayed at 0.69 G, as each level walks all the goals after it. **Rejected: arities in the property list,** as `get` raises on a miss and formats a message. A table of 64 buckets by `hash`, from a first version, was about 0.3% faster on the kernel suite than the `shen.dict`, but the dictionary is code the kernel already has. **Not fixed:** `capture-index` appends each captured variable and takes a `length`, quadratic in a closure's captures, which are few.
 
 ### Prolog and byte-buffer primitives
 
