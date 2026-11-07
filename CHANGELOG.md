@@ -5,6 +5,13 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Fixed
+
+- A chain of more than 255 nested lambdas, a lambda or freeze that captures more than 255 variables, and a dynamic call
+  with more than 255 arguments no longer fail to load with "bad operand". A `defun` of more than 255 parameters, which
+  failed with "malformed code object", and a named call with more than 255 arguments, which failed with "bad operand",
+  are now errors that say so.
+
 ## [0.4] - 2026-11-06
 
 ### Added

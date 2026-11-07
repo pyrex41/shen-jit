@@ -71,6 +71,8 @@ lowered for `eval-kl` is a code object of arity 0 named `eval-kl`.
 
 `D`, `S` and `A` are slot numbers; `K`, `C` and `I` are indices; `L` is a label
 number, local to its code object; `F` is a symbol; `N` is an argument count.
+Counts (`N`, and a code object's arity) are below 256, and a capture index
+below 2^20, as are slots.
 `O` is an operand: a slot number, or `(const K)` for constant K, which the
 lowerer uses for every literal operand instead of copying it into a slot
 first. Native code takes a constant that is not a pointer (a fixnum, `[]`, a
@@ -319,8 +321,10 @@ the shifts. The others are calls to C.
   `jump-unless-entry` tests it: a closure that takes all N arguments at
   once gets one `call-value` (or `tail-call-value`) with N arguments, and
   anything else is applied one argument at a time, reading the same slots
-  again.
-- `(lambda X1 ... (lambda Xn Body))`, n >= 2, lowered at runtime (not at
+  again. With more than 255 arguments there is no test: one at a time.
+- A named call `(f A1 ... An)` with n > 255, which no `defun` can take, and a
+  `defun` of more than 255 parameters are errors when lowered.
+- `(lambda X1 ... (lambda Xn Body))`, 2 <= n <= 255, lowered at runtime (not at
   stage 0) with Body at most 400 nodes, starts with `(entry n L)`: its usual
   one-argument code follows, and at L a second copy of Body, with X1..Xn in
   slots 2..n+1 and the outer lambda's captures. The inner lambdas take one

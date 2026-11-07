@@ -147,10 +147,11 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         return false;
     uint64_t x;
     /* Each operand position has a kind: s slot, o slot or constant (an
-       operand), k constant, c code, l label, f function symbol, n count, r a real
+       operand), k constant, c code, l label, f function symbol, n count, i a capture
+       index (any closure the lowerer makes has fewer captures than a frame has slots), r a real
        register, w a word register, W a word register or a constant. */
     static const char *const kinds[OP_COUNT] = {
-        [OP_MOVE] = "ss", [OP_CONST] = "sk", [OP_CAPTURE] = "sn",
+        [OP_MOVE] = "ss", [OP_CONST] = "sk", [OP_CAPTURE] = "si",
         [OP_CLOSURE] = "sc", [OP_PRIM] = "s", [OP_LABEL] = "l", [OP_JUMP] = "l",
         [OP_JUMP_IF_FALSE] = "ol", [OP_CALL] = "ssfn", [OP_CALL_SEALED] = "ssfn",
         [OP_CALL_VALUE] = "ssn", [OP_TAIL_CALL] = "sfn", [OP_TAIL_CALL_SEALED] = "sfn",
@@ -189,6 +190,7 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         case 'c': ok = small_int(v, ncode, &x); break;
         case 'l': case 'h': case 'b': ok = small_int(v, UINT32_MAX, &x); break;
         case 'n': ok = small_int(v, 256, &x); break;
+        case 'i': ok = small_int(v, 1u << 20, &x); break;
         case 'r': ok = small_int(v, REAL_REGISTERS, &x); break;
         case 'w': ok = small_int(v, WORD_REGISTERS, &x); break;
         case 'W': ok = operand(v, WORD_REGISTERS, nconst, &x); break;

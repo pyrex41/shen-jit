@@ -592,6 +592,14 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
   lambda returning lambdas, lowered at runtime, gets a second copy of its innermost body, at most 400 nodes. `lambda
   with many arguments` 14.9 → 2.5 ms (Shen/Scheme 6.5, earlier prototype 7.8), image +6.8 KB. Stage 0 code gets none:
   the kernel does not apply its own chains that way, and it would have added 35 KB.
+- **Counts past 255** (2026-11-07, Apple M5). The loader takes a count below 256, but the lowerer did not check:
+  a chain of 300 lambdas emitted `(entry 299 L)` and failed to load with "bad operand", as did a dynamic call of 256
+  arguments (`jump-unless-entry`), a named call of 256, and a lambda or freeze reading capture 256. Chains past 255
+  now get no entry and dynamic calls past 255 no all-at-once test; a named call past 255, which no defun takes, is a
+  lowerer error (going through `fn` instead was rejected: it made such calls work where Shen/Scheme raises, and gave
+  "fn: f is undefined" for a defun without a lambda form); and `capture`'s index has its own bound, 2^20, as `closure` already took any number of slots and
+  `lib/native.shen` checks the index against the closure. Widening every count was not needed: arity stays below 256,
+  and a defun of more is a lowerer error. Code that worked before lowers as before.
 - **List literals as constants** (2026-11-02, Apple M3 Max). `list equality (true)` 0.326 → 0.107 s (earlier prototype
   0.108). Lists of 64 nodes or more stay code, or the kernel's start-up tables would be kept alive by their code.
 - **Packed bytecode** (2026-11-02, Apple M3 Max). Variable-length integers, where 16-bit operands had been the earlier

@@ -936,5 +936,44 @@ check deep-equal-both "$dir/deep.out" "both true false"
 check deep-equal-wide "$dir/deep.out" "wide true false"
 fi
 
+# Chains of more lambdas than an entry takes (255), and a named call with more arguments than any defun
+# takes, an error: (define wide X0 X1 -> (/. X2 ... X299 [X0 ... X299])), and KLambda calling it with 300
+# arguments (Shen's own compiler applies the result of the first two to the rest). Too slow when every
+# thousand words collect.
+if [ -z "$SHEN_JIT_GC_STRESS" ]; then
+awk 'BEGIN {
+    for (i = 0; i < 300; i++) { v = v " X" i; n = n " " i }
+    s = "["; for (i = 0; i < 300; i++) s = s (i ? " " : "") "X" i; s = s "]"
+    b = s; for (i = 299; i >= 2; i--) b = "(/. X" i " " b ")"
+    print "(define wide X0 X1 -> " b ")"
+    print "(output \"wide ~A~%\" (trap-error (eval-kl [wide" n "]) (/. E (error-to-string E))))"
+    c = "X299"; for (i = 299; i >= 0; i--) c = "(/. X" i " " c ")"
+    print "(define chain -> " c ")"
+    print "(output \"chain ~S~%\" ((chain)" n "))"
+}' > "$dir/wide.shen"
+# Chains of 255 to 257 whose body lists every parameter, so that inner lambdas capture more than 255 variables,
+# applied to all their arguments at once (an entry up to 255), and a freeze capturing 300 let-bound variables.
+for k in 255 256 257; do
+    awk -v k=$k 'BEGIN {
+        s = "["; for (i = 0; i < k; i++) { s = s (i ? " " : "") "X" i; n = n " " i } s = s "]"
+        for (i = k - 1; i >= 0; i--) s = "(/. X" i " " s ")"
+        print "(define all" k " -> " s ")"
+        print "(output \"all" k " ~S~%\" (= ((all" k ")" n ") [" substr(n, 2) "]))"
+    }' >> "$dir/wide.shen"
+done
+awk 'BEGIN {
+    s = "["; for (i = 0; i < 300; i++) s = s (i ? " " : "") "X" i; s = "(thaw (freeze (nth 300 " s "])))"
+    for (i = 299; i >= 0; i--) s = "(let X" i " " i " " s ")"
+    print "(output \"lets ~S~%\" " s ")"
+}' >> "$dir/wide.shen"
+"$SHEN" script "$dir/wide.shen" > "$dir/wide.out" 2>&1
+contains wide-named-call "$dir/wide.out" "wide shen-jit lowerer: a named call with more than 255 arguments: wide"
+check wide-chain "$dir/wide.out" "chain 299"
+check wide-all255 "$dir/wide.out" "all255 true"
+check wide-all256 "$dir/wide.out" "all256 true"
+check wide-all257 "$dir/wide.out" "all257 true"
+check wide-lets "$dir/wide.out" "lets 299"
+fi
+
 echo "cli tests: $pass passed, $fail failed"
 [ "$fail" -eq 0 ]

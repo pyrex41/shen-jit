@@ -203,6 +203,9 @@ error; a non-symbol raises an error.
 - **Named calls** `(f A1 ... An)`, with `f` not lexically bound, call `f`'s
   function binding. If its arity differs from n, the call raises an error; if f
   has no function binding, the call raises an error. This matches Shen/Scheme.
+  A function takes at most 255 parameters, so a named call with more than 255
+  arguments always has the wrong arity: it is rejected when lowered, where
+  Shen/Scheme raises an arity error when it is called.
   The Shen compiler already turns Shen-level partial applications into lambdas,
   and the kernel, stlib and extension KLambda contain no named call with
   the wrong argument count.

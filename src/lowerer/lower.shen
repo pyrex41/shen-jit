@@ -279,7 +279,11 @@
            ((and (shen-jit.lower.fixed? F)
                  (not (and (element? F [do thaw protect]) (element? F Sealed))))
             (shen-jit.lower.fail "defun of a fixed name" F))
-           (true (shen-jit.lower.check-params F Params))))
+           ((shen-jit.lower.check-params F Params)
+            (if (shen-jit.lower.count? (length Params))
+                true
+                (shen-jit.lower.fail "defun of more than 255 parameters" F)))
+           (true true)))
 
 (define shen-jit.lower.check-params
   _ [] -> true
@@ -583,7 +587,15 @@
             (shen-jit.lower.prim F (shen-jit.lower.norm-list Scope Args)))
            ((shen-jit.lower.fixed? F)
             (shen-jit.lower.fail (shen-jit.lower.malformed F) [F | Args]))
-           (true (shen-jit.lower.call F (shen-jit.lower.norm-list Scope Args)))))
+           ((shen-jit.lower.count? (length Args))
+            (shen-jit.lower.call F (shen-jit.lower.norm-list Scope Args)))
+           \\ No defun takes more than 255 arguments, so such a call is always wrong.
+           (true (shen-jit.lower.fail "a named call with more than 255 arguments" F))))
+
+\\ The loader takes counts below 256: a call's arguments, an entry's
+\\ parameters and a defun's arity.
+(define shen-jit.lower.count?
+  N -> (< N 256))
 
 \\ A cons of two constants whose tail is a proper list is itself a constant,
 \\ made here once: a list literal such as [a b c] then costs nothing to
@@ -779,7 +791,7 @@
 \\ the same slots again.
 (define shen-jit.lower.apply-all?
   X -> (let Args (tl (shen-jit.lower.chain X []))
-         (and (>= (length Args) 2) (shen-jit.lower.simple? Args))))
+         (and (>= (length Args) 2) (shen-jit.lower.count? (length Args)) (shen-jit.lower.simple? Args))))
 
 (define shen-jit.lower.simple?
   [] -> true
@@ -1091,7 +1103,8 @@
 \\ parameters in slots 2 to N+1. Its free variables are the outer
 \\ lambda's, so it reads them from the same closure. Only the outermost
 \\ lambda of a chain has one, and only when the innermost body is at most
-\\ 400 nodes, since it is a second copy. Code lowered at stage 0 (Sealed is
+\\ 400 nodes, since it is a second copy, and the chain has at most 255
+\\ parameters, the most an entry can take. Code lowered at stage 0 (Sealed is
 \\ not []) has none: the kernel does not apply its own chains to several
 \\ arguments, and its 183 lambda forms would grow the image by 5%; those
 \\ fn makes later have them.
@@ -1100,7 +1113,8 @@
   -> (/. B (if (empty? (<-address B 2))
                (shen-jit.lower.finish-entry B Params [lambda X Body])
                (shen-jit.lower.finish-plain B Params [lambda X Body])))
-      where (<= (shen-jit.lower.size (shen-jit.lower.lambda-body Body)) 400)
+      where (and (<= (shen-jit.lower.size (shen-jit.lower.lambda-body Body)) 400)
+                 (shen-jit.lower.count? (length (append Params (shen-jit.lower.lambda-params [lambda X Body])))))
   Params Body -> (/. B (shen-jit.lower.finish-plain B Params Body)))
 
 (define shen-jit.lower.finish-entry
