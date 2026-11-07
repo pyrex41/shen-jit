@@ -10,25 +10,20 @@ All notable changes to this project are documented in this file. The format is b
 - A bounded HTTP listener with connection limits, cooperative socket cancellation, controlled shutdown
   and completion snapshots. A runnable SQLite counter API in `example-apps/sqlite-http/` demonstrates
   per-request database ownership, atomic increments, JSON responses and an explicit shutdown command.
-
 - Optional HTTP/1.1 request parsing, bounded Content-Length bodies, response encoding and a one-request
   socket driver with per-phase deadlines, typed APIs and a small echo/health example. Ambiguous framing
   is rejected; HEAD/bodyless responses, partial output failure and owned body bytes have explicit rules.
-
 - `lib/native.shen` writes loops and branches without labels: `if`, `when`, `unless`, `while`, `for`, `block`, `exit`
   and `next`, which become the same instructions. `shen-jit.expand-native` shows what they become.
 - Optional HTTP head framing preserves unread body bytes under an explicit byte limit. Monotonic
   operation deadlines cover socket transfers across short progress and retries, with typed results,
   injected clocks and transient reader timeout recovery.
-
 - Optional `lib/frame.shen` reads bounded binary frames across I/O chunks; `lib/io-socket.shen` adds
   owned TCP endpoints and flushing write shutdown over existing sockets. `tools/frame-echo.shen`
   demonstrates framed sessions with bounded payloads and one flushed reply per message.
-
 - Optional `lib/io.shen` and `lib/io-file.shen`: bounded chunk readers/writers, memory endpoints and
   native binary files, independent of kernel streams. Short transfers retain progress; explicit close
   flushes pending output, and scoped helpers preserve primary and cleanup errors.
-
 - Optional `lib/buffer.shen` and `lib/cursor.shen`: checked views over managed bytes or sized foreign
   memory, overlapping copies, owned captures, logical equality and typed cursor operations.
   `tools/buffer-parsers.shen` demonstrates complete JSON and length-prefixed binary parsing over them.
