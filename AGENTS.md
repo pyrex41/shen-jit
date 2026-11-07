@@ -56,7 +56,7 @@ A commit message says what changed and what it measured.
 Run the fast tier after every change; it takes about 20 s and catches nearly everything:
 
 ```bash
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-ffi test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-ffi test-overrides
 ```
 
 `make test-overrides` (a second) runs each kernel function that the port replaces beside the kernel's own definition, taken from the KLambda, over generated values, as compiled and through C. They must agree exactly: 1 and 1.0 differ, and a value and an error, but not the text of two errors. What differs on purpose is listed in `o.known` in `tests/overrides.shen`, with its reason, as narrowly as it can be. A difference that no longer shows fails, and so does a new override that the test does not name, so a new one joins it there or `o.left-out`.
@@ -116,6 +116,8 @@ Keep these current with each change:
 - [docs/overrides.md](docs/overrides.md): overrides in the port.
 - [docs/ffi.md](docs/ffi.md) and `include/shen.h`: calling C.
 - [docs/guide.md](docs/guide.md): what a user sees. `make guide` renders it with pandoc, `site/template.html` and `site/guide.lua`, with design, semantics, bytecode and ffi as pages of their own, whose links `site/guide.lua` points at those pages; `.github/workflows/pages.yml` publishes them when any of those change, and release archives carry them. Don't mention the development log or the overrides in a rendered document. Run the guide's examples when you change them.
+- Library API references belong on their own pages in `docs/`, linked from a brief guide entry. Register rendered pages in
+  `GUIDE_PAGES` in the Makefile, `site/guide.lua`, and the path filter in `.github/workflows/pages.yml`.
 - The README stays minimal and points to the guide, so that they don't say the same things twice. What a user should know goes in the guide.
 - [CHANGELOG.md](CHANGELOG.md), in the [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format: what a user would notice, under "Unreleased" until a release.
 

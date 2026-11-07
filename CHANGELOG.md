@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Optional `lib/buffer.shen` and `lib/cursor.shen`: checked views over managed bytes or sized foreign
+  memory, overlapping copies, owned captures, logical equality and typed cursor operations.
+  `tools/buffer-parsers.shen` demonstrates complete JSON and length-prefixed binary parsing over them.
+
 ### Changed
 
 - The JIT reuses scratch buffers across liveness checks while compiling each code object.
@@ -20,6 +26,8 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Fixed
 
+- Closing a guarded handle invalidates it even if its release function raises, so a retained view cannot
+  keep using storage that the release function freed.
 - Under `SHEN_JIT_MAX_HEAP`, a vector or string of 256 KB or more no longer raises `out of memory` with the heap nearly
   empty, as it did for good once the heap had grown past half the limit. The process can use more memory at the limit
   as a result, up to about three times it.

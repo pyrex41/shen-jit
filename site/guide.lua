@@ -8,6 +8,7 @@ local PAGES = {
   semantics = 'Shen/JIT semantics',
   bytecode = 'Shen/JIT instructions and frames',
   ffi = 'Calling C',
+  buffers = 'Buffers and cursors',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 

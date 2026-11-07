@@ -12,6 +12,7 @@ on:
       - docs/semantics.md
       - docs/bytecode.md
       - docs/ffi.md
+      - docs/buffers.md
       - site/**
       - assets/**
       - .github/workflows/pages.yml

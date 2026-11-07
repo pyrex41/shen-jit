@@ -1115,6 +1115,26 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Buffer views and cursors (2026-11-07, macOS arm64)
+
+- The API reference lives on its own `docs/buffers.md` page, linked from the guide and rendered with it.
+- Added optional Shen-only buffer/cursor libraries over existing bytes and sized pointers, with logical
+  bounds, shared original owners, copies, overlapping moves, content comparison and typed declarations.
+  Cursor capture allocates before advancing; scans can use flat owner/start/end instead of per-byte records.
+  Closing the original foreign owner raises through a retained view, including at an empty boundary.
+- Complete JSON and big-endian packet examples exercise text/binary data without stream dependencies.
+  JSON preserves number tokens, validates UTF-8/surrogates and rejects duplicate keys; framing checks the
+  payload limit before capture. These are examples, not a general parser compiler or a throughput claim.
+- `handle.close` kills its shared pointer before calling Release: a callback that freed storage and then
+  raised previously skipped invalidation. The regression checks metadata before attempting another read,
+  so it can fail against the old code without dereferencing freed memory.
+- `make test-buffer` passes 72 managed checks, 73 format checks, 2 typed checks, 17 foreign/handle checks and
+  4 image/type checks, including a targeted run collecting at every allocation after loading an image.
+  Managed view/cursor state survives an image; foreign owners reload closed. CI runs this target on every
+  platform, with foreign allocation cases skipped explicitly on static builds.
+- The optional Python JSON oracle passes 256 generated cases (seed 193), independently decoding expected
+  values and preserving numeric tokens. It includes UTF-8 boundary scalars, nested containers and escapes.
+
 ### Byte buffers and bit operations (2026-11-03)
 
 - **Decision:** checked primitives on tagged values, with buffers as objects in the Shen heap, which the collector frees and saved

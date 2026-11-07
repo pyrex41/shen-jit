@@ -62,8 +62,8 @@
 (define handle.close
   H -> (let Record (shen-jit.pointer-owner H)
          (if (absvector? Record)
-             (let Released (handle.release Record)
-               (do (shen-jit.pointer-kill H) Released))
+             (do (shen-jit.pointer-kill H)
+                 (handle.release Record))
              (error "handle.close: ~S is not a handle" H))))
 
 (define handle.sweep
