@@ -792,6 +792,23 @@ that. Its readings decided nothing below.
   port: thm13 25.85-25.96 to 24.92-25.02 G, rcc10 18.86-18.97 to 18.30-18.44 G, THORN `meaning` (rewriting on) 55.04-55.33
   to 52.05-52.20 G, steam 0.5-1% fewer, and the kernel suite, stlib build, yql, L and `ec` level (yql, L and `ec` never reach
   it). The kernel's own Prolog compares a dereferenced term only with a constant, which the rule leaves alone.
+- **Rejected: an operand that reads a closure's capture directly** (2026-11-07, Apple M5 under load 30, against 3a474bf, not built). `capture` already compiles to two loads, one of slot 1 and one of the capture, plus a store, and the store is skipped when the next instruction consumes the value. So the only thing an operand could remove is the store and the consumer's reload, which come to about 2-3 instructions per capture. A temporary counter build measured how many captures run, against the instructions retired by a clean build:
+
+  | Workload | Captures run | Share of instructions | Captures read by a `closure` |
+  | --- | --- | --- | --- |
+  | THORN ec (= proof-bench yql) | 74 M | 1.7% | 56% |
+  | THORN meaning | 666 M | 1.2% | 63% |
+  | THORN L | 42 M | 1.15% | 44% |
+  | THORN schubert (= steam) | 28 M | 0.8% | 49% |
+  | thm13 | 225 M | 0.87% | 45% |
+  | rcc10 | 168 M | 0.89% | 46% |
+  | THORN set | 19 M | 0.5% | 22% |
+  | kernel suite | 13 M | 0.44% | 19% |
+  | stlib build | 0.5 M | 0.05% | 3% |
+
+  At 3 instructions saved per capture, the ceiling is about 5% on ec, 2.5-3.6% on the others and 1.3% on the kernel suite. Counting only the closure consumers, which are clearly in reach, it is about 2.8% on ec, 2.3% on meaning, 1.2% on thm13, rcc10 and steam, and 0.25% on the kernel suite. These count stack stores and reloads, which store-forwarding makes cheap, so time would gain less. None of this clears the bar for a new operand kind, which would touch the loader, every operand reader in the JIT, `lib/native.shen`'s checker and the fuzzer. A JIT-only peephole, in which `closure` reads captures that a run just before it loaded and that are dead after it, was costed at about 2 instructions per capture, under 1% on proof-bench. It was not tried. Static counts overstate the dynamic ones: `set` has the most static captures, 11,000, but only 0.5% of its instructions are captures.
+- **Rejected: fewer closures for Prolog head patterns** (2026-11-07, Apple M5, load 15-30, instructions retired, 3 alternating rounds against 3a474bf). A per-site count of closure allocations (a temporary JIT build) showed closures were 60% of allocated words on THORN `meaning` and 54% on proof-bench thm13 and rcc10. The head-pattern closures are what is left after the lowerer's two rules give up: an atom pattern's freeze too big to copy (more than 100 nodes), or a `GoTo` lambda whose copies would pass 1,500 nodes. Most of the rest are clause-body continuations and currying through `apply`, which a head-pattern change cannot touch. Raising both limits tenfold cut closure words 26% on `meaning` and 19% on thm13 and rcc10, with the same inference counts. Instructions: `meaning` 0.970, but thm13 0.998, rcc10 1.007, `ec` 0.996, and the cost of compiling showed on the short problems: `set` 1.215, `tarski` 1.251, L 1.129, schubert 1.122, kernel suite 1.031. With no limits, `meaning` took 26 s instead of 4. These figures are an upper bound for the review's alternative, unifying heads through `shen-jit.unify=`. That avoids the extra code, but it builds the pattern term on every match against a bound argument, which today allocates nothing once inlined. **Not tried:** that rewrite, since at most 3% on one problem is left to win.
+- **Lead, not taken (same runs):** the size limit for a lambda chain's all-arguments entry, 400 to 4000 nodes, one constant. `meaning` 0.966, `ec` 0.929, rcc10 0.989, thm13 0.995, schubert 0.990, L 0.994, but `tarski` 1.025 and `set` 1.019; the kernel suite and stlib build read 1.00. These are THORN's curried calls of compiled predicates (`eval-kl` lambda chains of 4 to 13 words, 0.88 M a run on `meaning`). A value between the two might keep the gains without the losses; not measured.
 
 ### Native code written by hand
 
