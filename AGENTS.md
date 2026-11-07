@@ -30,6 +30,10 @@ checkout's own workflow, and git ignores it.
 
 - Shen/JIT must perform well, but stay small and simple. A speed-up that needs a lot of new machinery for
   little gain is not worth it: say so, and record it in the development log instead.
+- A speed-up of the code people actually run weighs far more than one that moves a synthetic benchmark. A gain
+  seen only in a benchmark is rarely worth any code.
+- Niklaus Wirth's rule applies: "Generate good code for the frequent case; don't optimize the exceptional case."
+  A pathological case must work correctly, but it doesn't need to be fast, and it doesn't get complexity or size.
 - Libraries outside the default image go in `lib/`, and scripts in `tools/`.
 - The standard library (stlib) stays out of the default image: `make stlib` builds an executable with it,
   from the kernel's `klambda/stlib.kl`.
