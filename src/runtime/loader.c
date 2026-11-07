@@ -308,13 +308,9 @@ static V build_code(Loader *l, V form)
         fail(l, "malformed code object");
         return V_CLEARED;
     }
-    /* codes walks the nested codes: nth from the start each time took time
-       quadratic in their number. Each build_code allocates, so it is rooted. */
-    V codes = nth(form, 6);
     vm_root(vm, &form);
-    vm_root(vm, &codes);
     V result = V_CLEARED;
-    size_t nconst = list_length(nth(form, 4)), ncode = list_length(codes);
+    size_t nconst = list_length(nth(form, 4)), ncode = list_length(nth(form, 6));
     bool allocated;
     size_t cbase = vm_consts_alloc(vm, nconst + ncode, &allocated);
     if (!allocated)
@@ -324,8 +320,8 @@ static V build_code(Loader *l, V form)
     for (size_t i = 0; i < nconst; i++, consts = ptr(consts)[1])
         *ra_at(&vm->consts, cbase + i) = ptr(consts)[0];
     l->stats->constants += nconst;
-    for (size_t i = 0; i < ncode; i++, codes = ptr(codes)[1]) {
-        V nested = build_code(l, ptr(codes)[0]);
+    for (size_t i = 0; i < ncode; i++) {
+        V nested = build_code(l, nth(nth(form, 6), i));
         if (nested == V_CLEARED)
             goto done;
         *ra_at(&vm->consts, cbase + nconst + i) = nested;
@@ -363,7 +359,7 @@ static V build_code(Loader *l, V form)
         vm->max_frame = frame;
     l->stats->codes++;
 done:
-    vm_unroot(vm, 2);
+    vm_unroot(vm, 1);
     if (result == V_CLEARED)
         fail(l, "cannot build code object");
     return result;

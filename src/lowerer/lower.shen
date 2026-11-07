@@ -646,19 +646,18 @@
 \\ ---------------------------------------------------------------------------
 \\ Builders. A builder accumulates one code object in an absvector:
 \\ 0 name, 1 arity, 2 sealed names, 3 instructions (reversed), 4 constants
-\\ (reversed), 5 nested codes (reversed), 6 labels used, 7 frame size, 8 captured
-\\ variables, 9 how many constants, 10 the constants' index, 11 how many
-\\ instructions, 12 how many nested codes. The counts are kept so that nothing
-\\ takes the length of a list that grows with the code: that made a definition
-\\ with many inlined calls or closures quadratic to lower.
+\\ (reversed), 5 nested codes, 6 labels used, 7 frame size, 8 captured variables,
+\\ 9 how many constants, 10 the constants' index, 11 how many instructions, kept so
+\\ that mark need not take the length of a list that grows with the code, which made
+\\ a definition with many inlined calls quadratic to lower.
 
 (define shen-jit.lower.builder
   Name Arity Sealed
-  -> (let B (absvector 13)
+  -> (let B (absvector 12)
        (do (address-> B 0 Name) (address-> B 1 Arity) (address-> B 2 Sealed)
            (address-> B 3 []) (address-> B 4 []) (address-> B 5 [])
            (address-> B 6 0) (address-> B 7 (+ Arity 2)) (address-> B 8 []) (address-> B 9 0)
-           (address-> B 10 (shen.dict 8)) (address-> B 11 0) (address-> B 12 0))))
+           (address-> B 10 (shen.dict 8)) (address-> B 11 0))))
 
 \\ Lower Body with Params in slots 2.. and return the finished code object.
 (define shen-jit.lower.code
@@ -673,7 +672,7 @@
 
 (define shen-jit.lower.code-form
   B -> [code (<-address B 0) (<-address B 1) (<-address B 7) (reverse (<-address B 4))
-             (reverse (<-address B 3)) (reverse (<-address B 5))])
+             (reverse (<-address B 3)) (<-address B 5)])
 
 (define shen-jit.lower.bind
   [] _ -> []
@@ -740,8 +739,8 @@
               (if (cons? K) [[l (hd K) | Keys]] [])))
 
 (define shen-jit.lower.add-code
-  B Code -> (let Count (<-address B 12)
-              (do (address-> B 5 [Code | (<-address B 5)]) (address-> B 12 (+ Count 1)) Count)))
+  B Code -> (let Codes (<-address B 5)
+              (do (address-> B 5 (append Codes [Code])) (length Codes))))
 
 (define shen-jit.lower.capture-index
   B X -> (let Captures (<-address B 8)
@@ -1015,21 +1014,11 @@
   -> (do (shen-jit.lower.value B Env X S Top)
          (shen-jit.lower.in-place B Env Xs (+ S 1) Top Moves)))
 
-\\ Whether Xs have some [var V] with V in slot S, among the variables vars-of
-\\ finds, bound ones included. Xs are walked once, stopping at the first, and
-\\ only when Env has a variable in S at all: in a nested code, often none.
-\\ Tail calls nest, so the arguments walked contain the next calls.
+\\ Whether X has some [var V] with V in slot S, among the variables vars-of finds,
+\\ bound ones included, stopping at the first.
 (define shen-jit.lower.reads?
-  Env Xs S -> (and (shen-jit.lower.holds? Env S) (shen-jit.lower.reads-slot? Env Xs S)))
-
-(define shen-jit.lower.holds?
-  [[_ | S] | _] S -> true
-  [_ | Env] S -> (shen-jit.lower.holds? Env S)
-  _ _ -> false)
-
-(define shen-jit.lower.reads-slot?
   Env [var V] S -> (= (shen-jit.lower.slot V Env) S)
-  Env [X | Xs] S -> (or (shen-jit.lower.reads-slot? Env X S) (shen-jit.lower.reads-slot? Env Xs S))
+  Env [X | Xs] S -> (or (shen-jit.lower.reads? Env X S) (shen-jit.lower.reads? Env Xs S))
   _ _ _ -> false)
 
 (define shen-jit.lower.named-call

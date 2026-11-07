@@ -1108,7 +1108,7 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value true (let B (dr.chain (absvector 3)) (= (shen-jit.pvar 2) (dr.deref (shen-jit.pvar 1) (address-> B 2 none)))))
 (error "shen-jit.deref: " (let B (absvector 2) (dr.deref (shen-jit.pvar 0) (address-> B 0 (shen-jit.pvar 5)))))
 (value 7 (dr.deref 7 (absvector 1)))
-"Long definitions, which the lowerer and the loader handle in linear time: many inlined calls, with the instruction counts of nested (inline F N) marks, nested freezes in a tail call's arguments, and many closures, nested too."
+"Long definitions: many inlined calls, with the instruction counts of nested (inline F N) marks, nested freezes in a tail call's arguments, and many closures, nested too."
 (value lin-g (defun lin-g (X Y) (+ X Y)))
 (value lin-h (defun lin-h (X) (lin-g X (lin-g X 1))))
 (value lin-c (defun lin-c (X) (cons (lin-h (+ X 0)) (cons (lin-h (+ X 1)) (cons (lin-h (+ X 2)) (cons (lin-h (+ X 3)) (cons (lin-h (+ X 4)) (cons (lin-h (+ X 5)) (cons (lin-h (+ X 6)) (cons (lin-h (+ X 7)) (cons (lin-h (+ X 8)) (cons (lin-h (+ X 9)) (cons (lin-h (+ X 10)) (cons (lin-h (+ X 11)) (cons (lin-h (+ X 12)) (cons (lin-h (+ X 13)) (cons (lin-h (+ X 14)) (cons (lin-h (+ X 15)) (cons (lin-h (+ X 16)) (cons (lin-h (+ X 17)) (cons (lin-h (+ X 18)) (cons (lin-h (+ X 19)) (cons (lin-h (+ X 20)) (cons (lin-h (+ X 21)) (cons (lin-h (+ X 22)) (cons (lin-h (+ X 23)) (cons (lin-h (+ X 24)) (cons (lin-h (+ X 25)) (cons (lin-h (+ X 26)) (cons (lin-h (+ X 27)) (cons (lin-h (+ X 28)) (cons (lin-h (+ X 29)) (cons (lin-h (+ X 30)) (cons (lin-h (+ X 31)) (cons (lin-h (+ X 32)) (cons (lin-h (+ X 33)) (cons (lin-h (+ X 34)) (cons (lin-h (+ X 35)) (cons (lin-h (+ X 36)) (cons (lin-h (+ X 37)) (cons (lin-h (+ X 38)) (cons (lin-h (+ X 39)) ()))))))))))))))))))))))))))))))))))))))))))
@@ -1127,3 +1127,13 @@ goes through the stub, and a function that cannot be found raises as anything do
 (value lin-n (defun lin-n (X) (cons (lambda Y (cons (lambda Z (+ Y 0)) (cons (lambda Z (+ Y 1)) (cons (lambda Z (+ Y 2)) (cons (lambda Z (+ Y 3)) ()))))) (cons (lambda Y (cons (lambda Z (+ Y 10)) (cons (lambda Z (+ Y 11)) (cons (lambda Z (+ Y 12)) (cons (lambda Z (+ Y 13)) ()))))) (cons (lambda Y (cons (lambda Z (+ Y 20)) (cons (lambda Z (+ Y 21)) (cons (lambda Z (+ Y 22)) (cons (lambda Z (+ Y 23)) ()))))) (cons (lambda Y (cons (lambda Z (+ Y 30)) (cons (lambda Z (+ Y 31)) (cons (lambda Z (+ Y 32)) (cons (lambda Z (+ Y 33)) ()))))) (cons (lambda Y (cons (lambda Z (+ Y 40)) (cons (lambda Z (+ Y 41)) (cons (lambda Z (+ Y 42)) (cons (lambda Z (+ Y 43)) ()))))) (cons (lambda Y (cons (lambda Z (+ Y 50)) (cons (lambda Z (+ Y 51)) (cons (lambda Z (+ Y 52)) (cons (lambda Z (+ Y 53)) ()))))) ()))))))))
 (value lin-ap2 (defun lin-ap2 (Fs) (if (cons? Fs) (cons (lin-ap ((hd Fs) 0)) (lin-ap2 (tl Fs))) ())))
 (value ((0 1 2 3) (10 11 12 13) (20 21 22 23) (30 31 32 33) (40 41 42 43) (50 51 52 53)) (lin-ap2 (lin-n 0)))
+"Fixed names, which the lowerer looks up in a dictionary."
+(value 2 (shen-jit.lower.prim-arity cons))
+(value 5 (shen-jit.lower.prim-arity shen-jit.copy-bytes))
+(value -1 (shen-jit.lower.prim-arity if))
+(value -1 (shen-jit.lower.prim-arity fixed-nothing))
+(value true (shen-jit.lower.fixed? if))
+(value true (shen-jit.lower.fixed? protect))
+(value true (shen-jit.lower.fixed? cons))
+(value false (shen-jit.lower.fixed? fixed-nothing))
+(value false (shen-jit.lower.fixed? 5))
