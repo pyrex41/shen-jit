@@ -1,5 +1,5 @@
 \* Tests of lib/datalog.shen. Fixtures whose answers are written by hand, errors, and the engine
-   against the plain definition over generated programs, under every tuple layout.
+   against the plain definition over generated programs, under fixed and adaptive plans.
    Usage: shen-jit eval -l lib/datalog.shen -l tests/datalog.shen *\
 
 (set dt.*checks* 0)
@@ -13,23 +13,16 @@
   Name Got Want -> (do (set dt.*checks* (+ 1 (value dt.*checks*)))
                        (if (= Got Want) ok (dt.fail Name Got Want))))
 
-\* Every engine and layout gives the same sorted tuples. *\
-(define dt.layouts
-  Name -> [-1 0 12 20 30])
-
+\* The reference and both kinds of plan give the same sorted tuples. *\
 (define dt.runs
-  Name Facts -> [(datalog.run-naive Name Facts) | (dt.run-layouts Name Facts (dt.layouts Name))])
+  Name Facts -> [(datalog.run-naive Name Facts) (datalog.run Name Facts) (dt.run-fixed Name Facts)])
 
-\* A layout too small for a program's relations is refused, and is not a failure. *\
-(define dt.run-layouts
-  _ _ [] -> []
-  Name Facts [L | Ls]
-  -> (let Db (trap-error (datalog.run-layout Name Facts L)
-                         (/. E (if (dt.contains? (error-to-string E) "does not fit")
-                                   no
-                                   (simple-error (error-to-string E)))))
-          More (dt.run-layouts Name Facts Ls)
-       (if (= Db no) More [Db | More])))
+\* With plans that do not follow sizes. *\
+(define dt.run-fixed
+  Name Facts -> (let _ (set datalog.*adaptive* false)
+                     Db (datalog.run Name Facts)
+                     _ (set datalog.*adaptive* true)
+                  Db))
 
 (define dt.same
   Label Facts Name Rel Want
@@ -205,29 +198,20 @@
   [[r 1 2 3 4 5 6 7 8] [r 8 9 10 11 12 13 14 15] [r 15 16 17 18 19 20 21 22] [r 15 1 1 1 1 1 1 1]]
   dt.many h [[1 22]])
 
-\* The layout follows the number of values and the widest relation. *\
-(dt.check "layout, few" (datalog.layout [[r symbol symbol]] 100) 12)
-(dt.check "layout, all at the edge" (datalog.layout [[r symbol symbol]] 4096) 12)
-(dt.check "layout, one past" (datalog.layout [[r symbol symbol]] 4097) 20)
-(dt.check "layout, more" (datalog.layout [[r symbol symbol]] 2000000) 30)
-(dt.check "layout, wide for its values" (datalog.layout [[r symbol symbol symbol]] 2000000) 0)
-(dt.check "layout, as wide as can be" (datalog.layout [[r symbol symbol symbol symbol symbol]] 4096) 12)
-(dt.check "layout, wider" (datalog.layout [[r symbol symbol symbol symbol symbol symbol]] 2) 0)
-(dt.check "layout, one column" (datalog.layout [[r symbol]] 2000000) 30)
-
-\* Over 4096 values, in a run that has to choose. *\
+\* Tables and buffers grow well past where they start, and find what they hold. *\
 (define dt.many-edges
   0 Acc -> Acc
   N Acc -> (dt.many-edges (- N 1) [[edge N (+ N 1)] | Acc]))
 (let Db (datalog.run dt.reach (dt.many-edges 5000 [[edge 0 1]]))
-  (do (dt.check "a larger layout chosen" (hd (tl (hd (datalog.stats Db)))) 20)
-      (dt.check "a larger layout, right" (datalog.count Db reach) 5002)))
+  (do (dt.check "grown, right" (datalog.count Db reach) 5002)
+      (dt.check "grown, found" (datalog.holds? Db [edge 2500 2501]) true)
+      (dt.check "grown, not found" (datalog.holds? Db [edge 2501 2500]) false)))
 
 \* Plans follow sizes as they grow, and what is generated can be read. *\
 (let Db (datalog.run dt.reach (dt.chain 0 2000 []))
-  (dt.check "plans again as sizes grow" (> (hd (tl (hd (tl (tl (datalog.stats Db)))))) 4) true))
+  (dt.check "plans again as sizes grow" (> (hd (tl (hd (tl (datalog.stats Db))))) 4) true))
 (dt.check "plans are there to read" (cons? (datalog.plans dt.dep)) true)
-(dt.check "code is there to read" (hd (hd (datalog.code dt.dep 12))) defun)
+(dt.check "code is there to read" (hd (hd (datalog.code dt.dep))) defun)
 
 \* A rule whose order matters, written either way, gives one result. *\
 (defdatalog dt.order-a
@@ -239,6 +223,95 @@
 (set dt.order-facts [[big 1 2] [big 3 2] [big 4 5] [tiny 2 9]])
 (dt.same "order, one way" (value dt.order-facts) dt.order-a out [[1 9] [3 9]])
 (dt.same "order, the other" (value dt.order-facts) dt.order-b out [[1 9] [3 9]])
+
+\* The kernels themselves, with enough random tuples that hashes collide: values in a run are small
+   and dense, and meet few collisions. With 300000 of them about ten pairs share a fingerprint. *\
+(set dt.*bits* 88172645)
+
+(define dt.u32
+  -> (let X (value dt.*bits*)
+          Y (shen-jit.bit-xor X (shen-jit.bit-and (shen-jit.shift-left X 13) 4294967295))
+          Z (shen-jit.bit-xor Y (shen-jit.shift-right Y 17))
+          W (shen-jit.bit-xor Z (shen-jit.bit-and (shen-jit.shift-left Z 5) 4294967295))
+          _ (set dt.*bits* W)
+       W))
+
+\* Keys in a small range for the first column, so that chains are long; tuples go in a dictionary
+   too, by what they should be. *\
+(define dt.fill-relation
+  _ 0 _ Seen -> Seen
+  R N Add Seen
+  -> (let A (shen-jit.bit-and (dt.u32) 524287)
+          B (dt.u32)
+          _ (Add R [A B])
+          _ (shen.dict-> Seen [A B] true)
+       (dt.fill-relation R (- N 1) Add Seen)))
+
+(define dt.all-found
+  _ _ [] Acc -> Acc
+  R Find [T | Ts] Acc -> (dt.all-found R Find Ts (if (> (Find R T) 0) Acc (+ Acc 1))))
+
+(define dt.chain-length
+  P _ _ N _ _ -> N where (= P 0)
+  P Next Tuples N Key Off
+  -> (dt.chain-length (shen-jit.u32 Next (* 4 (- P 1))) Next Tuples
+       (if (= (shen-jit.u32 Tuples (+ Off (* 8 (- P 1)))) Key) (+ N 1) -1000000000) Key Off))
+
+\* Each key's chain holds exactly its tuples. *\
+(define dt.chains
+  _ _ _ _ [] _ Acc -> Acc
+  Index Tuples Find Want [K | Ks] Off Acc
+  -> (let P (Find (<-address Index 0) Tuples (<-address Index 2) K)
+          N (dt.chain-length P (<-address Index 1) Tuples 0 K Off)
+       (dt.chains Index Tuples Find Want Ks Off (if (= N (tl (assoc-or K Want))) Acc (+ Acc 1)))))
+
+(define assoc-or
+  K D -> (let E (shen.<-dict D K) [K | E]))
+
+(define dt.key-counts
+  [] _ D -> D
+  [T | Ts] Column D -> (let A (dt.column T Column)
+                            E (trap-error (shen.<-dict D A) (/. X 0))
+                            _ (shen.dict-> D A (+ E 1))
+                         (dt.key-counts Ts Column D)))
+
+(define dt.column
+  [A _] 1 -> A
+  [_ B] 2 -> B)
+
+\* Tuples not in the relation, of which some share a fingerprint with one that is. *\
+(define dt.absent-found
+  _ _ _ 0 Acc -> Acc
+  R Find Seen N Acc
+  -> (let T [(+ 524288 (shen-jit.bit-and (dt.u32) 524287)) (dt.u32)]
+       (dt.absent-found R Find Seen (- N 1) (if (> (Find R T) 0) (+ Acc 1) Acc))))
+
+\* An index by one column, with a kernel called as a closure. *\
+(define dt.index-test
+  Label R Tuples Column
+  -> (let Index (datalog.new-index 2 [Column] (datalog.count-of R))
+          _ (datalog.index-range R Index 0 (datalog.count-of R))
+          Counts (dt.key-counts Tuples Column (shen.dict 8))
+          K (datalog.find-kernel 2 [Column])
+          Find (eval-kl [lambda a [lambda b [lambda c [lambda d [K a b c d]]]]])
+          _ (dt.check (cn "kernels: an index counts its keys, " Label) (<-address Index 4) (shen.dict-count Counts))
+       (dt.check (cn "kernels: each chain holds its tuples, " Label)
+                 (dt.chains Index (<-address R 2) Find Counts (shen.dict-keys Counts) (* 4 (- Column 1)) 0) 0)))
+
+(define dt.kernel-test
+  -> (let R (datalog.new-relation 2)
+          Add (datalog.adder 2)
+          Seen (dt.fill-relation R 300000 Add (shen.dict 8))
+          Tuples (shen.dict-keys Seen)
+          _ (dt.check "kernels: distinct tuples counted" (datalog.count-of R) (shen.dict-count Seen))
+          _ (dt.check "kernels: each tuple found" (dt.all-found R (datalog.finder 2) Tuples 0) 0)
+          _ (dt.check "kernels: absent tuples not found" (dt.absent-found R (datalog.finder 2) Seen 300000 0) 0)
+          _ (dt.index-test "long chains" R Tuples 1)
+          _ (dt.index-test "wide keys" R Tuples 2)
+       ok))
+
+\* Too much allocation for GC stress, whose run sets this first, and the rest there has buffers moving. *\
+(if (trap-error (value dt.*light*) (/. E false)) ok (dt.kernel-test))
 
 \* Errors, each when the program is defined. *\
 (dt.raises "undeclared" "no relation nope"
@@ -296,13 +369,6 @@
   -> (do (dt.compare-relation Seed Db Reference Relations)
          (dt.compare-all Seed Dbs Reference Relations)))
 
-\* The same with plans that do not follow sizes. *\
-(define dt.run-fixed
-  Name Facts -> (let _ (set datalog.*adaptive* false)
-                     Db (datalog.run Name Facts)
-                     _ (set datalog.*adaptive* true)
-                  Db))
-
 (define dt.generated
   0 -> ok
   N -> (let Program (dtg.program)
@@ -312,13 +378,13 @@
             Name (dtg.numbered "dt.g" N)
             _ (datalog.define Name (dtg.items Relations Rules))
             Reference (datalog.run-naive Name Facts)
-            Dbs (dt.run-layouts Name Facts [-1 0 12])
+            Db (datalog.run Name Facts)
             Fixed (dt.run-fixed Name Facts)
             Name2 (dtg.numbered "dt.h" N)
             _ (datalog.define Name2 (append (dtg.items (dtg.shuffle Relations) [])
                                             (dtg.rule-items (dtg.shuffle (dtg.shuffle-bodies Rules)))))
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
-            _ (dt.compare-all N [Fixed | Dbs] Reference Relations)
+            _ (dt.compare-all N [Fixed Db] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
          (dt.generated (- N 1))))
 

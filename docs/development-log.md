@@ -1532,6 +1532,30 @@ The idea is Carac's (Adaptive Recursive Query Optimization, ICDE 2024): sizes ch
 - **What is left:** indexes stay once started, so a plan change can leave one maintained and unused. The tuple counts show what storage work remains: 13,391,521 derivations for 177,585 `vpt` tuples.
 - **Checked** against a separate evaluator in Python, written from the analysis's definition, on the large row in both orders, and against the reference on 300 generated programs under both kinds of plan. SWI-Prolog's tabling ran out of its default table space on this analysis after 75 s, in order b; a larger space was not tried.
 
+### Flat storage (2026-11-07, Apple M3 Max, against the dictionaries and lists before)
+
+A profile of the first version put 60 to 64% of the time in `sj_dict_put`, 13 to 17% in the insert path around it, 10 to 13% in the collector copying tuples, and 1 to 3% in the generated joins, so that a better code generator could have gained almost nothing. A prototype first: deduplicating in a flat table written as a native kernel cost 10 to 32 ns per derivation, the loop aside, against 17 to 159 ns for the dictionary, with the table sized in advance.
+
+Now a tuple is u32 columns in a byte buffer, new tuples are a range of it, and tables are open addressed with their hash's top half in each entry. Packing tuples into one integer, kept above, is gone with its layouts: every arity is the same code, and a column is read straight from the buffer. Generated kernels need `lib/native.shen`, which adds about 31 ms to a program's load.
+
+| ms | Before | Flat |
+| --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 277 to 333 | 154 to 177 |
+| Closure, dense (88,803) | 15.5 | 9.4 |
+| Nonlinear closure (88,803) | 820 to 858 | 483 to 491 |
+| Same generation (46,678) | 27 | 20.5 |
+| Skewed join (2,222,705) | 331 to 566 | 131 to 134 |
+| The kernel's call graph (125,617) | 20 | 10 |
+| Points-to, small, orders a and b | 281, 340 | 192, 219 |
+| Points-to, large, orders a and b | 1,218, 1,606 | 742, 807 |
+| Mutual recursion (15), triangles (17) | 0.7, 0.4 | 0.8, 0.4 |
+
+- **The collector has nothing left to do:** 0.3% of CPU on the closure against 7 to 13%. 140 MB resident at 1,388,324 tuples against 177 MB. This reverses the note above that retained tuples did not call for a byte-buffer engine: true if fast enough is the goal.
+- **Where the time goes now:** on the closure and the join, the insert kernel 50 to 55% and rehashing 13 to 25%, with allocating and zeroing buffers about 10%. On points-to, insert 50%, find 14%, the generated loops about 20%.
+- **Fingerprints hide bugs from small tests.** Values in a run are small and dense, and a multiplicative hash spreads them without collisions, so a kernel that trusted its fingerprint passed everything. It takes 300,000 random tuples, over the kernels directly, and an index on a column of full 32-bit values. Three planted bugs of that kind are what showed this; with those tests, each is caught, as are 8 others planted in growth, chains, merging and starting indexes. A ninth other, a scan reading what its round adds, changes no result, as derivations are monotonic.
+- **Not tried:** sorted arrays merged each round, in place of the tables; Free Join; keeping the two columns of a small tuple in the table entry, which would avoid reading the buffer on a repeat; native join loops; growing tables by more than double, which would trade memory for rehashing.
+- **Checked** against SWI-Prolog on 300 generated programs and on three larger workloads (51,834 to 132,214 tuples), against the Python evaluator on points-to, and under `SHEN_JIT_GC_STRESS=1000` in 57 s without the kernel test, whose allocation is too much there.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.

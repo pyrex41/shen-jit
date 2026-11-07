@@ -280,10 +280,10 @@ derivation must use a new tuple somewhere. Join order is chosen as a run goes, f
 an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes KL through `eval-kl`, with a function for each atom's loop, so that a loop is a self tail call,
 kept with the program, as a rule has only so many orders.
 
-Rules make no values, so the values of a run are known once its facts are read. They are interned, the program's own constants first, so that
-generated code can hold their numbers. A tuple is then one integer, with 12, 20 or 30 bits to a column, if the widest relation and the number of values allow,
-and otherwise a vector. A relation is a set for deduplication, a list of all its tuples, the new
-ones, those for the next round, and a dictionary for each set of columns that this run's plans have looked up, built when first needed. `datalog.run-naive` works from the definition, over lists,
+Values are interned, the program's own constants first, so that generated code can hold their numbers. A relation's tuples are u32 columns one after another in a byte buffer, which the collector does not scan, with the
+new tuples and those for the next round as ranges of it. A round reads only what was there when it began, so a loop can keep the buffer it started with while growing replaces the relation's. A table of 64-bit entries, open addressed, deduplicates: each holds the top half of its hash, which
+also says where it goes when the table grows, and the tuple's position plus one. An index is such a table by key, for the first tuple with that key, and a chain of u32s for the rest, made for each set of columns this run's plans look up, when first needed. Keys that are a whole tuple use
+the relation's own table. Inserting, finding, indexing and growing are kernels of word registers from `lib/native.shen`'s assembler, one for each shape of tuple or key, and the joins around them are KL, which calls them. `datalog.run-naive` works from the definition, over lists,
 and shares only the checker.
 
 ## Left out on purpose

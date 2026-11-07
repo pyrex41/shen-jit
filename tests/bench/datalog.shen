@@ -1,7 +1,7 @@
 \* Datalog workloads: lib/datalog.shen over a generated graph of each shape, and an actual source
    analysis, the call graph of the kernel's KL. Each row is one run: the seconds of the first run,
    which compiles, of a later one, and what it derived.
-   Usage: shen-jit eval -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "KLAMBDA_DIR")' *\
+   Usage: shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "KLAMBDA_DIR")' *\
 
 (set db.*seed* 2463534242)
 
@@ -124,26 +124,21 @@
   [File | Files] Acc -> (db.call-graph Files (db.file-facts (read-file File) Acc)))
 
 (define db.row
-  Label Name Facts Layout Rel
+  Label Name Facts Rel
   -> (let _ (datalog.forget-code Name)
-          First (db.seconds (freeze (datalog.run-layout Name Facts Layout)))
-          Second (db.seconds (freeze (datalog.run-layout Name Facts Layout)))
-          Third (db.seconds (freeze (datalog.run-layout Name Facts Layout)))
+          First (db.seconds (freeze (datalog.run Name Facts)))
+          Second (db.seconds (freeze (datalog.run Name Facts)))
+          Third (db.seconds (freeze (datalog.run Name Facts)))
           Db (snd First)
-          Stats (datalog.stats Db)
-       (output "~A | layout ~A | first ~A | then ~A ~A | ~A tuples | ~A~%"
-               Label (hd (tl (hd Stats))) (db.ms (fst First)) (db.ms (fst Second)) (db.ms (fst Third))
-               (datalog.count Db Rel) (tl Stats))))
+       (output "~A | first ~A | then ~A ~A | ~A tuples | ~A~%"
+               Label (db.ms (fst First)) (db.ms (fst Second)) (db.ms (fst Third))
+               (datalog.count Db Rel) (datalog.stats Db))))
 
 (define db.ms
   S -> (/ (db.floor (* S 10000) 0) 10))
 
 (define db.floor
   X I -> (if (> (+ I 1) X) I (db.floor X (+ I 1))))
-
-(define db.rows
-  _ _ _ _ [] -> ok
-  Label Name Facts Rel [L | Ls] -> (do (db.row Label Name Facts L Rel) (db.rows Label Name Facts Rel Ls)))
 
 (define db.naive
   Label Name Facts Rel
@@ -158,13 +153,13 @@
           Skew (db.skewed 8000 5 3000 [])
           Calls (db.call-graph (db.kl-files Klambda) [])
        (do (output "facts: calls ~A~%" (length Calls))
-           (db.rows "closure, sparse" db.closure Sparse path [-1 0])
-           (db.rows "closure, dense" db.closure Dense path [-1 0])
-           (db.rows "nonlinear, dense" db.nonlinear Dense path [-1 0])
-           (db.rows "same generation" db.samegen Parents same [-1 0])
-           (db.rows "mutual" db.mutual [[start 0] | Sparse] even [-1 0])
-           (db.rows "triangles" db.triangles Dense triangle [-1 0])
-           (db.rows "skewed join" db.skew Skew two [-1 0])
-           (db.rows "kernel call graph" db.calls Calls reaches [-1 0])
+           (db.row "closure, sparse" db.closure Sparse path)
+           (db.row "closure, dense" db.closure Dense path)
+           (db.row "nonlinear, dense" db.nonlinear Dense path)
+           (db.row "same generation" db.samegen Parents same)
+           (db.row "mutual" db.mutual [[start 0] | Sparse] even)
+           (db.row "triangles" db.triangles Dense triangle)
+           (db.row "skewed join" db.skew Skew two)
+           (db.row "kernel call graph" db.calls Calls reaches)
            (db.naive "closure, 300 edges" db.closure (db.random-edges 300 200 []) path)
            ok)))

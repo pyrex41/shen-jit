@@ -356,10 +356,10 @@ test-overrides: $(BUILD)/shen-jit
 	$(call OVERRIDES_TEST,)
 	$(call OVERRIDES_TEST,SHEN_JIT_SLOW_PRIMS=1)
 
-# Datalog (lib/datalog.shen): fixtures by hand, and generated programs against its reference. A macro
+# Datalog (lib/datalog.shen): fixtures by hand, its kernels, and generated programs against its reference. A macro
 # applies only to files read after it, so the tests load as a file of their own.
 test-datalog: $(BUILD)/shen-jit
-	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog.shen < /dev/null | \
+	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog.shen < /dev/null | \
 	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
 
 # The same programs against SWI-Prolog's tabling, an engine that shares nothing with it, if swipl is there.
@@ -434,10 +434,10 @@ bench-independent: all
 NUMERIC_RESULT := grep -a '^[a-z]* [0-9.e-]* s check'
 # Datalog's workloads: a generated graph of each shape, and the call graph of the kernel's KL.
 bench-datalog: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "$(KERNEL_DIR)/klambda")' < /dev/null | \
+	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "$(KERNEL_DIR)/klambda")' < /dev/null | \
 	  grep -a ' | \|^facts\|uncaught'
 	for c in chain-a chain-b small-a small-b large-a large-b; do for a in false true; do \
-	  $(BUILD)/shen-jit eval -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e "(do.run $$c $$a)" < /dev/null | grep -a ' | ' | head -1; \
+	  $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e "(do.run $$c $$a)" < /dev/null | grep -a ' | ' | head -1; \
 	done; done
 
 bench-numeric: $(BUILD)/shen-jit

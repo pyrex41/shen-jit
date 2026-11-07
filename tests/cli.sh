@@ -450,7 +450,7 @@ cat > "$dir/dl.shen" <<'EOF'
   (rule (e b) <-- (e a)))
 (output "compiled ~R~%" (datalog.sorted (datalog.run dl.kept [[e a b] [e b c]]) t))
 EOF
-SHEN_JIT_GC_STRESS= "$SHEN" --save "$dir/dl.img" eval -l lib/datalog.shen -l "$dir/dl.shen" > "$dir/dl.out" 2>&1 < /dev/null
+SHEN_JIT_GC_STRESS= "$SHEN" --save "$dir/dl.img" eval -l lib/native.shen -l lib/datalog.shen -l "$dir/dl.shen" > "$dir/dl.out" 2>&1 < /dev/null
 check datalog-before-saving "$dir/dl.out" "compiled ((a b) (a c) (b c))"
 SHEN_JIT_GC_STRESS= SHEN_JIT_IMAGE="$dir/dl.img" "$SHEN" eval \
     -e '(output "saved ~R~%" (datalog.sorted (datalog.run dl.kept [[e x y] [e y z]]) t))' \

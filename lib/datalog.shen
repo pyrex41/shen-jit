@@ -1,7 +1,8 @@
 \\ Datalog: relations, facts and recursive rules, evaluated bottom up to a fixed point. It stays
-\\ out of the image until asked for; load it before the code using it:
+\\ out of the image until asked for; load it after lib/native.shen, whose assembler makes its
+\\ kernels, and before the code using it:
 \\
-\\   shen-jit eval -l lib/datalog.shen -l program.shen
+\\   shen-jit eval -l lib/native.shen -l lib/datalog.shen -l program.shen
 \\
 \\ (defdatalog dependencies
 \\   (relation imports [symbol symbol])
@@ -27,7 +28,7 @@
 \\ datalog.ask         (datalog.ask Db (depends a X)), the tuples that match; _ matches anything
 \\ datalog.match       (datalog.match Db [depends a [var "X"]]), the same with the pattern as data
 \\ datalog.plans       (datalog.plans Name), the order of each rule's joins and the indexes they use
-\\ datalog.code        (datalog.code Name Layout), the KL generated for a tuple layout
+\\ datalog.code        (datalog.code Name), the KL those give
 \\ datalog.stats       (datalog.stats Db), rounds, and per relation tuples and derivations
 \\
 \\ A column is a symbol, a string or an integer. A variable in a head or a comparison must appear
@@ -37,10 +38,9 @@
 \\ Relations are sets, so duplicates count once, and the order of rules, atoms and facts does not
 \\ change a result. Evaluation is a snapshot: new facts mean a new datalog.run.
 \\
-\\ Each rule becomes KL, for a tuple layout and an order of joins, kept with the program. The order
-\\ comes from the sizes of the relations as it runs, and changes when they have. Values are
-\\ interned. Since rules make no new values, how many there are is known once the facts are read,
-\\ and a tuple is one integer if its columns fit, or a vector if not.
+\\ Each rule becomes KL, for an order of joins, kept with the program. The order comes from the sizes
+\\ of the relations as it runs, and changes when they have. Values are interned, and tuples kept
+\\ flat in byte buffers: see "Storage" below.
 
 (set datalog.*adaptive* true)
 (set datalog.*plans* 0)
@@ -577,8 +577,287 @@
                (get Name datalog.schedule)))
 
 \\ ---------------------------------------------------------------------------
-\\ Generating KL. A layout is how a tuple is held: the bits of each column in one integer, or 0
-\\ for a vector. The relations' records and the values are in a vector S, read by position.
+\\ Storage. A relation's tuples are u32 columns, one after another in a byte buffer, which the
+\\ collector does not scan, and its new tuples and those for the next round are ranges of that. A
+\\ table of 64-bit entries, open addressed, finds a tuple or an index's key: the top half of each is
+\\ the top half of its hash, which also says where it goes when the table grows, and the bottom half
+\\ is the tuple's position plus one, 0 being empty. An index's chain of tuples with one key is
+\\ a u32 for each tuple, the position plus one of the next.
+
+(define datalog.stride
+  0 -> 4
+  N -> (* 4 N))
+
+(set datalog.*kernels* (shen.dict 8))
+
+(eval-kl [defun datalog.dict-find [d k] [shen-jit.dict-find d k]])
+(shen.store-arity datalog.dict-find 2)
+
+\\ A generated kernel, once, under its name. Kernels depend only on the shape of a tuple.
+(define datalog.kernel
+  Name Make -> (if (cons? (datalog.dict-find (value datalog.*kernels*) Name))
+                   Name
+                   (do (shen-jit.install-code [defun Name (thaw Make)])
+                       (shen.dict-> (value datalog.*kernels*) Name true)
+                       Name)))
+
+(define datalog.kernel-name
+  Prefix N Keys -> (intern (datalog.name-with Keys (cn Prefix (str N)))))
+
+(define datalog.name-with
+  [] Name -> Name
+  [K | Ks] Name -> (datalog.name-with Ks (cn Name (cn "." (str K)))))
+
+\\ The word registers and parameters of a kernel are named, as protect writes a variable.
+(define datalog.column-parameter
+  I -> (intern (cn "C" (str I))))
+
+(define datalog.upto
+  I N -> (if (> I N) [] [I | (datalog.upto (+ I 1) N)]))
+
+\\ A multiplicative hash of word expressions, whose top half is what goes in the table.
+(define datalog.hash-form
+  [] -> (protect K)
+  [C | Cs] -> (datalog.hash-more Cs [* C (protect K)]))
+
+(define datalog.hash-more
+  [] H -> H
+  [C | Cs] H -> (datalog.hash-more Cs [* [bit-xor H C] (protect K)]))
+
+(define datalog.hash-setup
+  -> [[word (protect K) [bit-or [shift-left 2654435769 32] 2135587861]]])
+
+(define datalog.offset-form
+  Base 0 -> Base
+  Base Off -> [+ Base Off])
+
+\\ Add a tuple if it is not there: 1 if it was added, 0 if not, 2 if there is no room, for which
+\\ datalog.grow makes room. Meta holds the count, the table's mask, how many tuples fit and how many
+\\ derivations there have been, at 0, 8, 16 and 24.
+(define datalog.insert-kernel
+  N -> (datalog.kernel (datalog.kernel-name "datalog.k.insert." N [])
+         (freeze (datalog.insert-code N))))
+
+(define datalog.insert-code
+  N -> (let Cols (map (function datalog.column-parameter) (datalog.upto 1 N))
+            Name (datalog.kernel-name "datalog.k.insert." N [])
+         (shen-jit.assemble Name [(protect Table) (protect Tuples) (protect Meta) | Cols]
+           (append (datalog.hash-setup)
+            (append
+             [[word (protect Count) [u64 (protect Meta) 0]]
+              [u64! (protect Meta) 24 [+ [u64 (protect Meta) 24] 1]]
+              [word (protect Fp) [shift-right (datalog.hash-form Cols) 32]]
+              [word (protect Mask) [u64 (protect Meta) 8]]
+              [word (protect I) [bit-and (protect Fp) (protect Mask)]]
+              [loop probe]
+              [word (protect Off) [shift-left (protect I) 3]]
+              [word (protect E) [u64 (protect Table) (protect Off)]]
+              [jump-unless-word [= (protect E) 0] occupied]
+              [jump-unless-word [< (protect Count) [u64 (protect Meta) 16]] full]
+              [u64! (protect Table) (protect Off)
+                    [bit-or [shift-left (protect Fp) 32] [+ (protect Count) 1]]]
+              [word (protect P) [* (protect Count) (datalog.stride N)]]]
+             (append (datalog.store-columns Cols 0)
+              (append
+               [[u64! (protect Meta) 0 [+ (protect Count) 1]]
+                [return-word 1]
+                [label occupied]
+                [jump-unless-word [= [shift-right (protect E) 32] (protect Fp)] next]
+                [word (protect P) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]]
+               (append (datalog.compare-columns Cols 0)
+                [[return-word 0]
+                 [label next]
+                 [word (protect I) [bit-and [+ (protect I) 1] (protect Mask)]]
+                 [again probe]
+                 [label full]
+                 [return-word 2]]))))))))
+
+(define datalog.store-columns
+  [] _ -> []
+  [C | Cs] Off -> [[u32! (protect Tuples) (datalog.offset-form (protect P) Off) C]
+                   | (datalog.store-columns Cs (+ Off 4))])
+
+(define datalog.compare-columns
+  [] _ -> []
+  [C | Cs] Off -> [[jump-unless-word [= [u32 (protect Tuples) (datalog.offset-form (protect P) Off)] C] next]
+                   | (datalog.compare-columns Cs (+ Off 4))])
+
+\\ Where these key values are in a table: the position plus one of the tuple there, or 0.
+(define datalog.find-kernel
+  N Keys -> (datalog.kernel (datalog.kernel-name "datalog.k.find." N Keys)
+              (freeze (datalog.find-code N Keys))))
+
+(define datalog.key-offsets
+  Keys -> (map (/. K (* 4 (- K 1))) Keys))
+
+(define datalog.compare-keys
+  [] [] -> []
+  [Off | Offs] [C | Cs]
+  -> [[jump-unless-word [= [u32 (protect Tuples) (datalog.offset-form (protect P) Off)] C] next]
+      | (datalog.compare-keys Offs Cs)])
+
+(define datalog.find-code
+  N Keys
+  -> (let Cols (map (function datalog.column-parameter) (datalog.upto 1 (length Keys)))
+          Name (datalog.kernel-name "datalog.k.find." N Keys)
+       (shen-jit.assemble Name [(protect Table) (protect Tuples) (protect Mask) | Cols]
+         (append (datalog.hash-setup)
+          (append
+           [[word (protect Fp) [shift-right (datalog.hash-form Cols) 32]]
+            [word (protect I) [bit-and (protect Fp) (protect Mask)]]
+            [loop probe]
+            [word (protect E) [u64 (protect Table) [shift-left (protect I) 3]]]
+            [jump-unless-word [= (protect E) 0] occupied]
+            [return-word 0]
+            [label occupied]
+            [jump-unless-word [= [shift-right (protect E) 32] (protect Fp)] next]
+            [word (protect P) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]]
+           (append (datalog.compare-keys (datalog.key-offsets Keys) Cols)
+            [[return-word [bit-and (protect E) 4294967295]]
+             [label next]
+             [word (protect I) [bit-and [+ (protect I) 1] (protect Mask)]]
+             [again probe]]))))))
+
+\\ Adds the tuples from From up to To to an index, whose table has room, and gives how many keys
+\\ were new. A tuple goes at the head of its key's chain.
+(define datalog.index-kernel
+  N Keys -> (datalog.kernel (datalog.kernel-name "datalog.k.index." N Keys)
+              (freeze (datalog.index-code N Keys))))
+
+(define datalog.tuple-columns
+  [] _ -> []
+  [Off | Offs] Base -> [[u32 (protect Tuples) (datalog.offset-form Base Off)] | (datalog.tuple-columns Offs Base)])
+
+(define datalog.compare-tuples
+  [] -> []
+  [Off | Offs]
+  -> [[jump-unless-word [= [u32 (protect Tuples) (datalog.offset-form (protect Q) Off)]
+                           [u32 (protect Tuples) (datalog.offset-form (protect Base) Off)]] next]
+      | (datalog.compare-tuples Offs)])
+
+(define datalog.index-code
+  N Keys
+  -> (let Offs (datalog.key-offsets Keys)
+          Name (datalog.kernel-name "datalog.k.index." N Keys)
+       (shen-jit.assemble Name [(protect Table) (protect Next) (protect Tuples) (protect Mask) (protect From) (protect To)]
+         (append (datalog.hash-setup)
+          (append
+           [[word (protect Pos) (protect From)]
+            [word (protect D) 0]
+            [word (protect Mk) (protect Mask)]
+            [loop tuples]
+            [jump-unless-word [u< (protect Pos) (protect To)] done]
+            [word (protect Base) [* (protect Pos) (datalog.stride N)]]
+            [word (protect Fp) [shift-right (datalog.hash-form (datalog.tuple-columns Offs (protect Base))) 32]]
+            [word (protect I) [bit-and (protect Fp) (protect Mk)]]
+            [loop probe]
+            [word (protect Off) [shift-left (protect I) 3]]
+            [word (protect E) [u64 (protect Table) (protect Off)]]
+            [jump-unless-word [= (protect E) 0] occupied]
+            [u64! (protect Table) (protect Off) [bit-or [shift-left (protect Fp) 32] [+ (protect Pos) 1]]]
+            [u32! (protect Next) [shift-left (protect Pos) 2] 0]
+            [word (protect D) [+ (protect D) 1]]
+            [jump inserted]
+            [label occupied]
+            [jump-unless-word [= [shift-right (protect E) 32] (protect Fp)] next]
+            [word (protect Q) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]]
+           (append (datalog.compare-tuples Offs)
+            [[u32! (protect Next) [shift-left (protect Pos) 2] [bit-and (protect E) 4294967295]]
+             [u64! (protect Table) (protect Off) [bit-or [shift-left (protect Fp) 32] [+ (protect Pos) 1]]]
+             [jump inserted]
+             [label next]
+             [word (protect I) [bit-and [+ (protect I) 1] (protect Mk)]]
+             [again probe]
+             [label inserted]
+             [word (protect Pos) [+ (protect Pos) 1]]
+             [again tuples]
+             [label done]
+             [return-word (protect D)]]))))))
+
+\\ Moves a table's entries to a larger one.
+(define datalog.rehash-code
+  -> (shen-jit.assemble datalog.k.rehash [(protect New) (protect Old) (protect Mask) (protect Size)]
+       [[word (protect J) 0]
+        [word (protect Mk) (protect Mask)]
+        [word (protect End) (protect Size)]
+        [loop entries]
+        [jump-unless-word [u< (protect J) (protect End)] done]
+        [word (protect E) [u64 (protect Old) [shift-left (protect J) 3]]]
+        [jump-unless-word [= (protect E) 0] full]
+        [jump skip]
+        [label full]
+        [word (protect I) [bit-and [shift-right (protect E) 32] (protect Mk)]]
+        [loop probe]
+        [word (protect Off) [shift-left (protect I) 3]]
+        [jump-unless-word [= [u64 (protect New) (protect Off)] 0] taken]
+        [u64! (protect New) (protect Off) (protect E)]
+        [jump skip]
+        [label taken]
+        [word (protect I) [bit-and [+ (protect I) 1] (protect Mk)]]
+        [again probe]
+        [label skip]
+        [word (protect J) [+ (protect J) 1]]
+        [again entries]
+        [label done]
+        [return-word 0]]))
+
+(datalog.kernel datalog.k.rehash (freeze (datalog.rehash-code)))
+
+\\ A relation's record: 0 where its indexes end, 1 those in use, 2 its tuples, 3 its table, 4 its
+\\ meta, 5 and 6 the tuples that are new, by position, those before 6 being all that a round reads,
+\\ 7 the bytes of a tuple, and each index from 8, by a number kept with the program across runs. A
+\\ run starts only those it looks up. An index is a vector of its table, chain, mask and keys.
+(define datalog.new-relation
+  Arity
+  -> (let Room (+ 8 (shen-jit.shift-left 1 (if (> Arity 6) 6 Arity)))
+          R (absvector Room)
+          Stride (datalog.stride Arity)
+          Meta (shen-jit.bytes 32)
+          _ (shen-jit.s64! Meta 8 15)
+          _ (shen-jit.s64! Meta 16 8)
+          _ (address-> R 0 Room)
+          _ (address-> R 1 [])
+          _ (address-> R 2 (shen-jit.bytes (* 8 Stride)))
+          _ (address-> R 3 (shen-jit.bytes (* 16 8)))
+          _ (address-> R 4 Meta)
+          _ (address-> R 5 0)
+          _ (address-> R 6 0)
+          _ (address-> R 7 Stride)
+       R))
+
+(define datalog.count-of
+  Rec -> (shen-jit.s64 (<-address Rec 4) 0))
+
+\\ A larger table, its entries moved.
+(define datalog.larger-table
+  Old OldSize NewSize
+  -> (let New (shen-jit.bytes (* 8 NewSize))
+          _ (datalog.k.rehash New Old (- NewSize 1) OldSize)
+       New))
+
+\\ Room for at least one more tuple, in the buffer and at half full in the table.
+(define datalog.grow
+  Rec
+  -> (let Meta (<-address Rec 4)
+          Count (shen-jit.s64 Meta 0)
+          Stride (<-address Rec 7)
+          Tuples (<-address Rec 2)
+          Fits (/ (shen-jit.bytes-length Tuples) Stride)
+          Size (+ 1 (shen-jit.s64 Meta 8))
+          NewFits (if (>= Count Fits) (* 2 Fits) Fits)
+          NewSize (if (>= (* 2 Count) Size) (* 2 Size) Size)
+          _ (if (= NewFits Fits)
+                skip
+                (address-> Rec 2 (shen-jit.copy-bytes (shen-jit.bytes (* NewFits Stride)) 0 Tuples 0 (* Count Stride))))
+          _ (if (= NewSize Size)
+                skip
+                (do (address-> Rec 3 (datalog.larger-table (<-address Rec 3) Size NewSize))
+                    (shen-jit.s64! Meta 8 (- NewSize 1))))
+          _ (shen-jit.s64! Meta 16 (let Half (shen-jit.shift-right NewSize 1) (if (< Half NewFits) Half NewFits)))
+       true))
+
+\\ ---------------------------------------------------------------------------
+\\ Generating KL. The relations' records and the values are in a vector S, read by position.
 
 (define datalog.position
   X [X | _] N -> N
@@ -588,13 +867,21 @@
   Rel Relations -> (datalog.position Rel (map (function hd) Relations) 1))
 
 (define datalog.index-slot
-  Rel Keys Indexes -> (datalog.position Keys (tl (assoc Rel Indexes)) 7))
+  Rel Keys Indexes -> (datalog.position Keys (tl (assoc Rel Indexes)) 8))
 
 (define datalog.steps-indexes
-  [] Acc -> Acc
-  [[lookup Rel Keys _ _] | Steps] Acc
-  -> (datalog.steps-indexes Steps (datalog.add-index Rel Keys Acc))
-  [_ | Steps] Acc -> (datalog.steps-indexes Steps Acc))
+  [] _ Acc -> Acc
+  [[lookup Rel Keys _ _] | Steps] Relations Acc
+  -> (datalog.steps-indexes Steps Relations
+       (if (datalog.whole-tuple? Rel Keys Relations) Acc (datalog.add-index Rel Keys Acc)))
+  [_ | Steps] Relations Acc -> (datalog.steps-indexes Steps Relations Acc))
+
+\\ Keys that are every column need no index: the relation's own table finds them.
+(define datalog.whole-tuple?
+  Rel Keys Relations -> (= (length Keys) (datalog.arity-in Rel Relations)))
+
+(define datalog.arity-in
+  Rel Relations -> (- (length (assoc Rel Relations)) 1))
 
 (define datalog.add-index
   Rel Keys [] -> [[Rel Keys]]
@@ -611,42 +898,6 @@
 (define datalog.number-form
   [var V] _ -> [<-address [<-address s 0] (datalog.var-symbol V)]
   C _ -> C)
-
-(define datalog.shift
-  Layout Arity I -> (* Layout (- Arity I)))
-
-(define datalog.column-form
-  0 _ I Tuple -> [<-address Tuple (- I 1)]
-  _ 1 _ Tuple -> Tuple
-  Layout Arity I Tuple
-  -> (let Mask (- (shen-jit.shift-left 1 Layout) 1)
-       (cases (= I 1) [shen-jit.shift-right Tuple (datalog.shift Layout Arity I)]
-              (= I Arity) [shen-jit.bit-and Tuple Mask]
-              true [shen-jit.bit-and [shen-jit.shift-right Tuple (datalog.shift Layout Arity I)] Mask])))
-
-(define datalog.vector-form
-  [] _ V -> V
-  [F | Fs] I V -> (datalog.vector-form Fs (+ I 1) [address-> V I F]))
-
-\\ One integer from column values, the first the highest.
-(define datalog.pack-form
-  _ [] -> 0
-  _ [F] -> F
-  Layout [F | Fs] -> [shen-jit.bit-or [shen-jit.shift-left F (* Layout (length Fs))]
-                                      (datalog.pack-form Layout Fs)])
-
-(define datalog.tuple-form
-  0 Forms -> (datalog.vector-form Forms 0 [absvector (length Forms)])
-  Layout Forms -> (datalog.pack-form Layout Forms))
-
-(define datalog.list-form
-  [] -> []
-  [F | Fs] -> [cons F (datalog.list-form Fs)])
-
-(define datalog.key-form
-  0 [F] -> F
-  0 Forms -> (datalog.list-form Forms)
-  Layout Forms -> (datalog.pack-form Layout Forms))
 
 (define datalog.filter-form
   = A B Constants -> [= (datalog.value-form A Constants) (datalog.value-form B Constants)]
@@ -683,64 +934,104 @@
 (define datalog.loop-name
   Prefix N -> (intern (cn Prefix (cn ".s" (str N)))))
 
+(define datalog.loop-live
+  Columns Steps
+  -> (map (function datalog.var-symbol)
+          (difference (union (datalog.columns-use Columns) (datalog.live Steps))
+                      (datalog.columns-bind Columns))))
+
+\\ Add a tuple to the relation in r, growing it if it must. Its first attempt found no room and
+\\ changed nothing, so that a second is the whole of it.
+(define datalog.insert-form
+  N Forms
+  -> (let Kernel (datalog.insert-kernel N)
+          Call [Kernel [<-address r 3] [<-address r 2] [<-address r 4] | Forms]
+       [let x Call [if [= x 2] [do [datalog.grow r] Call] x]]))
+
 \\ The expression for these steps. Each atom's loop is a function of its own, so that it is a
-\\ self tail call and named in a backtrace; those go to datalog.*forms*.
+\\ self tail call and named in a backtrace; those go to datalog.*forms*. Ctx is Relations,
+\\ Constants and Indexes. A loop keeps the buffer it started with: a round can only add to a
+\\ relation it reads, what it reads is already in that buffer, and growing leaves it as it is.
 (define datalog.gen
   [] _ _ _ -> true
   [[filter Op A B] | Steps] Ctx Prefix N
-  -> [if (datalog.filter-form Op A B (datalog.nth 3 Ctx)) (datalog.gen Steps Ctx Prefix N) true]
-  [[emit Rel | Terms] | _] Ctx _ _
-  -> (let Slot (datalog.relation-slot Rel (datalog.nth 2 Ctx))
-          Forms (map (/. T (datalog.value-form T (datalog.nth 3 Ctx))) Terms)
-       [datalog.add [<-address s Slot] (datalog.tuple-form (hd Ctx) Forms)])
-  [[scan Rel Source Columns] | Steps] Ctx Prefix N
-  -> (let Slot (datalog.relation-slot Rel (datalog.nth 2 Ctx))
-          Field (if (= Source new) 4 3)
-       (datalog.gen-loop [<-address [<-address s Slot] Field] Rel Columns Steps Ctx Prefix N))
-  [[lookup Rel Keys Terms Columns] | Steps] Ctx Prefix N
-  -> (let Slot (datalog.relation-slot Rel (datalog.nth 2 Ctx))
-          Field (datalog.index-slot Rel Keys (datalog.nth 4 Ctx))
-          Key (datalog.key-form (hd Ctx) (map (/. T (datalog.value-form T (datalog.nth 3 Ctx))) Terms))
-       [let e [shen-jit.dict-find [<-address [<-address s Slot] Field] Key]
-         [if [cons? e]
-             (datalog.gen-loop [tl e] Rel Columns Steps Ctx Prefix N)
-             true]]))
+  -> [if (datalog.filter-form Op A B (datalog.nth 2 Ctx)) (datalog.gen Steps Ctx Prefix N) true]
+  [[emit Rel | Terms] | _] [Relations Constants Indexes] _ _
+  -> [let r [<-address s (datalog.relation-slot Rel Relations)]
+       (datalog.insert-form (datalog.arity-in Rel Relations)
+         (map (/. T (datalog.value-form T Constants)) Terms))]
+  [[scan Rel Source Columns] | Steps] [Relations Constants Indexes] Prefix N
+  -> (let Stride (datalog.stride (datalog.arity-in Rel Relations))
+          Start (if (= Source new) [* [<-address r 5] Stride] 0)
+       [let r [<-address s (datalog.relation-slot Rel Relations)]
+         (datalog.gen-scan Start [* [<-address r 6] Stride] Stride Columns Steps
+                           [Relations Constants Indexes] Prefix N)])
+  [[lookup Rel Keys Terms Columns] | Steps] [Relations Constants Indexes] Prefix N
+  -> (let Forms (map (/. T (datalog.value-form T Constants)) Terms)
+          Find (datalog.find-kernel (datalog.arity-in Rel Relations) Keys)
+          Ctx [Relations Constants Indexes]
+       [let r [<-address s (datalog.relation-slot Rel Relations)]
+         (if (datalog.whole-tuple? Rel Keys Relations)
+             [if [> [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | Forms] 0]
+                 (datalog.gen Steps Ctx Prefix N)
+                 true]
+             (let Field (datalog.index-slot Rel Keys Indexes)
+                  Stride (datalog.stride (datalog.arity-in Rel Relations))
+               [let i [<-address r Field]
+                 [let p [Find [<-address i 0] [<-address r 2] [<-address i 2] | Forms]
+                   [if [> p 0]
+                       (datalog.gen-chain Stride Columns Steps Ctx Prefix N)
+                       true]]]))]))
 
-(define datalog.gen-loop
-  List Rel Columns Steps Ctx Prefix N
+\\ A loop over the tuples from byte Start to byte End of the relation in r.
+(define datalog.gen-scan
+  Start End Stride Columns Steps Ctx Prefix N
   -> (let Name (datalog.loop-name Prefix N)
-          Live (map (function datalog.var-symbol)
-                    (difference (union (datalog.columns-use Columns) (datalog.live Steps))
-                                (datalog.columns-bind Columns)))
-          Arity (- (length (assoc Rel (datalog.nth 2 Ctx))) 1)
-          Body (datalog.gen-columns Columns (hd Ctx) Arity (datalog.gen Steps Ctx Prefix (+ N 1)) (datalog.nth 3 Ctx))
-          Form [defun Name [l s | Live]
-                 [if [cons? l]
-                     [let t [hd l] [do Body [Name [tl l] s | Live]]]
+          Live (datalog.loop-live Columns Steps)
+          Body (datalog.gen-columns Columns l (datalog.nth 2 Ctx) (datalog.gen Steps Ctx Prefix (+ N 1)))
+          Form [defun Name [l e b s | Live]
+                 [if [< l e]
+                     [do Body [Name [+ l Stride] e b s | Live]]
                      true]]
           _ (set datalog.*forms* [Form | (value datalog.*forms*)])
-       [Name List s | Live]))
+       [Name Start End [<-address r 2] s | Live]))
+
+\\ A loop along a chain, from p and the index in i of the relation in r.
+(define datalog.gen-chain
+  Stride Columns Steps Ctx Prefix N
+  -> (let Name (datalog.loop-name Prefix N)
+          Live (datalog.loop-live Columns Steps)
+          Body (datalog.gen-columns Columns l (datalog.nth 2 Ctx) (datalog.gen Steps Ctx Prefix (+ N 1)))
+          Form [defun Name [p n b s | Live]
+                 [if [> p 0]
+                     [let q [- p 1]
+                       [let l [* q Stride]
+                         [do Body [Name [shen-jit.u32 n [* q 4]] n b s | Live]]]]
+                     true]]
+          _ (set datalog.*forms* [Form | (value datalog.*forms*)])
+       [Name p [<-address i 1] [<-address r 2] s | Live]))
+
+(define datalog.column-form
+  Base I -> [shen-jit.u32 b (if (= I 1) Base [+ Base (* 4 (- I 1))])])
 
 \\ Binds come first, as a check can read a column bound earlier in the same atom.
 (define datalog.gen-columns
-  Columns Layout Arity Inner Constants
-  -> (datalog.gen-binds Columns Layout Arity
-       (datalog.gen-checks Columns Layout Arity Inner Constants)))
+  Columns Base Constants Inner
+  -> (datalog.gen-binds Columns Base (datalog.gen-checks Columns Base Constants Inner)))
 
 (define datalog.gen-binds
-  [] _ _ Inner -> Inner
-  [[bind V I] | Cs] Layout Arity Inner
-  -> [let (datalog.var-symbol V) (datalog.column-form Layout Arity I t)
-       (datalog.gen-binds Cs Layout Arity Inner)]
-  [_ | Cs] Layout Arity Inner -> (datalog.gen-binds Cs Layout Arity Inner))
+  [] _ Inner -> Inner
+  [[bind V I] | Cs] Base Inner
+  -> [let (datalog.var-symbol V) (datalog.column-form Base I) (datalog.gen-binds Cs Base Inner)]
+  [_ | Cs] Base Inner -> (datalog.gen-binds Cs Base Inner))
 
 (define datalog.gen-checks
-  [] _ _ Inner _ -> Inner
-  [[check Term I] | Cs] Layout Arity Inner Constants
-  -> [if [= (datalog.column-form Layout Arity I t) (datalog.value-form Term Constants)]
-         (datalog.gen-checks Cs Layout Arity Inner Constants)
+  [] _ _ Inner -> Inner
+  [[check Term I] | Cs] Base Constants Inner
+  -> [if [= (datalog.column-form Base I) (datalog.value-form Term Constants)]
+         (datalog.gen-checks Cs Base Constants Inner)
          true]
-  [_ | Cs] Layout Arity Inner Constants -> (datalog.gen-checks Cs Layout Arity Inner Constants))
+  [_ | Cs] Base Constants Inner -> (datalog.gen-checks Cs Base Constants Inner))
 
 (define datalog.gen-plan
   Steps Ctx Prefix
@@ -750,19 +1041,11 @@
           _ (set datalog.*forms* [Form | (value datalog.*forms*)])
        Name))
 
-\\ The key of an index, from a tuple.
-(define datalog.gen-key
-  Layout Arity Keys Name
-  -> (let Forms (map (/. I (datalog.column-form Layout Arity I t)) Keys)
-          Form [defun Name [t] (datalog.key-form Layout Forms)]
-          _ (set datalog.*forms* [Form | (value datalog.*forms*)])
-       Name))
-
 (define datalog.next-name
-  Name Layout
+  Name
   -> (let N (get Name datalog.counter)
           _ (put Name datalog.counter (+ N 1))
-       (cn "datalog." (cn (str Name) (cn "." (cn (str Layout) (cn ".p" (str N))))))))
+       (cn "datalog." (cn (str Name) (cn ".p" (str N))))))
 
 \\ Generated functions are called from here as closures, which need no arity or lambda table entry.
 (define datalog.callable
@@ -771,99 +1054,86 @@
 (define datalog.install
   Forms -> (map (/. F (eval-kl F)) Forms))
 
-\\ The code for these steps under this layout, kept with the program, as [Closure | Forms]. There
-\\ are only so many orders a rule can join in.
+\\ The code for these steps, kept with the program, as [Closure | Forms]. There are only so many
+\\ orders a rule can join in.
 (define datalog.compiled
-  Name Layout Steps Relations Constants
+  Name Steps Relations Constants
   -> (let Cache (get Name datalog.compiled)
-          Key [Layout | Steps]
-          Entry (datalog.dict-find Cache Key)
+          Entry (datalog.dict-find Cache Steps)
        (if (cons? Entry)
            (tl Entry)
-           (let Ctx [Layout Relations Constants (get Name datalog.indexes)]
+           (let Ctx [Relations Constants (get Name datalog.indexes)]
                 _ (set datalog.*forms* [])
-                Fn (datalog.gen-plan Steps Ctx (datalog.next-name Name Layout))
+                Fn (datalog.gen-plan Steps Ctx (datalog.next-name Name))
                 Forms (reverse (value datalog.*forms*))
                 _ (datalog.install Forms)
                 Code [(datalog.callable Fn) | Forms]
-                _ (shen.dict-> Cache Key Code)
-             Code))))
-
-\\ An index's key from a tuple, kept the same way.
-(define datalog.key-function
-  Name Layout Rel Keys Arity
-  -> (let Cache (get Name datalog.compiled)
-          Key [key Layout Rel | Keys]
-          Entry (datalog.dict-find Cache Key)
-       (if (cons? Entry)
-           (tl Entry)
-           (let _ (set datalog.*forms* [])
-                Fn (datalog.gen-key Layout Arity Keys (intern (datalog.next-name Name Layout)))
-                _ (datalog.install (value datalog.*forms*))
-                Code (datalog.callable Fn)
-                _ (shen.dict-> Cache Key Code)
+                _ (shen.dict-> Cache Steps Code)
              Code))))
 
 \\ The KL of the plan with no sizes to go by.
 (define datalog.code
-  Name Layout
+  Name
   -> (let Program (datalog.program Name)
           Relations (datalog.nth 3 Program)
           Constants (datalog.nth 5 Program)
           Steps (datalog.all-steps (datalog.plans Name))
-       (datalog.code-h Steps Name Layout Relations Constants)))
+       (datalog.code-h Steps Name Relations Constants)))
 
 (define datalog.all-steps
   [] -> []
   [[_ First Variants] | Cs] -> (append First (append Variants (datalog.all-steps Cs))))
 
 (define datalog.code-h
-  [] _ _ _ _ -> []
-  [Steps | More] Name Layout Relations Constants
-  -> (let _ (put Name datalog.indexes (datalog.steps-indexes Steps (get Name datalog.indexes)))
-          Code (datalog.compiled Name Layout Steps Relations Constants)
-       (append (tl Code) (datalog.code-h More Name Layout Relations Constants))))
+  [] _ _ _ -> []
+  [Steps | More] Name Relations Constants
+  -> (let _ (put Name datalog.indexes (datalog.steps-indexes Steps Relations (get Name datalog.indexes)))
+          Code (datalog.compiled Name Steps Relations Constants)
+       (append (tl Code) (datalog.code-h More Name Relations Constants))))
 
 \\ ---------------------------------------------------------------------------
 \\ Running.
 
-(eval-kl [defun datalog.dict-find [d k] [shen-jit.dict-find d k]])
-(shen.store-arity datalog.dict-find 2)
+\\ Room for Added more tuples of which every key may be new, and their chains.
+(define datalog.index-room
+  Index Added Count
+  -> (let Size (+ 1 (<-address Index 2))
+          Wanted (* 2 (+ (<-address Index 4) Added))
+          NewSize (datalog.power-at-least Size Wanted)
+          _ (if (= NewSize Size)
+                skip
+                (do (address-> Index 0 (datalog.larger-table (<-address Index 0) Size NewSize))
+                    (address-> Index 2 (- NewSize 1))))
+          Next (<-address Index 1)
+          Bytes (shen-jit.bytes-length Next)
+       (if (>= Bytes (* 4 Count))
+           true
+           (address-> Index 1 (shen-jit.copy-bytes (shen-jit.bytes (* 8 Count)) 0 Next 0 Bytes)))))
 
-(define datalog.add
-  Rel Tuple -> (let Set (<-address Rel 2)
-                    Count (shen.dict-count Set)
-                    Made (address-> Rel 6 (+ 1 (<-address Rel 6)))
-                    _ (shen.dict-> Set Tuple true)
-                 (if (= Count (shen.dict-count Set))
-                     false
-                     (address-> Rel 5 [Tuple | (<-address Rel 5)]))))
+(define datalog.power-at-least
+  P N -> (if (>= P N) P (datalog.power-at-least (* 2 P) N)))
 
-(define datalog.add-to-index
-  Tuple Rel Slot Key
-  -> (let D (<-address Rel Slot)
-          K (Key Tuple)
-          Entry (datalog.dict-find D K)
-       (shen.dict-> D K (if (cons? Entry) [Tuple | (tl Entry)] [Tuple]))))
+\\ Tuples From up to To into an index, whose kernel is called through a closure kept in it.
+(define datalog.index-range
+  Rec Index From To
+  -> (let _ (datalog.index-room Index (- To From) To)
+          F (<-address Index 3)
+          New (F (<-address Index 0) (<-address Index 1) (<-address Rec 2) (<-address Index 2) From To)
+       (address-> Index 4 (+ New (<-address Index 4)))))
 
-(define datalog.add-to-indexes
-  _ _ [] -> true
-  Tuple Rel [[Slot | Key] | Keys]
-  -> (do (datalog.add-to-index Tuple Rel Slot Key)
-         (datalog.add-to-indexes Tuple Rel Keys)))
+(define datalog.index-all
+  [] _ _ _ -> true
+  [Slot | Slots] Rec From To -> (do (datalog.index-range Rec (<-address Rec Slot) From To)
+                                    (datalog.index-all Slots Rec From To)))
 
-(define datalog.merge-tuples
-  [] Rel All New Keys -> (do (address-> Rel 3 All) (address-> Rel 4 New))
-  [Tuple | Tuples] Rel All New Keys
-  -> (do (datalog.add-to-indexes Tuple Rel Keys)
-         (datalog.merge-tuples Tuples Rel [Tuple | All] [Tuple | New] Keys)))
-
-\\ The tuples for the next round become the new ones. Gives whether there were any.
+\\ What was added becomes the new tuples. Gives whether there were any.
 (define datalog.merge
-  Rel -> (let Next (<-address Rel 5)
-              _ (address-> Rel 5 [])
-              _ (datalog.merge-tuples Next Rel (<-address Rel 3) [] (<-address Rel 1))
-           (cons? Next)))
+  Rec -> (let From (<-address Rec 6)
+              To (datalog.count-of Rec)
+              _ (datalog.index-all (<-address Rec 1) Rec From To)
+              _ (address-> Rec 5 From)
+              _ (address-> Rec 6 To)
+           (> To From)))
 
 (define datalog.merge-all
   [] Any -> Any
@@ -873,23 +1143,17 @@
   [] _ -> true
   [F | Fs] S -> (do (F S) (datalog.call-all Fs S)))
 
+\\ Everything so far counts as new, for the first round of a component.
 (define datalog.start-round
   [] -> true
-  [Rel | Rels] -> (do (address-> Rel 4 (<-address Rel 3)) (datalog.start-round Rels)))
+  [Rel | Rels] -> (do (address-> Rel 5 0) (datalog.start-round Rels)))
 
-(define datalog.clear-new
-  [] -> true
-  [Rel | Rels] -> (do (address-> Rel 4 []) (datalog.clear-new Rels)))
-
-\\ What a run needs: [Name Layout Relations Constants S].
+\\ What a run needs: [Name Relations Constants S].
 (define datalog.run-relation
-  Rel [_ _ Relations _ S] -> (<-address S (datalog.relation-slot Rel Relations)))
+  Rel [_ Relations _ S] -> (<-address S (datalog.relation-slot Rel Relations)))
 
 (define datalog.log2
   X N -> (if (<= X 1) N (datalog.log2 (shen-jit.shift-right X 1) (+ N 1))))
-
-(define datalog.size
-  Rec -> (shen.dict-count (<-address Rec 2)))
 
 (define datalog.quotient
   A B Q -> (if (< A B) Q (datalog.quotient (- A B) B (+ Q 1))))
@@ -899,7 +1163,7 @@
 (define datalog.estimate
   [Rel | Terms] Bound Run
   -> (let Rec (datalog.run-relation Rel Run)
-          Size (datalog.size Rec)
+          Size (datalog.count-of Rec)
           Keys (datalog.key-columns Terms 1 Bound)
           Known (length Keys)
           Arity (length Terms)
@@ -914,9 +1178,8 @@
           Slot (if (and (cons? Table) (element? Keys (tl Table)))
                    (datalog.index-slot Rel Keys (get Name datalog.indexes))
                    none)
-          Active (if (= Slot none) [] (assoc Slot (<-address Rec 1)))
-       (if (cons? Active)
-           (/ Size (shen.dict-count (<-address Rec Slot)))
+       (if (and (not (= Slot none)) (element? Slot (<-address Rec 1)) (> (<-address (<-address Rec Slot) 4) 0))
+           (/ Size (<-address (<-address Rec Slot) 4))
            (shen-jit.shift-left 1 (datalog.quotient (* (datalog.log2 Size 0) (- Arity Known)) Arity 0)))))
 
 (define datalog.estimator
@@ -927,33 +1190,46 @@
 \\ Each index these steps look up, started if this run has not used it.
 (define datalog.prepare
   [] _ -> true
-  [[lookup Rel Keys _ _] | Steps] Run
-  -> (do (datalog.use-index Rel Keys Run) (datalog.prepare Steps Run))
+  [[lookup Rel Keys _ _] | Steps] [Name Relations Constants S]
+  -> (let Run [Name Relations Constants S]
+       (do (if (datalog.whole-tuple? Rel Keys Relations) skip (datalog.use-index Rel Keys Run))
+           (datalog.prepare Steps Run)))
   [_ | Steps] Run -> (datalog.prepare Steps Run))
 
+\\ A closure of an index's kernel, for calling it from here.
+(define datalog.index-function
+  N Keys -> (let K (datalog.index-kernel N Keys)
+              (eval-kl [lambda a [lambda b [lambda c [lambda d [lambda e [lambda f [K a b c d e f]]]]]]])))
+
+(define datalog.new-index
+  N Keys Count
+  -> (let I (absvector 5)
+          _ (address-> I 0 (shen-jit.bytes (* 16 8)))
+          _ (address-> I 1 (shen-jit.bytes (* 4 (if (> Count 8) Count 8))))
+          _ (address-> I 2 15)
+          _ (address-> I 3 (datalog.index-function N Keys))
+          _ (address-> I 4 0)
+       I))
+
 (define datalog.use-index
-  Rel Keys [Name Layout Relations Constants S]
-  -> (let Run [Name Layout Relations Constants S]
+  Rel Keys [Name Relations Constants S]
+  -> (let Run [Name Relations Constants S]
           _ (put Name datalog.indexes (datalog.add-index Rel Keys (get Name datalog.indexes)))
           Slot (datalog.index-slot Rel Keys (get Name datalog.indexes))
           Rec (datalog.run-relation Rel Run)
-       (cases (cons? (assoc Slot (<-address Rec 1))) true
+       (cases (element? Slot (<-address Rec 1)) true
               (>= Slot (<-address Rec 0)) (error "datalog: too many indexes on ~A" Rel)
-              true (let Fn (datalog.key-function Name Layout Rel Keys (- (length (assoc Rel Relations)) 1))
-                        _ (address-> Rec Slot (shen.dict 8))
-                        _ (address-> Rec 1 [[Slot | Fn] | (<-address Rec 1)])
-                     (datalog.index-all (<-address Rec 3) Rec Slot Fn)))))
-
-(define datalog.index-all
-  [] _ _ _ -> true
-  [T | Ts] Rec Slot Fn -> (do (datalog.add-to-index T Rec Slot Fn) (datalog.index-all Ts Rec Slot Fn)))
+              true (let I (datalog.new-index (datalog.arity-in Rel Relations) Keys (<-address Rec 6))
+                        _ (address-> Rec Slot I)
+                        _ (address-> Rec 1 [Slot | (<-address Rec 1)])
+                     (datalog.index-range Rec I 0 (<-address Rec 6))))))
 
 (define datalog.steps-function
-  Steps [Name Layout Relations Constants S]
-  -> (let Run [Name Layout Relations Constants S]
+  Steps [Name Relations Constants S]
+  -> (let Run [Name Relations Constants S]
           _ (datalog.prepare Steps Run)
           _ (set datalog.*plans* (+ 1 (value datalog.*plans*)))
-       (hd (datalog.compiled Name Layout Steps Relations Constants))))
+       (hd (datalog.compiled Name Steps Relations Constants))))
 
 (define datalog.first-functions
   [] _ _ -> []
@@ -969,14 +1245,14 @@
 (define datalog.signature
   [] _ -> []
   [[Rel | _] | Rs] Run
-  -> [(datalog.log2 (datalog.size (datalog.run-relation Rel Run)) 0) | (datalog.signature Rs Run)])
+  -> [(datalog.log2 (datalog.count-of (datalog.run-relation Rel Run)) 0) | (datalog.signature Rs Run)])
 
 (define datalog.fixpoint
   Variants Rels Run Functions Signature Rounds
-  -> (let Now (datalog.signature (hd (tl (tl Run))) Run)
+  -> (let Now (datalog.signature (hd (tl Run)) Run)
           Replan (and (value datalog.*adaptive*) (not (= Now Signature)))
           Fs (if Replan (datalog.variant-functions Variants (datalog.estimator Run) Run) Functions)
-          _ (datalog.call-all Fs (datalog.nth 5 Run))
+          _ (datalog.call-all Fs (datalog.nth 4 Run))
           Any (datalog.merge-all Rels false)
        (if Any
            (datalog.fixpoint Variants Rels Run Fs Now (+ Rounds 1))
@@ -986,16 +1262,15 @@
   [C First Variants] Run Rounds
   -> (let Rels (map (/. R (datalog.run-relation R Run)) C)
           Est (datalog.estimator Run)
-          _ (datalog.call-all (datalog.first-functions First Est Run) (datalog.nth 5 Run))
+          _ (datalog.call-all (datalog.first-functions First Est Run) (datalog.nth 4 Run))
           _ (datalog.merge-all Rels false)
           More (if (empty? Variants)
                    0
                    (do (datalog.start-round Rels)
                        (datalog.fixpoint Variants Rels Run
                          (datalog.variant-functions Variants (datalog.estimator Run) Run)
-                         (datalog.signature (hd (tl (tl Run))) Run)
+                         (datalog.signature (hd (tl Run)) Run)
                          0)))
-          _ (datalog.clear-new Rels)
        (+ Rounds More)))
 
 (define datalog.run-components
@@ -1017,82 +1292,40 @@
   [V | Vs] Interned -> (let Id (datalog.intern V Interned)
                          [Id | (datalog.intern-all Vs Interned)]))
 
-(define datalog.intern-facts
-  [] _ _ Acc -> Acc
-  [[Rel | Values] | Facts] Relations Interned Acc
+(define datalog.list-forms
+  0 _ -> []
+  N L -> [[hd L] | (datalog.list-forms (- N 1) [tl L])])
+
+\\ Closures for adding and finding a tuple given as a list, one for each arity.
+(define datalog.adder
+  N -> (let Name (intern (cn "datalog.adder." (str N)))
+            Known (datalog.dict-find (value datalog.*kernels*) Name)
+         (if (cons? Known)
+             (tl Known)
+             (let F (eval-kl [lambda r [lambda l (datalog.insert-form N (datalog.list-forms N l))]])
+                  _ (shen.dict-> (value datalog.*kernels*) Name F)
+               F))))
+
+(define datalog.finder
+  N -> (let Name (intern (cn "datalog.finder." (str N)))
+            Known (datalog.dict-find (value datalog.*kernels*) Name)
+         (if (cons? Known)
+             (tl Known)
+             (let Find (datalog.find-kernel N (datalog.upto 1 N))
+                  F (eval-kl [lambda r [lambda l
+                               [Find [<-address r 3] [<-address r 2] [shen-jit.u32 [<-address r 4] 8] | (datalog.list-forms N l)]]])
+                  _ (shen.dict-> (value datalog.*kernels*) Name F)
+               F))))
+
+(define datalog.load-facts
+  [] _ _ _ -> true
+  [[Rel | Values] | Facts] Relations S Interned
   -> (let Check (datalog.check-fact Relations [Rel | Values])
           Ids (datalog.intern-all Values Interned)
-       (datalog.intern-facts Facts Relations Interned [[Rel | Ids] | Acc])))
-
-(define datalog.max-arity
-  [] N -> N
-  [[_ | Types] | Rs] N -> (datalog.max-arity Rs (let A (length Types) (if (> A N) A N))))
-
-\\ The smallest of a few sizes that holds every value and fits the widest relation, so that a
-\\ program meets few layouts. Past those, tuples are vectors.
-(define datalog.layout
-  Relations Count -> (datalog.layout-h [12 20 30] (datalog.max-arity Relations 0) Count))
-
-(define datalog.layout-h
-  [] _ _ -> 0
-  [Bits | More] Arity Count
-  -> (if (datalog.fits? Bits Arity Count)
-         Bits
-         (datalog.layout-h More Arity Count)))
-
-(define datalog.fits?
-  Bits Arity Count -> (and (<= (* Arity Bits) 60) (<= Count (shen-jit.shift-left 1 Bits))))
-
-(define datalog.asked-layout
-  -1 Relations Count -> (datalog.layout Relations Count)
-  0 _ _ -> 0
-  Bits Relations Count -> (if (datalog.fits? Bits (datalog.max-arity Relations 0) Count)
-                              Bits
-                              (error "datalog: layout ~A does not fit" Bits)))
-
-(define datalog.pack
-  0 Ids -> (datalog.pack-vector Ids 0 (absvector (length Ids)))
-  Layout Ids -> (datalog.pack-integer Layout Ids 0))
-
-(define datalog.pack-vector
-  [] _ V -> V
-  [Id | Ids] I V -> (datalog.pack-vector Ids (+ I 1) (address-> V I Id)))
-
-(define datalog.pack-integer
-  _ [] Acc -> Acc
-  Layout [Id | Ids] Acc
-  -> (datalog.pack-integer Layout Ids (shen-jit.bit-or (shen-jit.shift-left Acc Layout) Id)))
-
-(define datalog.unpack
-  0 Arity T -> (datalog.unpack-vector T 0 Arity)
-  Layout Arity T -> (datalog.unpack-integer Layout Arity T []))
-
-(define datalog.unpack-vector
-  _ N N -> []
-  T I N -> [(<-address T I) | (datalog.unpack-vector T (+ I 1) N)])
-
-(define datalog.unpack-integer
-  _ 0 _ Acc -> Acc
-  Layout N T Acc
-  -> (datalog.unpack-integer Layout (- N 1) (shen-jit.shift-right T Layout)
-       [(shen-jit.bit-and T (- (shen-jit.shift-left 1 Layout) 1)) | Acc]))
-
-\\ A relation's record: 0 where its indexes end, 1 those in use as [Slot | Key function], 2 the set
-\\ of its tuples, 3 all of them, 4 the new ones, 5 those for the next round, 6 how many derivations,
-\\ and each index from 7, by a number kept with the program across runs. A run starts only those
-\\ it looks up.
-(define datalog.new-relation
-  Arity
-  -> (let Room (+ 7 (shen-jit.shift-left 1 (if (> Arity 6) 6 Arity)))
-          R (absvector Room)
-          _ (address-> R 0 Room)
-          _ (address-> R 1 [])
-          _ (address-> R 2 (shen.dict 8))
-          _ (address-> R 3 [])
-          _ (address-> R 4 [])
-          _ (address-> R 5 [])
-          _ (address-> R 6 0)
-       R))
+          R (<-address S (datalog.relation-slot Rel Relations))
+          Add (datalog.adder (length Ids))
+          _ (Add R Ids)
+       (datalog.load-facts Facts Relations S Interned)))
 
 (define datalog.fill-state
   [] S _ -> S
@@ -1104,55 +1337,36 @@
   Interned -> (let V (absvector (shen.dict-count Interned))
                 (do (shen.dict-fold (/. K Id Acc (address-> V Id K)) Interned V) V)))
 
-(define datalog.load-facts
-  [] _ _ _ -> true
-  [[Rel | Ids] | Facts] Relations S Layout
-  -> (let R (<-address S (datalog.relation-slot Rel Relations))
-          Set (<-address R 2)
-          Tuple (datalog.pack Layout Ids)
-          Count (shen.dict-count Set)
-          _ (shen.dict-> Set Tuple true)
-          _ (if (= Count (shen.dict-count Set))
-                skip
-                (address-> R 5 [Tuple | (<-address R 5)]))
-       (datalog.load-facts Facts Relations S Layout)))
-
 (define datalog.merge-state
   S I End -> (if (> I End)
                  true
-                 (do (datalog.merge (<-address S I)) (address-> (<-address S I) 4 [])
+                 (do (datalog.merge (<-address S I))
+                     (datalog.zero-derivations (<-address S I))
                      (datalog.merge-state S (+ I 1) End))))
 
-(define datalog.zero-counts
-  S I End -> (if (> I End)
-                 true
-                 (do (address-> (<-address S I) 6 0) (datalog.zero-counts S (+ I 1) End))))
+(define datalog.zero-derivations
+  Rec -> (shen-jit.s64! (<-address Rec 4) 24 0))
 
 (define datalog.run
-  Name Facts -> (datalog.run-layout Name Facts -1))
-
-\\ Layout -1 chooses; a test can name one.
-(define datalog.run-layout
-  Name Facts Asked
+  Name Facts
   -> (let Program (datalog.program Name)
           Relations (datalog.nth 3 Program)
+          Constants (datalog.nth 5 Program)
           Interned (shen.dict 8)
-          _ (datalog.intern-all (datalog.nth 5 Program) Interned)
-          Ids (datalog.intern-facts Facts Relations Interned [])
-          Layout (datalog.asked-layout Asked Relations (shen.dict-count Interned))
+          _ (datalog.intern-all Constants Interned)
           N (length Relations)
           S (absvector (+ 1 N))
-          _ (address-> S 0 (datalog.values-vector Interned))
           _ (datalog.fill-state Relations S 1)
-          _ (datalog.load-facts Ids Relations S Layout)
+          _ (datalog.load-facts Facts Relations S Interned)
+          _ (address-> S 0 (datalog.values-vector Interned))
           _ (datalog.merge-state S 1 N)
-          Run [Name Layout Relations (datalog.nth 5 Program) S]
+          Run [Name Relations Constants S]
           _ (set datalog.*plans* 0)
           Rounds (datalog.run-components (get Name datalog.schedule) Run 0)
-       [db Name Layout S Interned Rounds (value datalog.*plans*)]))
+       [db Name S Interned Rounds (value datalog.*plans*)]))
 
 (define datalog.relation-of
-  [db Name _ S | _] Rel
+  [db Name S | _] Rel
   -> (let Relations (datalog.nth 3 (datalog.program Name))
        (if (cons? (assoc Rel Relations))
            (<-address S (datalog.relation-slot Rel Relations))
@@ -1161,35 +1375,39 @@
 (define datalog.arity-of
   Name Rel -> (length (tl (assoc Rel (datalog.nth 3 (datalog.program Name))))))
 
-(define datalog.decode
-  [] _ -> []
-  [Id | Ids] Values -> [(<-address Values Id) | (datalog.decode Ids Values)])
+(define datalog.tuple-at
+  _ _ I N _ -> [] where (= I N)
+  Tuples Base I N Values
+  -> (let Id (shen-jit.u32 Tuples (+ Base (* 4 I)))
+          More (datalog.tuple-at Tuples Base (+ I 1) N Values)
+       [(<-address Values Id) | More]))
 
-(define datalog.decode-all
-  [] _ _ _ Acc -> Acc
-  [T | Ts] Layout Arity Values Acc
-  -> (datalog.decode-all Ts Layout Arity Values
-       [(datalog.decode (datalog.unpack Layout Arity T) Values) | Acc]))
+(define datalog.read-tuples
+  P To _ _ _ _ Acc -> Acc where (= P To)
+  P To Tuples Stride Arity Values Acc
+  -> (datalog.read-tuples (+ P 1) To Tuples Stride Arity Values
+       [(datalog.tuple-at Tuples (* P Stride) 0 Arity Values) | Acc]))
 
 (define datalog.tuples
   [naive _ Tables] Rel
   -> (let Table (assoc Rel Tables)
        (if (empty? Table) (error "datalog: no relation ~A" Rel) (tl Table)))
-  [db Name Layout S | Rest] Rel
-  -> (datalog.decode-all (<-address (datalog.relation-of [db Name Layout S | Rest] Rel) 3)
-                         Layout (datalog.arity-of Name Rel) (<-address S 0) []))
+  [db Name S | Rest] Rel
+  -> (let Rec (datalog.relation-of [db Name S | Rest] Rel)
+       (datalog.read-tuples 0 (<-address Rec 6) (<-address Rec 2) (<-address Rec 7)
+                            (datalog.arity-of Name Rel) (<-address S 0) [])))
 
 (define datalog.count
   [naive | Rest] Rel -> (length (datalog.tuples [naive | Rest] Rel))
-  Db Rel -> (shen.dict-count (<-address (datalog.relation-of Db Rel) 2)))
+  Db Rel -> (datalog.count-of (datalog.relation-of Db Rel)))
 
 (define datalog.holds?
   [naive | Rest] [Rel | Values] -> (element? Values (datalog.tuples [naive | Rest] Rel))
-  [db Name Layout S Interned | Rest] [Rel | Values]
+  [db Name S Interned | Rest] [Rel | Values]
   -> (let Ids (datalog.lookup-ids Values Interned)
+          Find (datalog.finder (length Values))
        (and (not (= Ids no))
-            (cons? (datalog.dict-find (<-address (datalog.relation-of [db Name Layout S Interned | Rest] Rel) 2)
-                                      (datalog.pack Layout Ids))))))
+            (> (Find (datalog.relation-of [db Name S Interned | Rest] Rel) Ids) 0))))
 
 (define datalog.lookup-ids
   [] _ -> []
@@ -1207,12 +1425,13 @@
   [T | Ts] Terms Acc -> (datalog.match-tuples Ts Terms
                           (if (= (datalog.naive-match Terms T []) no) Acc [T | Acc])))
 
+\\ Rounds, plans made, and for each relation its tuples, its derivations and its indexes.
 (define datalog.stats
-  [db Name Layout S _ Rounds Plans]
+  [db Name S _ Rounds Plans]
   -> (let Relations (datalog.nth 3 (datalog.program Name))
-       [[layout Layout] [rounds Rounds] [plans Plans]
+       [[rounds Rounds] [plans Plans]
         | (map (/. R (let Rec (<-address S (datalog.relation-slot (hd R) Relations))
-                       [(hd R) (shen.dict-count (<-address Rec 2)) (<-address Rec 6) (length (<-address Rec 1))]))
+                       [(hd R) (datalog.count-of Rec) (shen-jit.s64 (<-address Rec 4) 24) (length (<-address Rec 1))]))
                Relations)]))
 
 \\ ---------------------------------------------------------------------------
