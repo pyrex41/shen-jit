@@ -279,6 +279,11 @@ recursive component a rule has one variant for each of its atoms in that compone
 derivation must use a new tuple somewhere. Join order is chosen as a run goes, from the sizes of the relations, and again when one has doubled: the next atom is the one expected to give the fewest tuples for what is known, from
 an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes code, described below, kept with the program, as a rule has only so many orders.
 
+A negated atom counts as a dependency too, so its relation's component comes first, and the checker refuses a program where a relation depends
+on the negation of one in its own component. A negated atom is then a condition, like a comparison, placed as soon as its variables are bound:
+it probes the relation's own table for a whole tuple, an index for some columns, and asks only whether the relation is empty for none.
+The reference evaluator does not use the components: it numbers strata from the rules and runs each to a fixed point in turn.
+
 Values are interned, the program's own constants first, so that generated code can hold their numbers. A relation's tuples are u32 columns one after another in a byte buffer, which the collector does not scan, with the
 new tuples and those for the next round as ranges of it. A round reads only what was there when it began, so a loop can keep the buffer it started with while growing replaces the relation's. A table of 64-bit entries, open addressed, deduplicates: each holds the top half of its hash, which
 also says where it goes when the table grows, and the tuple's position plus one. An index is such a table by key, for the first tuple with that key, and a chain of u32s for the rest, made for each set of columns this run's plans look up, when first needed. Keys that are a whole tuple use

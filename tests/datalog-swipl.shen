@@ -26,8 +26,10 @@
   [Rel] -> (swi.atom Rel)
   [Rel | Terms] -> (cn (swi.atom Rel) (cn "(" (cn (swi.join (map (function swi.term) Terms) ",") ")"))))
 
-\* Comparisons go after the atoms, where their variables are bound. *\
+\* Conditions go after the atoms, where their variables are bound. A negated relation is complete
+   by then, as its table is, so plain negation is enough. *\
 (define swi.comparison
+  [not Atom] -> (cn "\+ " (swi.atom-form Atom))
   [Op A B] -> (cn (swi.term A) (cn (swi.op Op) (swi.term B))))
 
 (define swi.op
@@ -40,7 +42,7 @@
 
 (define swi.body
   Body -> (swi.join (append (map (function swi.atom-form) (datalog.atoms Body))
-                            (map (function swi.comparison) (datalog.comparisons Body)))
+                            (map (function swi.comparison) (datalog.conditions Body)))
                     ", "))
 
 (define swi.rule

@@ -95,13 +95,46 @@
                       (if (= 0 (dtg.random 2)) [var (dtg.choose Symbols)] (dtg.value symbol))]]
                     true [])))
 
+\* Sometimes a negated atom, of what the body binds, constants and _. *\
+(define dtg.negation
+  Relations Bound -> (if (= 0 (dtg.random 4))
+                         (let Rel (dtg.choose Relations)
+                           [[not [(hd Rel) | (dtg.map (/. T (dtg.negated-term T Bound)) (tl Rel))]]])
+                         []))
+
+(define dtg.negated-term
+  Type Bound -> (let Vars (dtg.of-type Bound Type)
+                     R (dtg.random 10)
+                  (cases (and (< R 5) (cons? Vars)) [var (dtg.choose Vars)]
+                         (< R 8) (dtg.value Type)
+                         true [any])))
+
 (define dtg.rule
   Relations
   -> (let Atoms (dtg.times (+ 1 (dtg.random 3)) (freeze (dtg.atom (dtg.choose Relations))))
           Bound (dtg.body-bound Atoms Relations [])
           Head (dtg.head (dtg.choose Relations) Bound)
           Tests (dtg.comparison Bound)
-       [Head (append Atoms Tests)]))
+          Negation (dtg.negation Relations Bound)
+       [Head (append Atoms (append Tests Negation))]))
+
+\* Negations dropped from the last rules that have them until the program is stratified. *\
+(define dtg.stratified
+  Relations Rules -> (if (trap-error (do (datalog.check dtg.check (dtg.items Relations Rules)) true) (/. E false))
+                         Rules
+                         (dtg.stratified Relations (reverse (dtg.drop-negation (reverse Rules))))))
+
+(define dtg.drop-negation
+  [] -> []
+  [[Head Body] | Rules] -> (let Kept (dtg.positive Body)
+                             (if (= Kept Body)
+                                 [[Head Body] | (dtg.drop-negation Rules)]
+                                 [[Head Kept] | Rules])))
+
+(define dtg.positive
+  [] -> []
+  [[not _] | Ls] -> (dtg.positive Ls)
+  [L | Ls] -> [L | (dtg.positive Ls)])
 
 (define dtg.fact
   [Rel | Types] -> [Rel | (dtg.map (function dtg.value) Types)])
@@ -128,6 +161,6 @@
 
 (define dtg.program
   -> (let Relations (dtg.map (function dtg.relation) (dtg.upto (+ 2 (dtg.random 3))))
-          Rules (dtg.times (+ 1 (dtg.random 5)) (freeze (dtg.rule Relations)))
+          Rules (dtg.stratified Relations (dtg.times (+ 1 (dtg.random 5)) (freeze (dtg.rule Relations))))
           Facts (dtg.times (dtg.random 25) (freeze (dtg.fact (dtg.choose Relations))))
        [Relations Rules Facts]))

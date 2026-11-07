@@ -1586,6 +1586,16 @@ The first real use of `lib/native.shen`'s structured control from a generator ra
 - **What they lacked:** reuse of registers by liveness, the one limit hit. An empty `and` is true, which let a scan with no checks generate a needless `when` until the generator left it out. Neither called for a change to `lib/native.shen` yet.
 - **Checked** against the reference and against the same programs with KL joins on 300 generated programs, against SWI-Prolog on 300, and on a plan that begins with a lookup and grows its head partway through an inner scan. Results on every workload match the KL joins' tuple counts.
 
+### Stratified negation (2026-11-07, Apple M3 Max)
+
+`(not (edge X _))`, with every variable in it bound by a positive atom. A relation cannot depend on the negation of one that depends on it, which the checker refuses, naming the rule; so what is negated is in an earlier component and complete when read.
+
+- **No new machinery for order:** a negated relation is a dependency like any other, so the components already put it first. A negated atom is a condition like a comparison, placed as soon as its variables are bound, and a probe of the relation's table, of an index for some columns, or of its size for none. The probe loop that lookups had became one function that member, chain and negation share.
+- **The reference stays apart:** it numbers strata from the rules, by a fixed point of its own, and runs each in turn, where the engine uses its components.
+- **Generated programs** sometimes add a negated atom of bound variables, constants and `_`, and drop negations from the last rules until the program is stratified: 59 of 300 keep one, all with two strata or more. They agree with the reference, with KL joins and with SWI-Prolog, which reads it as `\+` since the relation is complete.
+- **Planted bugs:** a negation that ignores a match fails 13 checks, and an empty test inverted fails 4. Dropping one key's equality from the probe passes everything, as no fingerprints collide among small interned ids: the blind spot noted for the table kernels, which a test with full 32-bit values would close.
+- **Nothing lost:** the workloads, which have no negation, are within noise of before.
+
 ### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
 
 The same rules and facts, written out for Soufflé; every result it finished matches ours. Its compiled programs are built from the C++ it generates with the flags of its own compile script, as that script's include paths fail in Homebrew's bottle. That bottle has no OpenMP, so Soufflé ran on one thread, as we do, and it keeps 64-bit values where we keep 32. Times in ms, best of three: ours is `datalog.run` with facts as a list, and Soufflé's its process less the same with no facts, which is its startup, about 15 ms. Building took it 3.0 to 3.7 s a program.

@@ -342,6 +342,66 @@
 (dt.same "restarting a kernel" (append [[k a 1] [k a 2] [k b 3] [k a 3]] (dt.upto-facts big 40 []))
   dt.restart out (dt.pairs-of [1 2 3] (map (/. F (hd (tl F))) (dt.upto-facts big 40 []))))
 
+\* Negation: what is not reached, what has no edge out, and what is not reached by a path of its
+   own, which negates a recursive relation from a later stratum. *\
+(defdatalog dt.neg
+  (relation node [symbol])
+  (relation edge [symbol symbol])
+  (relation start [symbol])
+  (relation reach [symbol])
+  (relation unreached [symbol])
+  (relation sink [symbol])
+  (relation path [symbol symbol])
+  (relation acyclic [symbol])
+  (relation lonely [symbol])
+  (rule (reach X) <-- (start X))
+  (rule (reach Y) <-- (reach X) (edge X Y))
+  (rule (unreached X) <-- (node X) (not (reach X)))
+  (rule (sink X) <-- (node X) (not (edge X _)))
+  (rule (path X Y) <-- (edge X Y))
+  (rule (path X Z) <-- (path X Y) (edge Y Z))
+  (rule (acyclic X) <-- (node X) (not (path X X)))
+  (rule (lonely X) <-- (unreached X) (not (edge _ X)) (not (start a))))
+
+(set dt.neg-facts [[node a] [node b] [node c] [node d] [node e] [start a]
+                   [edge a b] [edge b c] [edge c b] [edge d e]])
+
+(dt.same "negation" (value dt.neg-facts) dt.neg unreached [[d] [e]])
+(dt.same "negation" (value dt.neg-facts) dt.neg sink [[e]])
+(dt.same "negation" (value dt.neg-facts) dt.neg acyclic [[a] [d] [e]])
+(dt.same "negation" (value dt.neg-facts) dt.neg lonely [])
+(dt.same "negation, empty" (remove [start a] (value dt.neg-facts)) dt.neg lonely [[a] [d]])
+
+\* A negated atom with no keys: whether its relation is empty. *\
+(defdatalog dt.neg-empty
+  (relation node [symbol])
+  (relation edge [symbol symbol])
+  (relation edgeless [symbol])
+  (rule (edgeless X) <-- (node X) (not (edge _ _))))
+
+(dt.same "negation, no keys" [[node a] [node b] [edge a b]] dt.neg-empty edgeless [])
+(dt.same "negation, no keys" [[node a] [node b]] dt.neg-empty edgeless [[a] [b]])
+
+(dt.raises "negation in a cycle" "depends on the negation of"
+  (freeze (datalog.define dt.bad [[relation p [symbol]] [relation q [symbol]]
+                                  [rule [p [var "X"]] [[q [var "X"]]]]
+                                  [rule [q [var "X"]] [[q [var "X"]] [not [p [var "X"]]]]]])))
+(dt.raises "negation of itself" "depends on its own negation"
+  (freeze (datalog.define dt.bad [[relation p [symbol]] [relation q [symbol]]
+                                  [rule [p [var "X"]] [[q [var "X"]] [not [p [var "X"]]]]]])))
+
+(dt.raises "negation, unstratified loop" "depends on"
+  (freeze (datalog.define dt.neg-loop2 [[relation n [integer]] [relation even [integer]] [relation odd [integer]]
+                                        [rule [odd [var "Y"]] [[n [var "Y"]] [not [even [var "Y"]]]]]
+                                        [rule [even [var "Y"]] [[n [var "Y"]] [not [odd [var "Y"]]]]]])))
+(dt.raises "an unbound negated variable" "Y is not bound"
+  (freeze (datalog.define dt.bad [[relation p [symbol]] [relation q [symbol symbol]]
+                                  [rule [p [var "X"]] [[p [var "X"]] [not [q [var "X"] [var "Y"]]]]]])))
+(dt.raises "negating a comparison" "is not an atom"
+  (freeze (datalog.define dt.bad [[relation p [integer]] [rule [p [var "X"]] [[p [var "X"]] [not 1]]]])))
+(dt.raises "not as a relation" "cannot name"
+  (freeze (datalog.define dt.bad [[relation not [symbol]]])))
+
 \* Native kernels run, and the plans that fall back to KL are few. *\
 (dt.check "native kernels ran" (< (value datalog.*fallbacks*) 20) true)
 

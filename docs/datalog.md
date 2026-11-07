@@ -45,9 +45,24 @@ false
 | `(datalog.run-naive Name Facts)` | The same result by the plain definition, slowly: what the rest is tested against |
 
 - **Columns** are `symbol`, `string` or `integer`, and a value of another type raises when it is given.
-- **Rules:** a body has atoms and comparisons: `<`, `>`, `<=` and `>=` on integers, and `=` and `!=` on values of one
-  type. A variable in a head or a comparison must appear in an atom of the body, and each `_` is a variable of its own.
-  There is no negation, no arithmetic that makes values, and no terms inside a column.
+- **Rules:** a body has atoms, negated atoms and comparisons: `<`, `>`, `<=` and `>=` on integers, and `=` and `!=` on values of one
+  type. A variable in a head, a comparison or a negated atom must appear in an atom of the body, and each `_` is a variable of its own.
+  There is no arithmetic that makes values, and no terms inside a column.
+- **Negation:** `(not (edge X _))` holds when no tuple matches: here, when `X` has no edge out. A relation cannot depend on the negation of
+  one that depends on it, as there would be no single answer, and defining such a program raises. So each relation it negates is complete
+  before a rule reads it, and a program is evaluated in strata.
+
+```shen
+(defdatalog reachable
+  (relation edge [symbol symbol])
+  (relation start [symbol])
+  (relation node [symbol])
+  (relation reached [symbol])
+  (relation unreached [symbol])
+  (rule (reached X) <-- (start X))
+  (rule (reached Y) <-- (reached X) (edge X Y))
+  (rule (unreached X) <-- (node X) (not (reached X))))
+```
 - **Results** are sets, and the order of rules, atoms and facts does not change them.
 - **The order of a rule's atoms** need not be tuned. A run chooses the order of joins from the sizes of the relations, and again when one has doubled.
 - **A run is a snapshot.** New facts mean a new `datalog.run`, which starts over.
