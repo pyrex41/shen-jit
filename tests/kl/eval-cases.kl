@@ -858,6 +858,12 @@ has them."
 (value (true a ok true 3) (t.pvar-prolog))
 (value t.pvar-chain (defun t.pvar-chain () (let B (shen.prolog-vector) (let X (shen.newpv B) (let Y (shen.newpv B) (let Z (shen.newpv B) (do (shen.bindv X Y B) (do (shen.bindv Y (cons Z 1) B) (do (shen.bindv Z 2 B) (cons (shen.lazyderef Z B) (cons (hd (shen.deref X B)) (cons (tl (shen.deref X B)) ()))))))))))))
 (value (2 2 1) (t.pvar-chain))
+"(= (shen.deref X B) (shen.deref Y B)), compared without copying: equal through
+variables, different at the head, a pair and an atom, unbound variables, and a term
+that holds itself, whose copy would not end."
+(value t.deref-eq (defun t.deref-eq (X Y B) (= (shen.deref X B) (shen.deref Y B))))
+(value t.deref-eq-all (defun t.deref-eq-all () (let B (shen.prolog-vector) (let X (shen.newpv B) (let Y (shen.newpv B) (let Z (shen.newpv B) (let U (shen.newpv B) (let V (shen.newpv B) (let C (shen.newpv B) (do (shen.bindv X (cons Z (cons 1 ())) B) (do (shen.bindv Y (cons 2 (cons 1 ())) B) (do (shen.bindv Z 2 B) (do (shen.bindv C (cons C 1) B) (cons (t.deref-eq X Y B) (cons (t.deref-eq X (cons 3 (cons 1 ())) B) (cons (t.deref-eq X Z B) (cons (t.deref-eq Z 2 B) (cons (t.deref-eq U U B) (cons (t.deref-eq U V B) (cons (t.deref-eq C C B) ()))))))))))))))))))))
+(value (true false false true true false true) (t.deref-eq-all))
 
 "Threads, here also under GC stress and the sanitizers: one that sets a global,
 one whose list collections move while the main thread allocates, and a thread

@@ -272,6 +272,8 @@ the shifts. The others are calls to C.
 - `(shen.bind! X Y B (freeze E))`: the binding, E where the kernel's thaws the closure,
   and undoing the binding if E gives false. No closure is made. The Prolog compiler
   emits these for a variable met by a pattern.
+- `(= (shen.deref X B) (shen.deref Y B))`, with B a variable, a number or `[]`, which the Prolog compiler makes of
+  `(when (= X Y))`: `(shen-jit.deref= X Y B)`, which dereferences as it compares and copies neither term.
 - `(let G (freeze E) Body)`, where Body uses G only in `(thaw G)` and as the last argument
   of `shen.bind!`: each use takes a copy of E, within a limit of 100 nodes for the copies.
   The Prolog compiler emits these for atom patterns, a closure made before the test. When E
