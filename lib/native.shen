@@ -32,6 +32,9 @@
 \\   (label done)
 \\   (return-real Acc))
 \\
+\\ if, when, unless, do, while, for, block, exit and next write loops and branches without labels,
+\\ and become them: see "Structured control" below and docs/bytecode.md.
+\\
 \\ Code a program generates is data, lists and not forms: (shen-jit.assemble Name
 \\ Params Body) gives the code object for instructions in the same shape, and
 \\ (shen-jit.install-code Form) checks and installs one. shen-jit.install, which
@@ -521,14 +524,14 @@
        (trap-error
          (shen-jit.install-code [defun Name Code])
          (/. E (simple-error (make-string "~A~%slots: ~R" (error-to-string E)
-                                          (shen-jit.lower.bind (shen-jit.native.slots Params [] (shen-jit.real.expand Body)) 2)))))))
+                                          (shen-jit.lower.bind (shen-jit.native.slots Params [] (shen-jit.real.expand (shen-jit.expand-native Body))) 2)))))))
 
 (define shen-jit.assemble
   Name Params Body -> (shen-jit.native.code Name Params [] Body))
 
 (define shen-jit.native.code
   Name Params Captures Written
-  -> (let Body (shen-jit.real.expand Written)
+  -> (let Body (shen-jit.real.expand (shen-jit.expand-native Written))
           B (shen-jit.lower.builder Name (length Params) [])
           Named (shen-jit.native.slots Params Captures Body)
           Window (+ 2 (length Named))
@@ -697,6 +700,185 @@
                              [closure D I | (map (/. X (shen-jit.native.slot [B S L Window] X)) Captures)])))
 
 \\ ---------------------------------------------------------------------------
+\\ Structured control: if, when, unless, do, while, for, block, exit and next, made into the
+\\ labels, loops and jumps above, with labels of their own, before anything else. A loop or a
+\\ block may be named by a symbol after its keyword; exit leaves the innermost loop or the one
+\\ named, and next goes round it again. A test is a comparison, and, or, not, true, false, or a
+\\ slot holding a boolean. A comparison becomes jump-unless-test, which the next pass makes a test
+\\ of reals if either side is a real register or expression, and of words if not. Nothing here
+\\ is checked: what it makes is, like any other instructions.
+
+(set shen-jit.structure.*count* 0)
+
+(define shen-jit.structure.label
+  Kind -> (let N (+ 1 (value shen-jit.structure.*count*))
+               _ (set shen-jit.structure.*count* N)
+            (intern (cn "structure." (cn Kind (cn "." (str N)))))))
+
+(define shen-jit.structure.name?
+  X -> (and (symbol? X) (not (variable? X))))
+
+\\ The instructions these statements make. Loops is [[Name Exit Next] ...], innermost first,
+\\ with Name [] for one not named and Next none for a block.
+(define shen-jit.expand-native
+  Body -> (shen-jit.structure.statements Body []))
+
+(define shen-jit.structure.statements
+  [] _ -> []
+  [S | Ss] Loops -> (append (shen-jit.structure.statement S Loops)
+                            (shen-jit.structure.statements Ss Loops)))
+
+(define shen-jit.structure.statement
+  [if Test Then] Loops
+  -> (let End (shen-jit.structure.label "end")
+       (shen-jit.structure.close
+         (append (shen-jit.structure.unless Test End) (shen-jit.structure.statement Then Loops)) End))
+  [if Test Then Else] Loops
+  -> (let Otherwise (shen-jit.structure.label "else")
+          End (shen-jit.structure.label "end")
+          First (shen-jit.structure.statement Then Loops)
+          Joined (if (shen-jit.structure.ends? First) First (append First [[jump End]]))
+       (shen-jit.structure.close
+         (append (shen-jit.structure.unless Test Otherwise)
+                 Joined
+                 [[label Otherwise]]
+                 (shen-jit.structure.statement Else Loops))
+         End))
+  [when Test | Body] Loops
+  -> (let End (shen-jit.structure.label "end")
+       (shen-jit.structure.close
+         (append (shen-jit.structure.unless Test End) (shen-jit.structure.statements Body Loops)) End))
+  [unless Test | Body] Loops
+  -> (let End (shen-jit.structure.label "end")
+       (shen-jit.structure.close
+         (append (shen-jit.structure.if Test End) (shen-jit.structure.statements Body Loops)) End))
+  [do | Body] Loops -> (shen-jit.structure.statements Body Loops)
+  [while Name Test | Body] Loops -> (shen-jit.structure.while Name Test Body Loops) where (shen-jit.structure.name? Name)
+  [while Test | Body] Loops -> (shen-jit.structure.while [] Test Body Loops)
+  [for Name I From To | Body] Loops -> (shen-jit.structure.for Name I From To Body Loops)
+      where (and (shen-jit.structure.name? Name) (variable? I))
+  [for I From To | Body] Loops -> (shen-jit.structure.for [] I From To Body Loops) where (variable? I)
+  [block Name | Body] Loops
+  -> (let Exit (shen-jit.structure.label "exit")
+       (shen-jit.structure.close (shen-jit.structure.statements Body [[Name Exit none] | Loops]) Exit))
+      where (shen-jit.structure.name? Name)
+  [exit] Loops -> [[jump (shen-jit.structure.exit-of (shen-jit.structure.innermost Loops))]]
+  [exit Name] Loops -> [[jump (shen-jit.structure.exit-of (shen-jit.structure.named Name Loops))]]
+  [next] Loops -> [[jump (shen-jit.structure.next-of (shen-jit.structure.innermost Loops))]]
+  [next Name] Loops -> [[jump (shen-jit.structure.next-of (shen-jit.structure.named Name Loops))]]
+  [Keyword | Form] _ -> (simple-error (make-string "native code: malformed ~A: ~R" Keyword [Keyword | Form]))
+      where (element? Keyword [if when unless while for block exit next])
+  S _ -> [S])
+
+\\ Whether code cannot fall through its end, so that what would follow it is reached only by a jump.
+(define shen-jit.structure.ends?
+  [] -> false
+  Code -> (element? (hd (hd (reverse Code))) [jump return return-word return-real tail-call again]))
+
+(define shen-jit.structure.jumps-to?
+  _ [] -> false
+  L [I | Is] -> true where (and (cons? I) (element? (hd I) [jump jump-if-false jump-unless-test jump-unless jump-unless-word])
+                                (= (hd (reverse I)) L))
+  L [_ | Is] -> (shen-jit.structure.jumps-to? L Is))
+
+\\ The label L after Code, if anything reaches it.
+(define shen-jit.structure.close
+  Code L -> (if (and (shen-jit.structure.ends? Code) (not (shen-jit.structure.jumps-to? L Code)))
+                Code
+                (append Code [[label L]])))
+
+\\ A loop's way round: from where next jumps, what Step does, then back to the head. Not there if
+\\ the body never gets that far.
+(define shen-jit.structure.round
+  Body Next Step Head -> (if (and (shen-jit.structure.ends? Body) (not (shen-jit.structure.jumps-to? Next Body)))
+                             Body
+                             (append Body [[label Next] | Step] [[again Head]])))
+
+(define shen-jit.structure.while
+  Name Test Body Loops
+  -> (let Head (shen-jit.structure.label "while")
+          Next (shen-jit.structure.label "next")
+          Exit (shen-jit.structure.label "exit")
+          Inside (shen-jit.structure.statements Body [[Name Exit Next] | Loops])
+       (shen-jit.structure.close
+         (append [[loop Head]]
+                 (shen-jit.structure.round (append (shen-jit.structure.unless Test Exit) Inside) Next [] Head))
+         Exit)))
+
+\\ From From up to and not including To, a word at a time.
+(define shen-jit.structure.for
+  Name I From To Body Loops
+  -> (let Head (shen-jit.structure.label "for")
+          Next (shen-jit.structure.label "next")
+          Exit (shen-jit.structure.label "exit")
+          Inside (shen-jit.structure.statements Body [[Name Exit Next] | Loops])
+       (shen-jit.structure.close
+         (append [[word I From] [loop Head]]
+                 (shen-jit.structure.round (append (shen-jit.structure.unless [< I To] Exit) Inside)
+                                           Next [[word I [+ I 1]]] Head))
+         Exit)))
+
+(define shen-jit.structure.innermost
+  [] -> (simple-error "native code: exit or next outside a loop")
+  [[Name Exit none] | Loops] -> (shen-jit.structure.innermost Loops)
+  [Loop | _] -> Loop)
+
+(define shen-jit.structure.named
+  Name [] -> (simple-error (make-string "native code: no loop or block named ~A around here" Name))
+  Name [[Name | Rest] | _] -> [Name | Rest]
+  Name [_ | Loops] -> (shen-jit.structure.named Name Loops))
+
+(define shen-jit.structure.exit-of
+  [_ Exit _] -> Exit)
+
+(define shen-jit.structure.next-of
+  [Name _ none] -> (simple-error (make-string "native code: next of ~A, which is a block and not a loop" Name))
+  [_ _ Next] -> Next)
+
+(define shen-jit.structure.comparison?
+  Op -> (element? Op [< > <= >= = != u< u> u<= u>=]))
+
+\\ Jump to L unless Test holds.
+(define shen-jit.structure.unless
+  [and | Tests] L -> (mapcan (/. T (shen-jit.structure.unless T L)) Tests)
+  [or] L -> [[jump L]]
+  [or Test] L -> (shen-jit.structure.unless Test L)
+  [or Test | Tests] L -> (let Holds (shen-jit.structure.label "or")
+                           (append (shen-jit.structure.if Test Holds)
+                                   (shen-jit.structure.unless [or | Tests] L)
+                                   [[label Holds]]))
+  [not Test] L -> (shen-jit.structure.if Test L)
+  [!= A B] L -> (shen-jit.structure.if [= A B] L)
+  [Op A B] L -> [[jump-unless-test [Op A B] L]] where (shen-jit.structure.comparison? Op)
+  true _ -> []
+  false L -> [[jump L]]
+  X L -> [[jump-if-false X L]] where (variable? X)
+  Test _ -> (simple-error (make-string "native code: not a test: ~R" Test)))
+
+\\ Jump to L if Test holds.
+(define shen-jit.structure.if
+  [not Test] L -> (shen-jit.structure.unless Test L)
+  [or | Tests] L -> (mapcan (/. T (shen-jit.structure.if T L)) Tests)
+  true L -> [[jump L]]
+  false _ -> []
+  Test L -> (let Fails (shen-jit.structure.label "fails")
+              (append (shen-jit.structure.unless Test Fails) [[jump L] [label Fails]])))
+
+\\ Whether an operand is a real: a real register, a number that is not an integer, or what only
+\\ reals give.
+(define shen-jit.structure.real?
+  Regs E -> true where (shen-jit.real.real? Regs E)
+  _ E -> (not (integer? E)) where (number? E)
+  _ [const K] -> (and (number? K) (not (integer? K)))
+  _ [Op | _] -> true where (element? Op [f64 sqrt abs /])
+  Regs [Op | Args] -> (shen-jit.structure.any-real? Regs Args) where (element? Op [+ - * neg])
+  _ _ -> false)
+
+(define shen-jit.structure.any-real?
+  _ [] -> false
+  Regs [A | As] -> (or (shen-jit.structure.real? Regs A) (shen-jit.structure.any-real? Regs As)))
+
+\\ ---------------------------------------------------------------------------
 \\ Raw expressions, as flat instructions. A variable given a value by real or word is a
 \\ register of that kind, in a namespace of its own; any other variable in an expression is a
 \\ slot, whose number is read with a check. Intermediate values take registers of their own,
@@ -738,6 +920,12 @@
   -> (let First (shen-jit.real.operand Regs 0 A)
           Second (shen-jit.real.operand Regs (shen-jit.real.after Regs 0 A) B)
        (append (tl First) (tl Second) [[(shen-jit.real.test Op) (hd First) (hd Second) L]]))
+  Regs [jump-unless-test [Op A B] L]
+  -> (shen-jit.real.statement Regs
+       [(if (and (not (element? Op [u< u> u<= u>=])) (shen-jit.structure.any-real? Regs [A B]))
+            jump-unless
+            jump-unless-word)
+        [Op A B] L])
   Regs [jump-unless-word [Op A B] L]
   -> (let First (shen-jit.word.operand Regs 0 A)
           Second (shen-jit.word.operand Regs (shen-jit.word.after Regs 0 A) B)

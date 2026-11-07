@@ -481,6 +481,40 @@ These decide what a loop costs:
   6 on arm64 and 4 on x86-64, or 2 outside Windows in code that also keeps raw integers
   in registers). One slot too many and none is kept there, so a loop should use few.
 
+### Structured control
+
+These forms become the labels, loops and jumps above, with labels of their own, before anything else is done, so
+what they make is checked like any other code and runs the same:
+
+| Form | Meaning |
+| --- | --- |
+| `(if Test Then)`, `(if Test Then Else)` | One statement or the other. `(do S1 ... Sn)` is several as one. |
+| `(when Test S1 ... Sn)`, `(unless Test S1 ... Sn)` | The statements if Test holds, or if it does not. |
+| `(while Test S1 ... Sn)` | The statements for as long as Test holds, tested first. |
+| `(for I From To S1 ... Sn)` | Word register I from From up to and not including To, by 1, To read each time round. |
+| `(block Name S1 ... Sn)` | The statements, which `(exit Name)` leaves. |
+| `(exit)`, `(next)` | Leave the innermost loop, or go round it again. |
+| `(exit Name)`, `(next Name)` | The same for the loop or block named. A loop is named by a symbol after `while` or `for`. |
+
+A test is a comparison of two operands, `(< A B)`, with `>`, `<=`, `>=`, `=`, `!=`, and unsigned `u<`, `u>`, `u<=`
+and `u>=` for words; `(and T1 ... Tn)`, `(or T1 ... Tn)` and `(not T)`; `true` and `false`; or a slot holding a boolean.
+A comparison is of reals if either side is a real register or something only reals give, as `f64`, `sqrt`, `/` or a number
+with a fraction, and of words otherwise. NaN makes a comparison of reals false.
+
+```shen
+(define-native count-byte (Data Start End Byte)
+  (word Count 0)
+  (for I Start End
+    (when (= (u8 Data I) Byte)
+      (word Count (+ Count 1))))
+  (return-word Count))
+```
+
+A join that nothing reaches is left out: an `if` whose arms both return has nothing after it, and a loop whose body
+always leaves it does not go round, as the checker refuses code it cannot reach. Code after a form still has to be
+reachable, or the function has to return, as anywhere. `(shen-jit.expand-native Statements)` gives the instructions
+these become, for reading or for a program to build on.
+
 Code a program generates is data, not forms:
 
 - `(shen-jit.assemble Name Params Body)` gives the code object of instructions in the

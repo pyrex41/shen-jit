@@ -1353,4 +1353,147 @@
 (native-test.raw "a word test to nowhere" [code native-test.bad 0 3 [0] [[word-number 0 [const 0]] [word-unless< 0 0 9] [return [const 0]]] []])
 (native-test.refused "none of those was installed, a third time" (freeze ((fn native-test.bad))))
 
+\\ ---------------------------------------------------------------------------
+\\ Structured control, made into the same labels, loops and jumps.
+
+(define-native native-test.count-byte (Data Start End Byte)
+  (word Count 0)
+  (for I Start End
+    (when (= (u8 Data I) Byte)
+      (word Count (+ Count 1))))
+  (return-word Count))
+
+(native-test.check "for and when" 3
+  (freeze (native-test.count-byte (shen-jit.string->bytes "abcabca") 0 7 97)))
+(native-test.check "for over nothing" 0
+  (freeze (native-test.count-byte (shen-jit.string->bytes "abc") 2 2 99)))
+
+\* Even numbers below N, skipped past with next, until the sum passes Limit. *\
+(define-native native-test.evens (N Limit)
+  (word Sum 0)
+  (word I 0)
+  (while (< I N)
+    (word I (+ I 1))
+    (unless (= (bit-and I 1) 0) (next))
+    (word Sum (+ Sum I))
+    (when (> Sum Limit) (exit)))
+  (return-word Sum))
+
+(native-test.check "while, next and exit" 2550 (freeze (native-test.evens 100 100000)))
+(native-test.check "while, left early" 110 (freeze (native-test.evens 100 100)))
+
+\* if and else, comparing reals because a side is a real register. *\
+(define-native native-test.clamp (X)
+  (real V X)
+  (if (< V 0) (real V 0) (if (> V 1) (real V 1)))
+  (return-real V))
+
+(native-test.check "if on reals, below" 0.0 (freeze (native-test.clamp -2.5)))
+(native-test.check "if on reals, between" 0.25 (freeze (native-test.clamp 0.25)))
+(native-test.check "if on reals, above" 1.0 (freeze (native-test.clamp 7.5)))
+
+\* and, or and not, and != *\
+(define-native native-test.in-range (X Lo Hi)
+  (word V X)
+  (when (and (>= V Lo) (< V Hi) (not (= V 5)) (or (= V 1) (!= (bit-and V 1) 1)))
+    (return-word 1))
+  (return-word 0))
+
+(native-test.check "and, or and not"
+  [0 1 1 0 1 0 0 0 0]
+  (freeze (map (/. X (native-test.in-range X 1 8)) [0 1 2 3 4 5 7 8 9])))
+
+\* Leaving an outer loop by its name, and a block. *\
+(define-native native-test.factors (Target)
+  (word Found 0)
+  (for outer I 1 20
+    (for J 1 20
+      (when (= (* I J) Target)
+        (word Found (+ (* I 100) J))
+        (exit outer))))
+  (block checked
+    (when (= Found 0) (exit checked))
+    (word Found (+ Found 10000)))
+  (return-word Found))
+
+(native-test.check "exit by name" 10118 (freeze (native-test.factors 18)))
+(native-test.check "exit from a block" 0 (freeze (native-test.factors 401)))
+
+\* next by name goes round the outer loop *\
+(define-native native-test.rows (N)
+  (word Count 0)
+  (for row I 0 N
+    (for J 0 N
+      (when (> J I) (next row))
+      (word Count (+ Count 1))))
+  (return-word Count))
+
+(native-test.check "next by name" 15 (freeze (native-test.rows 5)))
+
+\* A slot holding a boolean is a test too, with tagged instructions around it. *\
+(define-native native-test.pick (Flag)
+  (if Flag (return yes) (return no)))
+
+(native-test.check "a boolean as a test" [yes no] (freeze [(native-test.pick true) (native-test.pick false)]))
+
+\* A loop whose body always leaves it has no way round, and arms that both end nothing after them. *\
+(define-native native-test.first-even (N)
+  (for I 0 N
+    (when (= (bit-and I 1) 0) (return-word I))
+    (return-word -1))
+  (return-word -2))
+
+(define native-test.first-even-from-one
+  -> (let F (shen-jit.install-code (shen-jit.assemble native-test.odd [(protect N)]
+              [[for (protect I) 1 (protect N)
+                 [when [= [bit-and (protect I) 1] 0] [return-word (protect I)]]
+                 [return-word -1]]
+               [return-word -2]]))
+       (F 3)))
+
+(native-test.check "a loop that never goes round" [-1 0 -2]
+  (freeze [(native-test.first-even-from-one) (native-test.first-even 5) (native-test.first-even 0)]))
+
+\* The same code object as the loop written out, the labels aside, which number the same. *\
+(native-test.check "the same instructions as written by hand"
+  true
+  (freeze (= (shen-jit.assemble native-test.s [(protect N)]
+               [[word (protect I) 0]
+                [while [< (protect I) (protect N)] [word (protect I) [+ (protect I) 1]]]
+                [return-word (protect I)]])
+             (shen-jit.assemble native-test.s [(protect N)]
+               [[word (protect I) 0]
+                [loop head]
+                [jump-unless-word [< (protect I) (protect N)] out]
+                [word (protect I) [+ (protect I) 1]]
+                [label next]
+                [again head]
+                [label out]
+                [return-word (protect I)]]))))
+
+\* expand-native shows what a generator's statements become. *\
+(native-test.check "expand-native gives instructions"
+  [[jump-unless-test [< x 1] structure.end.1] [return-word 0] [label structure.end.1]]
+  (freeze (do (set shen-jit.structure.*count* 0)
+              (shen-jit.expand-native [[when [< x 1] [return-word 0]]]))))
+
+(native-test.check "exit outside a loop"
+  [error "native code: exit or next outside a loop"]
+  (freeze (shen-jit.assemble native-test.bad [] [[exit] [return-word 0]])))
+(native-test.check "next of a block"
+  [error "native code: next of b, which is a block and not a loop"]
+  (freeze (shen-jit.assemble native-test.bad [] [[block b [next b]] [return-word 0]])))
+(native-test.check "exit by a name not around"
+  [error "native code: no loop or block named nowhere around here"]
+  (freeze (shen-jit.assemble native-test.bad [] [[while true [exit nowhere]] [return-word 0]])))
+(native-test.check "not a test"
+  [error "native code: not a test: (+ 1 2)"]
+  (freeze (shen-jit.assemble native-test.bad [] [[when [+ 1 2] [return-word 0]] [return-word 1]])))
+(native-test.check "a malformed for"
+  [error "native code: malformed for: (for 1 2)"]
+  (freeze (shen-jit.assemble native-test.bad [] [[for 1 2] [return-word 1]])))
+(native-test.refused "falls off the end after if"
+  (freeze (shen-jit.install-code (shen-jit.assemble native-test.bad [(protect X)]
+            [[word (protect V) (protect X)] [if [< (protect V) 1] [return-word 0]]]))))
+
 (output "~A passed, ~A failed~%" (value native-test.*passed*) (value native-test.*failed*))

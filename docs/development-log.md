@@ -802,6 +802,16 @@ that. Its readings decided nothing below.
   0.52 ns of a 1.36 ns `u8`, in a loop that sums bytes (no checks 0.84, C not vectorised 0.32).
 - **Rejected: buffers and bit operations in Shen** (2026-11-03, Apple M3 Max, against the C primitives). Only three
   could move, freeing about 21 of 230 lines of C. `copy-bytes` is 34 times slower at 64 B.
+- **Structured control** (2026-11-07, Apple M3 Max, against the same code written with labels). `if`, `when`, `unless`,
+  `while`, `for`, `block`, `exit` and `next`, made into labels, loops and jumps before anything else, so that nothing
+  in the checker or the JIT changed. About 190 lines with their comments. The path tracer, rewritten with them, lost all 48 of its labels,
+  jumps, loops and agains and 43 of its 261 lines, gave the same check as C's, and took 0.330 to 0.334 s against 0.332
+  to 0.333 s, in alternation. A loop written both ways assembles to the same code object. Whether a comparison is of
+  reals or words is told from its operands, as a real register or something only reals give; writing it would have
+  doubled the forms. A join nothing reaches has to be left out, as the checker refuses unreachable code: an `if` whose
+  arms both return showed it. Done ahead of Datalog's native joins, whose generator would otherwise have been written
+  against labels. Not done: typed parameters, which would repeat checks every access already makes; a definer of its own;
+  source mapping, until errors in an expansion are hard to read.
 
 ### Kernel pins and reproducible stage 0
 

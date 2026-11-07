@@ -716,8 +716,20 @@ uses each time round is worth a name before it, and a value a statement uses twi
   (return-word (shift-right Hash 8)))
 ```
 
+`if`, `when`, `unless`, `while`, `for`, `block`, `exit` and `next` write the same loops without labels: they become
+them, so the code that runs is the same. The hash again:
+
+```shen
+(define-native fnv (Bytes End)
+  (word Prime 1099511628211)
+  (word Hash (+ (* 3421674724 4294967296) 2216829733))
+  (for I 0 End
+    (word Hash (* (bit-xor Hash (u8 Bytes I)) Prime)))
+  (return-word (shift-right Hash 8)))
+```
+
 [docs/bytecode.md](https://github.com/tizoc/shen-jit/blob/main/docs/bytecode.md), "Native code written by hand", has
-the instructions.
+the instructions and these forms.
 
 ## Reference
 
