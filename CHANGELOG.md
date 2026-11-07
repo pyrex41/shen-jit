@@ -7,6 +7,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [0.4] - 2026-11-06
 
+### Added
+
+- `make test-differential` runs each primitive over generated values, however it is compiled and through C, and
+  `make differential-scheme` lists what differs from Shen/Scheme.
+
 ### Changed
 
 - Moved to the Shen kernel 43.4, from 43.2.
@@ -23,8 +28,7 @@ All notable changes to this project are documented in this file. The format is b
   clause applies.
 - `absvector` too large for `SHEN_JIT_MAX_HEAP` gave a handler `[]`, on which `error-to-string` failed, instead of
   an "out of memory" error.
-- `absvector` and `shen-jit.filled-vector` with a length of 2^56 or more crashed. They now raise an error from 2^48
-  up, as `shen-jit.bytes` does.
+- `absvector` with a length of 2^56 or more crashed. It now raises an error from 2^48 up, as `shen-jit.bytes` does.
 - `shen-jit.pvar` and `shen-jit.pvar-offset` raised past a `trap-error` in the same function whose handler ignores
   the error.
 - `write-byte` and `close` raise an error when the write fails, as on a full disk, instead of losing the data silently.
