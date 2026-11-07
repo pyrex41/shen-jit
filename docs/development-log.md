@@ -627,6 +627,16 @@ cannot. The kernel suite is the kernel's `tests/runme.shen`; the stlib install l
 - **Calls through `fn`.** Sealed F became a direct call (2026-11-01, Apple M3 Max, campaign: 3.1 ms sealed against
   23.8 open). For open F a cache per call site was rejected, as it needs a hook in `put`. An inline arity test did it
   instead (2026-11-03, Apple M3 Max): `cross-unit-global-unary-ordinary` 18.1 → 2.7 ms (earlier prototype 1.7).
+- **Checking normalization's output** (2026-11-07, Apple M3 Max). `check-lowerer` checked only the code objects, so a
+  bug in normalization showed only if it made bad bytecode. It now also checks, for every definition it lowers and every
+  unit case, that `norm` gives the emitter's language: only its nodes, of their shapes, `apply` with at most one argument,
+  each variable bound where used, a bound name never a constant, primitive arities. 35 lines in `check.shen`, on 954
+  definitions; the run's 0.9 s of user time did not move. Planted bugs, with the stage 0 output made again by the same
+  mutant so that only the checks judge: a binder left out of `bound-now`'s scope, which turns its uses into symbol
+  constants, passed every old check and failed 6 definitions here; a two-argument `apply` and a `trap` handler outside
+  its variable's scope passed the structural and dataflow checks and failed only a unit's expected output, and here; an
+  unbound variable and a wrong primitive arity were already failing as a stray `capture` and a bad `prim`. A misshapen
+  node makes the emitter loop, so the check cannot report it before stage 0 hangs.
 
 ### Sealing and inlining
 

@@ -9,7 +9,7 @@ Shen, and its stage 0 driver.
 | `stage0.shen` | 224 | Driver: lowers the kernel KLambda files and the port to `build/stage0/<file>.sbc`. |
 | `tokl.shen` | 39 | Compiles `lower.shen` to KLambda for stage 0. |
 | `host.shen` | 43 | What the lowerer takes from Shen/JIT, defined for running under a host. |
-| `check.shen` | 402 | Test code: reads the output back and checks it against the rules in `lib/native.shen`, unit cases. |
+| `check.shen` | 453 | Test code: reads the output back and checks it against the rules in `lib/native.shen`, checks normalization's output, unit cases. |
 
 Entry points, with `Sealed` the list of names defined in the stage 0 input:
 
