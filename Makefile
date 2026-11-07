@@ -192,7 +192,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io
+GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -308,6 +308,13 @@ test-io: $(BUILD)/shen-jit
 	  -e '(tc +)' -l tests/io_typed.shen | $(FFI_RESULT)
 	sh tests/io_file.sh $(SHEN_JIT)
 	sh tests/io_image.sh $(SHEN_JIT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/frame.shen -l tests/frame.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
+	  -l lib/io-socket.shen -l lib/frame.shen -e '(tc +)' -l tests/frame_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
+	  -l lib/io-socket.shen -l lib/frame.shen -l tools/frame-echo.shen -l tests/io_socket.shen | $(FFI_RESULT)
+	sh tests/frame_image.sh $(SHEN_JIT)
+	sh tests/io_socket_image.sh $(SHEN_JIT)
 
 fuzz-native: $(BUILD)/shen-jit
 	python3 tests/native_fuzz.py

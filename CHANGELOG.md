@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Optional `lib/frame.shen` reads bounded binary frames across I/O chunks; `lib/io-socket.shen` adds
+  owned TCP endpoints and flushing write shutdown over existing sockets. `tools/frame-echo.shen`
+  demonstrates framed sessions with bounded payloads and one flushed reply per message.
+
 - Optional `lib/io.shen` and `lib/io-file.shen`: bounded chunk readers/writers, memory endpoints and
   native binary files, independent of kernel streams. Short transfers retain progress; explicit close
   flushes pending output, and scoped helpers preserve primary and cleanup errors.

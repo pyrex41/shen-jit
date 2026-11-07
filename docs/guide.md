@@ -353,7 +353,9 @@ covers loading, the API, ownership, typed clients and the JSON/binary examples.
 Optional `lib/io.shen` adds bounded readers and writers over byte views, with memory endpoints;
 `lib/io-file.shen` adds native file descriptors through the FFI. They use their own endpoints and buffers,
 independently of Shen's default I/O. See [Chunk I/O](https://github.com/tizoc/shen-jit/blob/main/docs/io.md)
-for loading, file helpers, partial transfers, cleanup and typed results.
+for loading, file helpers, partial transfers, cleanup and typed results. [Binary framing](https://github.com/tizoc/shen-jit/blob/main/docs/framing.md)
+adds bounded messages over those readers; [Socket I/O endpoints](https://github.com/tizoc/shen-jit/blob/main/docs/io-sockets.md)
+connect the same I/O API to TCP connections.
 
 ### Calling C
 
@@ -829,7 +831,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples and images/GC |
-| `make test-io` | Bounded chunk I/O, short transfers and failures, binary files, native lifetimes, typed results and images/GC |
+| `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |

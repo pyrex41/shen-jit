@@ -40,9 +40,9 @@ Windows drive-relative paths such as `C:name` are rejected. POSIX descriptors us
 
 File reads/writes release the VM lock when other Shen threads exist. They retry EINTR, but do not promise
 cancellation or deadlines: a blocking file operation can wait indefinitely. Close is never blindly retried.
-This backend supplies files; socket adapters, pipes, seeking, durability sync, filesystem operations and
-process spawning remain separate work. `flush` delivers buffered output to the endpoint, not to stable
-storage. An error from `write-file` may leave a partial file and does not roll back output.
+This backend supplies files; [socket endpoints](io-sockets.md) use a separate adapter. Pipes, seeking,
+durability sync, filesystem operations and process spawning remain separate work. `flush` delivers buffered
+output to the endpoint, not to stable storage. An error from `write-file` may leave a partial file and does not roll back output.
 
 ## Direct transfers
 
@@ -109,7 +109,8 @@ This complete program counts a file in bounded chunks:
   (/. E (count-chunks (io.reader E [[chunk-size 4096]]) 0)))
 ```
 
-A future streaming parser should share this reader's unread input and consume only accepted bytes.
+[Binary framing](framing.md) already uses this reader to consume bounded messages across chunks.
+A future general streaming parser should share its unread input and consume only accepted bytes.
 It must not add an unrelated read-ahead queue or wrap a kernel stream. The current complete-input format
 examples on the buffers page can already parse a successful `read-file` result.
 

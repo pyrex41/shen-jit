@@ -1115,6 +1115,34 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Binary framing and socket endpoints (2026-11-07, M3 Max, macOS arm64)
+
+- Added `lib/frame.shen`: a two-byte tag and four-byte payload length, both big-endian, over the
+  existing I/O reader. Decode the header once, reject the length before allocating a payload, then
+  fill it across short reads. The reader's one bounded queue preserves following frames. Returned
+  payloads own their bytes. Clean EOF is allowed only between frames; errors and EOF are terminal,
+  and transport errors keep their native details with progress measured within the current frame.
+- Added `lib/io-socket.shen` above the existing integer socket API. Adoption transfers ownership of
+  an already connected, configured socket; it does not add a new connection/listener framework or
+  alter that API. Native send/recv stay nonblocking with the VM lock held, and existing poll FFI
+  calls wait in 100 ms slices with the lock released. Native error codes are captured before cleanup,
+  through WSAGetLastError on Windows. Existing pointer invalidation protects saved socket identities.
+- Write shutdown first drains the writer. Failure retains the pending suffix and leaves the write
+  direction open; success detaches the drained writer and still permits reading a response. Explicit
+  close remembers its result. Raw integer aliases remain outside this ownership protocol. There is
+  no deadline/cancellation option, descriptor-inheritance change or concurrent-close protocol yet.
+- `tools/frame-echo.shen` is the first complete connection handler over these pieces: echo each bounded
+  frame, flush before accepting another, return a message count at EOF, and close on malformed input.
+  Loopback tests send a 1 MiB frame and an empty message without waiting for EOF. This is a concrete
+  framing workload, not a general parser compiler or a throughput improvement claim.
+- The new checks pass: 51 framing cases, 33 loopback/ownership cases, a typed client, 3 managed
+  image/GC/type checks and 2 socket image/GC checks. Framing covers every split and truncation point;
+  native tests cover large transfers, half-close, failed flush, native errors and stale identities.
+  The independent Python TCP oracle passes 3 binary wire cases using its own struct encoder/decoder.
+- The full fast tier, guide rendering, examples, page links and publication scan pass. CI's existing
+  `test-io` target includes the new suites, with native socket cases explicitly skipped on static
+  builds. API references live on their own framing and socket pages linked from the guide.
+
 ### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
 
 - Added optional `lib/io.shen` and `lib/io-file.shen`, over existing buffers and FFI only: no runtime

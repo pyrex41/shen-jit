@@ -10,6 +10,8 @@ local PAGES = {
   ffi = 'Calling C',
   buffers = 'Buffers and cursors',
   io = 'Chunk I/O',
+  framing = 'Binary framing',
+  ['io-sockets'] = 'Socket I/O endpoints',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 
@@ -28,7 +30,7 @@ function Link(link)
   else
     path = 'docs/' .. path
   end
-  local page = path:match('^docs/(%w+)%.md$')
+  local page = path:match('^docs/([%w-]+)%.md$')
   if page and PAGES[page] then
     link.target = page .. '.html' .. fragment
     local text = pandoc.utils.stringify(link.content)
