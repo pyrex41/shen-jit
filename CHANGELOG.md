@@ -10,6 +10,11 @@ All notable changes to this project are documented in this file. The format is b
 - Compiling code with many distinct constants no longer searches all of them for each new one: a list of 32000
   numbers takes about a thirtieth of what it did.
 
+### Fixed
+
+- Loading code with more than 255 parameters or call arguments, or a capture index above 255, reports which limit
+  was exceeded. Reported by @pyrex41 in [#18](https://github.com/tizoc/shen-jit/pull/18).
+
 ## [0.4] - 2026-11-06
 
 ### Added

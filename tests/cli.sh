@@ -52,6 +52,24 @@ absent() { # name, file, a line that must not be there
     fi
 }
 
+# Count operands accept 255. Oversized values report the relevant limit.
+cat > "$dir/counts.shen" <<'SHEN'
+(define load-code Arity Instructions ->
+  (output "~A~%" (trap-error (do (shen-jit.install [code f Arity 258 [] Instructions []]) loaded)
+                              (/. E (error-to-string E)))))
+(load-code 255 [[tail-call 0 f 255]])
+(load-code 256 [[return 2]])
+(load-code 0 [[tail-call 0 f 256]])
+(load-code 0 [[entry 256 0] [label 0] [return 2]])
+(load-code 0 [[capture 2 256] [return 2]])
+SHEN
+"$SHEN" script "$dir/counts.shen" > "$dir/counts.out" 2>&1
+check count-255 "$dir/counts.out" "loaded"
+check function-arity-limit "$dir/counts.out" "function has more than 255 parameters"
+check call-argument-limit "$dir/counts.out" "call has more than 255 arguments"
+check entry-arity-limit "$dir/counts.out" "entry has more than 255 parameters"
+check capture-index-limit "$dir/counts.out" "capture index exceeds 255"
+
 # Backtraces at the REPL: the frames of an error that reaches the top level,
 # innermost first, a run of one name on one line, and none for an error the
 # program catches.

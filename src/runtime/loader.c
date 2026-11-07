@@ -83,6 +83,13 @@ static bool small_int(V v, uint64_t limit, uint64_t *out)
     return true;
 }
 
+static bool byte_count(Loader *l, V v, uint64_t *out, const char *limit_error)
+{
+    if (is_fix(v) && fixval(v) > 255)
+        return fail(l, limit_error);
+    return small_int(v, 256, out);
+}
+
 /* An operand: a slot, or (const K), encoded with OPERAND_CONST. */
 static bool operand(V v, uint64_t frame, uint64_t nconst, uint64_t *out)
 {
@@ -188,7 +195,11 @@ static bool encode(Loader *l, V insn, uint64_t frame, uint64_t nconst, uint64_t 
         case 'k': ok = small_int(v, nconst, &x); break;
         case 'c': ok = small_int(v, ncode, &x); break;
         case 'l': case 'h': case 'b': ok = small_int(v, UINT32_MAX, &x); break;
-        case 'n': ok = small_int(v, 256, &x); break;
+        case 'n':
+            ok = byte_count(l, v, &x, op == OP_CAPTURE ? "capture index exceeds 255" :
+                                      op == OP_ENTRY ? "entry has more than 255 parameters" :
+                                                       "call has more than 255 arguments");
+            break;
         case 'r': ok = small_int(v, REAL_REGISTERS, &x); break;
         case 'w': ok = small_int(v, WORD_REGISTERS, &x); break;
         case 'W': ok = operand(v, WORD_REGISTERS, nconst, &x); break;
@@ -290,7 +301,8 @@ static V build_code(Loader *l, V form)
     /* (code Name Arity Frame Constants Instructions Codes [Inline]) */
     size_t n = list_length(form);
     if ((n != 7 && n != 8) || !symbol_is(nth(form, 0), "code") ||
-        !small_int(nth(form, 2), 256, &arity) || !small_int(nth(form, 3), 1u << 20, &frame) ||
+        !byte_count(l, nth(form, 2), &arity, "function has more than 255 parameters") ||
+        !small_int(nth(form, 3), 1u << 20, &frame) ||
         frame < arity + 2 || list_length(nth(form, 4)) == (size_t)-1 ||
         list_length(nth(form, 5)) == (size_t)-1 || list_length(nth(form, 6)) == (size_t)-1) {
         fail(l, "malformed code object");
