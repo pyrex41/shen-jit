@@ -643,44 +643,36 @@
             Name (datalog.kernel-name "datalog.k.insert." N [])
          (shen-jit.assemble Name [(protect Table) (protect Tuples) (protect Meta) | Cols]
            (append (datalog.hash-setup)
-            (append
              [[word (protect Count) [u64 (protect Meta) 0]]
               [u64! (protect Meta) 24 [+ [u64 (protect Meta) 24] 1]]
               [word (protect Fp) [shift-right (datalog.hash-form Cols) 32]]
               [word (protect Mask) [u64 (protect Meta) 8]]
               [word (protect I) [bit-and (protect Fp) (protect Mask)]]
-              [loop probe]
-              [word (protect Off) [shift-left (protect I) 3]]
-              [word (protect E) [u64 (protect Table) (protect Off)]]
-              [jump-unless-word [= (protect E) 0] occupied]
-              [jump-unless-word [< (protect Count) [u64 (protect Meta) 16]] full]
-              [u64! (protect Table) (protect Off)
-                    [bit-or [shift-left (protect Fp) 32] [+ (protect Count) 1]]]
-              [word (protect P) [* (protect Count) (datalog.stride N)]]]
-             (append (datalog.store-columns Cols 0)
-              (append
-               [[u64! (protect Meta) 0 [+ (protect Count) 1]]
-                [return-word 1]
-                [label occupied]
-                [jump-unless-word [= [shift-right (protect E) 32] (protect Fp)] next]
-                [word (protect P) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]]
-               (append (datalog.compare-columns Cols 0)
-                [[return-word 0]
-                 [label next]
-                 [word (protect I) [bit-and [+ (protect I) 1] (protect Mask)]]
-                 [again probe]
-                 [label full]
-                 [return-word 2]]))))))))
+              [while true
+                [word (protect Off) [shift-left (protect I) 3]]
+                [word (protect E) [u64 (protect Table) (protect Off)]]
+                [when [= (protect E) 0]
+                  [unless [< (protect Count) [u64 (protect Meta) 16]] [return-word 2]]
+                  [u64! (protect Table) (protect Off) [bit-or [shift-left (protect Fp) 32] [+ (protect Count) 1]]]
+                  [word (protect P) [* (protect Count) (datalog.stride N)]]
+                  [do | (datalog.store-columns Cols 0)]
+                  [u64! (protect Meta) 0 [+ (protect Count) 1]]
+                  [return-word 1]]
+                [when [= [shift-right (protect E) 32] (protect Fp)]
+                  [word (protect P) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]
+                  [when [and | (datalog.same-columns Cols 0)] [return-word 0]]]
+                [word (protect I) [bit-and [+ (protect I) 1] (protect Mask)]]]]))))
 
 (define datalog.store-columns
   [] _ -> []
   [C | Cs] Off -> [[u32! (protect Tuples) (datalog.offset-form (protect P) Off) C]
                    | (datalog.store-columns Cs (+ Off 4))])
 
-(define datalog.compare-columns
+\\ Tests that the tuple at P holds these values.
+(define datalog.same-columns
   [] _ -> []
-  [C | Cs] Off -> [[jump-unless-word [= [u32 (protect Tuples) (datalog.offset-form (protect P) Off)] C] next]
-                   | (datalog.compare-columns Cs (+ Off 4))])
+  [C | Cs] Off -> [[= [u32 (protect Tuples) (datalog.offset-form (protect P) Off)] C]
+                   | (datalog.same-columns Cs (+ Off 4))])
 
 \\ Where these key values are in a table: the position plus one of the tuple there, or 0.
 (define datalog.find-kernel
@@ -690,11 +682,10 @@
 (define datalog.key-offsets
   Keys -> (map (/. K (* 4 (- K 1))) Keys))
 
-(define datalog.compare-keys
+(define datalog.same-keys
   [] [] -> []
   [Off | Offs] [C | Cs]
-  -> [[jump-unless-word [= [u32 (protect Tuples) (datalog.offset-form (protect P) Off)] C] next]
-      | (datalog.compare-keys Offs Cs)])
+  -> [[= [u32 (protect Tuples) (datalog.offset-form (protect P) Off)] C] | (datalog.same-keys Offs Cs)])
 
 (define datalog.find-code
   N Keys
@@ -702,21 +693,16 @@
           Name (datalog.kernel-name "datalog.k.find." N Keys)
        (shen-jit.assemble Name [(protect Table) (protect Tuples) (protect Mask) | Cols]
          (append (datalog.hash-setup)
-          (append
            [[word (protect Fp) [shift-right (datalog.hash-form Cols) 32]]
             [word (protect I) [bit-and (protect Fp) (protect Mask)]]
-            [loop probe]
-            [word (protect E) [u64 (protect Table) [shift-left (protect I) 3]]]
-            [jump-unless-word [= (protect E) 0] occupied]
-            [return-word 0]
-            [label occupied]
-            [jump-unless-word [= [shift-right (protect E) 32] (protect Fp)] next]
-            [word (protect P) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]]
-           (append (datalog.compare-keys (datalog.key-offsets Keys) Cols)
-            [[return-word [bit-and (protect E) 4294967295]]
-             [label next]
-             [word (protect I) [bit-and [+ (protect I) 1] (protect Mask)]]
-             [again probe]]))))))
+            [while true
+              [word (protect E) [u64 (protect Table) [shift-left (protect I) 3]]]
+              [when [= (protect E) 0] [return-word 0]]
+              [when [= [shift-right (protect E) 32] (protect Fp)]
+                [word (protect P) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]
+                [when [and | (datalog.same-keys (datalog.key-offsets Keys) Cols)]
+                  [return-word [bit-and (protect E) 4294967295]]]]
+              [word (protect I) [bit-and [+ (protect I) 1] (protect Mask)]]]]))))
 
 \\ Adds the tuples from From up to To to an index, whose table has room, and gives how many keys
 \\ were new. A tuple goes at the head of its key's chain.
@@ -728,12 +714,13 @@
   [] _ -> []
   [Off | Offs] Base -> [[u32 (protect Tuples) (datalog.offset-form Base Off)] | (datalog.tuple-columns Offs Base)])
 
-(define datalog.compare-tuples
+\\ Tests that the tuples at Q and Base have the same keys.
+(define datalog.same-tuples
   [] -> []
   [Off | Offs]
-  -> [[jump-unless-word [= [u32 (protect Tuples) (datalog.offset-form (protect Q) Off)]
-                           [u32 (protect Tuples) (datalog.offset-form (protect Base) Off)]] next]
-      | (datalog.compare-tuples Offs)])
+  -> [[= [u32 (protect Tuples) (datalog.offset-form (protect Q) Off)]
+         [u32 (protect Tuples) (datalog.offset-form (protect Base) Off)]]
+      | (datalog.same-tuples Offs)])
 
 (define datalog.index-code
   N Keys
@@ -741,64 +728,43 @@
           Name (datalog.kernel-name "datalog.k.index." N Keys)
        (shen-jit.assemble Name [(protect Table) (protect Next) (protect Tuples) (protect Mask) (protect From) (protect To)]
          (append (datalog.hash-setup)
-          (append
-           [[word (protect Pos) (protect From)]
-            [word (protect D) 0]
+           [[word (protect D) 0]
             [word (protect Mk) (protect Mask)]
-            [loop tuples]
-            [jump-unless-word [u< (protect Pos) (protect To)] done]
-            [word (protect Base) [* (protect Pos) (datalog.stride N)]]
-            [word (protect Fp) [shift-right (datalog.hash-form (datalog.tuple-columns Offs (protect Base))) 32]]
-            [word (protect I) [bit-and (protect Fp) (protect Mk)]]
-            [loop probe]
-            [word (protect Off) [shift-left (protect I) 3]]
-            [word (protect E) [u64 (protect Table) (protect Off)]]
-            [jump-unless-word [= (protect E) 0] occupied]
-            [u64! (protect Table) (protect Off) [bit-or [shift-left (protect Fp) 32] [+ (protect Pos) 1]]]
-            [u32! (protect Next) [shift-left (protect Pos) 2] 0]
-            [word (protect D) [+ (protect D) 1]]
-            [jump inserted]
-            [label occupied]
-            [jump-unless-word [= [shift-right (protect E) 32] (protect Fp)] next]
-            [word (protect Q) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]]
-           (append (datalog.compare-tuples Offs)
-            [[u32! (protect Next) [shift-left (protect Pos) 2] [bit-and (protect E) 4294967295]]
-             [u64! (protect Table) (protect Off) [bit-or [shift-left (protect Fp) 32] [+ (protect Pos) 1]]]
-             [jump inserted]
-             [label next]
-             [word (protect I) [bit-and [+ (protect I) 1] (protect Mk)]]
-             [again probe]
-             [label inserted]
-             [word (protect Pos) [+ (protect Pos) 1]]
-             [again tuples]
-             [label done]
-             [return-word (protect D)]]))))))
+            [for (protect Pos) (protect From) (protect To)
+              [word (protect Base) [* (protect Pos) (datalog.stride N)]]
+              [word (protect Fp) [shift-right (datalog.hash-form (datalog.tuple-columns Offs (protect Base))) 32]]
+              [word (protect I) [bit-and (protect Fp) (protect Mk)]]
+              [while probe true
+                [word (protect Off) [shift-left (protect I) 3]]
+                [word (protect E) [u64 (protect Table) (protect Off)]]
+                [when [= (protect E) 0]
+                  [u64! (protect Table) (protect Off) [bit-or [shift-left (protect Fp) 32] [+ (protect Pos) 1]]]
+                  [u32! (protect Next) [shift-left (protect Pos) 2] 0]
+                  [word (protect D) [+ (protect D) 1]]
+                  [exit probe]]
+                [when [= [shift-right (protect E) 32] (protect Fp)]
+                  [word (protect Q) [* [- [bit-and (protect E) 4294967295] 1] (datalog.stride N)]]
+                  [when [and | (datalog.same-tuples Offs)]
+                    [u32! (protect Next) [shift-left (protect Pos) 2] [bit-and (protect E) 4294967295]]
+                    [u64! (protect Table) (protect Off) [bit-or [shift-left (protect Fp) 32] [+ (protect Pos) 1]]]
+                    [exit probe]]]
+                [word (protect I) [bit-and [+ (protect I) 1] (protect Mk)]]]]
+            [return-word (protect D)]]))))
 
 \\ Moves a table's entries to a larger one.
 (define datalog.rehash-code
   -> (shen-jit.assemble datalog.k.rehash [(protect New) (protect Old) (protect Mask) (protect Size)]
-       [[word (protect J) 0]
-        [word (protect Mk) (protect Mask)]
-        [word (protect End) (protect Size)]
-        [loop entries]
-        [jump-unless-word [u< (protect J) (protect End)] done]
-        [word (protect E) [u64 (protect Old) [shift-left (protect J) 3]]]
-        [jump-unless-word [= (protect E) 0] full]
-        [jump skip]
-        [label full]
-        [word (protect I) [bit-and [shift-right (protect E) 32] (protect Mk)]]
-        [loop probe]
-        [word (protect Off) [shift-left (protect I) 3]]
-        [jump-unless-word [= [u64 (protect New) (protect Off)] 0] taken]
-        [u64! (protect New) (protect Off) (protect E)]
-        [jump skip]
-        [label taken]
-        [word (protect I) [bit-and [+ (protect I) 1] (protect Mk)]]
-        [again probe]
-        [label skip]
-        [word (protect J) [+ (protect J) 1]]
-        [again entries]
-        [label done]
+       [[word (protect Mk) (protect Mask)]
+        [for (protect J) 0 (protect Size)
+          [word (protect E) [u64 (protect Old) [shift-left (protect J) 3]]]
+          [unless [= (protect E) 0]
+            [word (protect I) [bit-and [shift-right (protect E) 32] (protect Mk)]]
+            [while place true
+              [word (protect Off) [shift-left (protect I) 3]]
+              [when [= [u64 (protect New) (protect Off)] 0]
+                [u64! (protect New) (protect Off) (protect E)]
+                [exit place]]
+              [word (protect I) [bit-and [+ (protect I) 1] (protect Mk)]]]]]
         [return-word 0]]))
 
 (datalog.kernel datalog.k.rehash (freeze (datalog.rehash-code)))

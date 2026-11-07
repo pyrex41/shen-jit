@@ -1556,6 +1556,10 @@ Now a tuple is u32 columns in a byte buffer, new tuples are a range of it, and t
 - **Not tried:** sorted arrays merged each round, in place of the tables; Free Join; keeping the two columns of a small tuple in the table entry, which would avoid reading the buffer on a repeat; native join loops; growing tables by more than double, which would trade memory for rehashing.
 - **Checked** against SWI-Prolog on 300 generated programs and on three larger workloads (51,834 to 132,214 tuples), against the Python evaluator on points-to, and under `SHEN_JIT_GC_STRESS=1000` in 57 s without the kernel test, whose allocation is too much there.
 
+### Kernels with structured control (2026-11-07, Apple M3 Max, against the same kernels with labels)
+
+Insert, find, index and rehash are written with `while`, `for`, `when`, `unless`, `exit` and `and`, from `lib/native.shen`, in place of labels and jumps: 65 lines where there were 99, and no label left. Five runs each, in alternation: closure 115 to 124 ms against 123 to 131, the skewed join 121 to 126 against 120 to 128, small points-to 160 to 163 against 158 to 164, within noise. Fingerprint bugs planted in the structured kernels are caught as before.
+
 ### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
 
 The same rules and facts, written out for Soufflé; every result it finished matches ours. Its compiled programs are built from the C++ it generates with the flags of its own compile script, as that script's include paths fail in Homebrew's bottle. That bottle has no OpenMP, so Soufflé ran on one thread, as we do, and it keeps 64-bit values where we keep 32. Times in ms, best of three: ours is `datalog.run` with facts as a list, and Soufflé's its process less the same with no facts, which is its startup, about 15 ms. Building took it 3.0 to 3.7 s a program.
