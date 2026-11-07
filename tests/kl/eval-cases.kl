@@ -858,6 +858,12 @@ has them."
 (value (true a ok true 3) (t.pvar-prolog))
 (value t.pvar-chain (defun t.pvar-chain () (let B (shen.prolog-vector) (let X (shen.newpv B) (let Y (shen.newpv B) (let Z (shen.newpv B) (do (shen.bindv X Y B) (do (shen.bindv Y (cons Z 1) B) (do (shen.bindv Z 2 B) (cons (shen.lazyderef Z B) (cons (hd (shen.deref X B)) (cons (tl (shen.deref X B)) ()))))))))))))
 (value (2 2 1) (t.pvar-chain))
+"A cut then (when false), which the lowerer folds: it fails, and locks the
+lock with its key only when the lock is open."
+(value t.cut-fail (defun t.cut-fail (B L K C) (shen.cut B L K (freeze (when false B L K C)))))
+(value t.lock-after (defun t.lock-after (Open) (let L (address-> (address-> (absvector 3) 1 Open) 2 5) (let R (t.cut-fail 0 L 7 0) (cons R (cons (<-address L 1) (cons (<-address L 2) ())))))))
+(value (false false 7) (t.lock-after true))
+(value (false false 5) (t.lock-after false))
 "(= (shen.deref X B) (shen.deref Y B)), compared without copying: equal through
 variables, different at the head, a pair and an atom, unbound variables, and a term
 that holds itself, whose copy would not end."

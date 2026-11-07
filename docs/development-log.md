@@ -748,6 +748,14 @@ that. Its readings decided nothing below.
 - **`get-time` without interning** (2026-11-05, Apple M5, load about 25, against the build before). THORN asks for the
   time at every predicate call, and each call interned `run` and `unix`, about 2% of samples on RCC problems. Comparing
   the name instead: 10^7 calls 0.28 to 0.155 s, THORN's thm13 28.05 to 26.42 G instructions and rcc10 20.48 to 19.40 G.
+- **Cut then `(when false)` folded** (2026-11-07, Apple M5 under load 15-40, instructions retired, three alternating
+  rounds against 3a474bf). THORN's generated depth, complexity and loop clauses end in `! (when false)`, and the
+  closure, `shen.cut` and its thaw ran about 3.5 million times in rcc10's 47 million inferences, 6% to 15% of
+  inferences on set, L, schubert and `ec`; `shen.cut`, `shen.unlocked?` and `shen.lock` were 3.7% of rcc11's samples.
+  A lowering rule of seven lines makes it the lock test alone. rcc10 18.88-19.07 to 18.46-18.54 G (-3.0%),
+  rcc-dreammachine at depth 8 without its time limit 55.6-56.0 to 54.4-54.8 G (-2.2%), L -1.8%, `ec` -1.5%, schubert
+  -1.4%, set 0.0%, each including loading THORN; kernel suite and stlib install within noise (eight rounds of the
+  install: 0.917-0.940 against 0.919-0.948 G). Same inference counts; no kernel definition has the shape.
 - **THORN's inference counts as a test** (2026-11-05, Apple M5). Nothing checked what a prover computes, and a wrong
   answer from a prover looks like any other. THORN's search is deterministic once its wall-clock limit is gone: seven of
   its problem files gave the same 35 counts and unproved goals on Shen/JIT and Shen/Scheme 0.52, in about a second each.

@@ -272,6 +272,9 @@ the shifts. The others are calls to C.
 - `(shen.bind! X Y B (freeze E))`: the binding, E where the kernel's thaws the closure,
   and undoing the binding if E gives false. No closure is made. The Prolog compiler
   emits these for a variable met by a pattern.
+- `(shen.cut B L K (freeze (when false B L K C)))`, with every argument a variable: `!` then
+  `(when false)`, which THORN emits for every predicate. The continuation fails, so it is
+  `(if (shen.unlocked? L) (shen.lock K L) false)`, with no closure and no call to `shen.cut`.
 - `(= (shen.deref X B) (shen.deref Y B))`, with B a variable, a number or `[]`, which the Prolog compiler makes of
   `(when (= X Y))`: `(shen-jit.deref= X Y B)`, which dereferences as it compares and copies neither term.
 - `(let G (freeze E) Body)`, where Body uses G only in `(thaw G)` and as the last argument
