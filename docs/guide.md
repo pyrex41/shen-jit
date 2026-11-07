@@ -348,6 +348,13 @@ The optional buffer/cursor libraries provide checked ranges over managed bytes o
 logical equality and mutable positions. [Buffers and cursors](https://github.com/tizoc/shen-jit/blob/main/docs/buffers.md)
 covers loading, the API, ownership, typed clients and the JSON/binary examples.
 
+### Chunk I/O
+
+Optional `lib/io.shen` adds bounded readers and writers over byte views, with memory endpoints;
+`lib/io-file.shen` adds native file descriptors through the FFI. They use their own endpoints and buffers,
+independently of Shen's default I/O. See [Chunk I/O](https://github.com/tizoc/shen-jit/blob/main/docs/io.md)
+for loading, file helpers, partial transfers, cleanup and typed results.
+
 ### Calling C
 
 `lib/ffi.shen` lets Shen call plain C functions, with nothing to compile. It is not in the image, and has to be
@@ -809,7 +816,7 @@ its sources.
 The fast tier takes about 20 s, and catches nearly everything:
 
 ```sh
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-ffi test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-io test-ffi test-overrides
 ```
 
 | Target | What it does |
@@ -822,6 +829,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples and images/GC |
+| `make test-io` | Bounded chunk I/O, short transfers and failures, binary files, native lifetimes, typed results and images/GC |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
@@ -846,7 +854,7 @@ To run the test suites from a source tarball, point `KERNEL_DIR` at a directory 
 
 ```sh
 make stlib
-make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-ffi test-overrides
+make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-io test-ffi test-overrides
 ```
 
 On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that

@@ -56,7 +56,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-io test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -192,7 +192,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers
+GUIDE_PAGES := design semantics bytecode ffi buffers io
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -300,6 +300,14 @@ test-buffer: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/handle.shen \
 	  -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer_memory.shen | $(FFI_RESULT)
 	sh tests/buffer_image.sh $(SHEN_JIT)
+
+# Independent chunk I/O, native file descriptors, typed results and image/GC safety.
+test-io: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l tests/io.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/io-file.shen \
+	  -e '(tc +)' -l tests/io_typed.shen | $(FFI_RESULT)
+	sh tests/io_file.sh $(SHEN_JIT)
+	sh tests/io_image.sh $(SHEN_JIT)
 
 fuzz-native: $(BUILD)/shen-jit
 	python3 tests/native_fuzz.py

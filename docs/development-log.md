@@ -1115,6 +1115,33 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Independent bounded chunk I/O (2026-11-07, M3 Max, macOS arm64)
+
+- Added optional `lib/io.shen` and `lib/io-file.shen`, over existing buffers and FFI only: no runtime
+  changes and no kernel stream/file helpers. Memory sources snapshot input; fixed memory sinks borrow
+  writable ranges. Native files use POSIX descriptors or Windows binary CRT descriptors with UTF-16
+  paths. Opens prevent descriptor inheritance. Static builds keep the managed core and explicitly
+  report that the file backend is unavailable.
+- Per-endpoint capacities bound scratch copies, including the blocking FFI's copies when other threads
+  run. Readers retain unread bytes and defer terminal errors until queued input is consumed. Returned
+  chunks own their data. Writers distinguish accepted input from delivered output; failed flushes retain
+  an offset into the pending suffix, so retries never replay acknowledged bytes. This is a correctness
+  baseline with bounded copies, not a measured throughput improvement or zero-copy claim.
+- A reader/writer leases its direction, preventing accidental bypass of queued data. Close flushes,
+  invalidates the endpoint, closes once and remembers its result. Scopes preserve callback failure as
+  primary and cleanup errors as secondary. File identities use existing non-memory pointers solely as
+  descriptor guards: image loading zeros them before any old descriptor can be used. There is no GC
+  descriptor cleanup, seek, socket adapter, pipe creation, cancellation or deadline promise yet.
+- `make test-io` passes 153 checks: 97 scripted/memory, 1 typed client, 49 native/foreign, 2 independent
+  byte comparisons and 4 image/GC/type checks. Native workloads cross multiple 64 KiB chunks and run
+  while another thread repeatedly collects. A targeted image-loaded workload collects at every
+  allocation. Tests cover partial transfers, no-progress writes, logical margins, read-only and dead
+  owners, limits without losing the next byte, close/flush failures, native error capture and stale
+  images. Windows uses path-conversion tests instead of bad-fd injection, which can abort in the CRT.
+- The full fast tier passes, including 209 CLI checks and 70,304 override comparisons per mode.
+  The API has its own `docs/io.md` page linked from the guide. Guide rendering and its examples pass;
+  CI and Linux source-tarball suites run `test-io`, including explicit FFI skips on static builds.
+
 ### Buffer views and cursors (2026-11-07, macOS arm64)
 
 - The API reference lives on its own `docs/buffers.md` page, linked from the guide and rendered with it.

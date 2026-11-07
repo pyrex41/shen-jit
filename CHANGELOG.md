@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Optional `lib/io.shen` and `lib/io-file.shen`: bounded chunk readers/writers, memory endpoints and
+  native binary files, independent of kernel streams. Short transfers retain progress; explicit close
+  flushes pending output, and scoped helpers preserve primary and cleanup errors.
+
 - Optional `lib/buffer.shen` and `lib/cursor.shen`: checked views over managed bytes or sized foreign
   memory, overlapping copies, owned captures, logical equality and typed cursor operations.
   `tools/buffer-parsers.shen` demonstrates complete JSON and length-prefixed binary parsing over them.
