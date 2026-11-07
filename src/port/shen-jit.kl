@@ -168,6 +168,21 @@ bound to numbers or atoms: only a pair costs a call."
 (defun shen-jit.deref-pair (X Bindings)
   (cons (shen.deref (hd X) Bindings) (shen.deref (tl X) Bindings)))
 
+"(= (shen.deref X B) (shen.deref Y B)), which the Prolog compiler makes of (when (= X
+Y)), compares while it dereferences, and copies neither term: the lowerer calls this
+for it. It ends where they first differ, and, as shen-jit.unify= does, on a pair that
+is the same object on both sides, so also on a term that holds itself, where the
+copy would not end."
+
+(defun shen-jit.deref= (X Y Bindings)
+  (let A (shen.lazyderef X Bindings)
+    (let B (shen.lazyderef Y Bindings)
+      (if (and (cons? A) (cons? B))
+          (or (shen-jit.same? A B)
+              (and (shen-jit.deref= (hd A) (hd B) Bindings)
+                   (shen-jit.deref= (tl A) (tl B) Bindings)))
+          (= A B)))))
+
 "Unification, as the kernel's shen.lzy= and shen.lzy=! but with no closures: it
 binds what it can, keeping the variables it bound in a list, and returns that
 list, or undoes them and returns false. The continuation then runs once, and a

@@ -362,6 +362,12 @@
       where (and (empty? (intersection [shen.cut when freeze if] Scope))
                  (shen-jit.sealed? shen.cut) (shen-jit.sealed? when)
                  (empty? (difference [B L K B2 L2 K2 C] Scope)))
+  \\ (= (shen.deref X B) (shen.deref Y B)), the Prolog compiler's (when (= X Y)),
+  \\ compares without copying either term.
+  Scope [= [shen.deref X B] [shen.deref Y B]]
+  -> (shen-jit.lower.norm Scope [shen-jit.deref= X Y B])
+      where (and (not (element? = Scope)) (not (element? shen.deref Scope))
+                 (shen-jit.sealed? shen.deref) (shen-jit.lower.pure? B Scope))
   Scope [if C X Y] -> [if (shen-jit.lower.norm Scope C) (shen-jit.lower.norm Scope X)
                           (shen-jit.lower.norm Scope Y)]
   Scope [and X Y] -> [and (shen-jit.lower.norm Scope X) (shen-jit.lower.norm Scope Y)]
