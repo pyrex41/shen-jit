@@ -5,6 +5,11 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Changed
+
+- Compiling code with many distinct constants no longer searches all of them for each new one: a list of 32000
+  numbers takes about a thirtieth of what it did.
+
 ## [0.4] - 2026-11-06
 
 ### Added

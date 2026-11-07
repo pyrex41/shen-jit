@@ -629,14 +629,14 @@
 \\ Builders. A builder accumulates one code object in an absvector:
 \\ 0 name, 1 arity, 2 sealed names, 3 instructions (reversed), 4 constants
 \\ (reversed), 5 nested codes, 6 labels used, 7 frame size, 8 captured variables,
-\\ 9 how many constants.
+\\ 9 how many constants, 10 the constants' index.
 
 (define shen-jit.lower.builder
   Name Arity Sealed
-  -> (let B (absvector 10)
+  -> (let B (absvector 11)
        (do (address-> B 0 Name) (address-> B 1 Arity) (address-> B 2 Sealed)
            (address-> B 3 []) (address-> B 4 []) (address-> B 5 [])
-           (address-> B 6 0) (address-> B 7 (+ Arity 2)) (address-> B 8 []) (address-> B 9 0))))
+           (address-> B 6 0) (address-> B 7 (+ Arity 2)) (address-> B 8 []) (address-> B 9 0) (address-> B 10 (shen.dict 8)))))
 
 \\ Lower Body with Params in slots 2.. and return the finished code object.
 (define shen-jit.lower.code
@@ -686,25 +686,33 @@
   B S -> (if (> (+ S 1) (<-address B 7)) (address-> B 7 (+ S 1)) B))
 
 \\ Constants are shared only when identical: numbers must also print the
-\\ same, because Shen's = equates 8 and 8.0. str comes last, as most numbers
-\\ compared here differ. Two values with no literal syntax never reach =.
+\\ same, because Shen's = equates 8 and 8.0, and NaN, which is ordered against
+\\ nothing, is never shared. A dictionary indexes them by a key that is = only for
+\\ constants that are shared. A value with no literal syntax has no key.
 (define shen-jit.lower.constant
-  B X -> (let Constants (<-address B 4)
-              Count (<-address B 9)
-              I (shen-jit.lower.constant-index X Constants (- Count 1))
-           (if (= I -1)
-               (do (address-> B 4 [X | Constants]) (address-> B 9 (+ Count 1)) Count)
-               I)))
+  B X -> (let Key (shen-jit.lower.constant-key X)
+              Index (<-address B 10)
+              Found (if (cons? Key) (trap-error (shen.<-dict Index (hd Key)) (/. E -1)) -1)
+           (if (>= Found 0)
+               Found
+               (let Count (<-address B 9)
+                 (do (address-> B 4 [X | (<-address B 4)])
+                     (address-> B 9 (+ Count 1))
+                     (if (cons? Key) (shen.dict-> Index (hd Key) Count) skip)
+                     Count)))))
 
-(define shen-jit.lower.constant-index
-  _ [] I -> I
-  X [Y | _] I -> I where (shen-jit.lower.same-constant? X Y)
-  X [_ | Ys] I -> (shen-jit.lower.constant-index X Ys (- I 1)))
+\\ [K] for X's key K, or [] when X is never shared.
+(define shen-jit.lower.constant-key
+  X -> (if (or (< X 1) (>= X 1)) [[n (str X)]] []) where (number? X)
+  [X | Y] -> (shen-jit.lower.list-key [X | Y] [])
+  X -> [X] where (shen-jit.lower.literal? X)
+  _ -> [])
 
-(define shen-jit.lower.same-constant?
-  X Y -> (and (number? Y) (= X Y) (= (str X) (str Y))) where (number? X)
-  [X | Xs] [Y | Ys] -> (and (shen-jit.lower.same-constant? X Y) (shen-jit.lower.same-constant? Xs Ys))
-  X Y -> (and (not (number? Y)) (shen-jit.lower.literal? X) (= X Y)))
+(define shen-jit.lower.list-key
+  [X | Y] Keys -> (let K (shen-jit.lower.constant-key X)
+                    (if (cons? K) (shen-jit.lower.list-key Y [(hd K) | Keys]) []))
+  X Keys -> (let K (shen-jit.lower.constant-key X)
+              (if (cons? K) [[l (hd K) | Keys]] [])))
 
 (define shen-jit.lower.add-code
   B Code -> (let Codes (<-address B 5)

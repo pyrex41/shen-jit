@@ -398,8 +398,8 @@ the shifts. The others are calls to C.
   part. A test whose else is a jump to a label jumps there itself.
 - Constants are shared within a code object only when they are identical
   literal strings, symbols or Booleans, or numbers that are `=` and print
-  identically, so 8 and 8.0, and 0.0 and -0.0, stay distinct; lists when their
-  elements are shared by the same rule.
+  identically, so 8 and 8.0, and 0.0 and -0.0, stay distinct, and a NaN is
+  never shared; lists when their elements are shared by the same rule.
 - A value with no literal syntax inside code passed to `eval-kl` at runtime (a
   closure, absvector or stream) is a constant, as in Shen/Scheme, and is never
   shared with another.
