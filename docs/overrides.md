@@ -3,6 +3,8 @@
 Every kernel function that Shen/JIT replaces, in `src/port/shen-jit.kl`, and why. Stage 0 leaves out a kernel `defun` that the port also defines. Nothing
 is overridden just because another port does it: each entry was measured, and [development-log.md](development-log.md) has the numbers. Keep this current with each change.
 
+`make test-overrides` runs each of them beside the kernel's definition, from the KLambda, over generated values, except for `shen.read-evaluate-print`, `shen.toplevel-display-exception` and `shen.x.launcher.main`, which `tests/cli.sh` covers. Where they differ on purpose, `o.known` in `tests/overrides.shen` says how and why.
+
 ## Also overridden by Shen/Scheme
 
 The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with what Shen/JIT does.

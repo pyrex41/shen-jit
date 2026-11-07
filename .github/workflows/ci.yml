@@ -91,7 +91,7 @@ jobs:
         run: make ${{ matrix.static && 'STATIC=1' || '' }} release stlib
       - name: Tests
         run: |
-          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-ffi; do
+          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-ffi test-overrides; do
             echo "::group::$suite"
             make "KERNEL_DIR=$KERNEL_DIR" "$suite"
             echo "::endgroup::"

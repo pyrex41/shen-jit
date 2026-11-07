@@ -564,6 +564,9 @@ check prolog-variables "$dir/pvar.out" "Var2 [1 2 3] [[] [1]] [2 1] 9 7"
 # The port's unifiers against the kernel's, on random terms.
 "$SHEN" eval -l tests/prolog-unify.shen 2>&1 | grep -a 'differs\|passed,\|uncaught' > "$dir/unify.out"
 check prolog-unify "$dir/unify.out" "1495 passed, 0 failed"
+# Refusing a system function's name, in the kernel's words, which end the line.
+"$SHEN" eval -e '(trap-error (shen.record-and-evaluate [defun hd [x] x]) (/. E (pr (cn "[" (cn (error-to-string E) "]")))))' > "$dir/refused.out" 2>&1
+check refused-name "$dir/refused.out" "[hd is not a legitimate function name"
 # From deep in the stack and inside a handler: those frames are not saved.
 cat > "$dir/deep.shen" <<EOF
 (define deep.main -> (output "deep ok~%"))

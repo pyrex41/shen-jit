@@ -437,7 +437,8 @@ shen.shendef->kldef-h, with the definition remembered:"
         (and (cons? (tl (tl (tl Kl)))) (= () (tl (tl (tl (tl Kl))))))))))
       (let F (hd (tl Kl))
         (do (if (shen.sysfunc? F)
-                (simple-error (shen.app F " is not a legitimate function name " shen.a))
+                (simple-error (shen.app F " is not a legitimate function name
+" shen.a))
                 shen.skip)
             (do (shen.store-arity F (length (hd (tl (tl Kl)))))
                 (do (shen.record-kl F Kl)

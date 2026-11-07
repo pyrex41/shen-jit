@@ -793,7 +793,7 @@ These can be set on the command line, or in a file `local.mk`, which git ignores
 | `BOOTSTRAP` | `.deps/shen-jit/shen-jit` | The Shen that makes the generated files |
 | `SHEN_SCHEME` | `.deps/shen-scheme/bin/shen-scheme` | Shen/Scheme, for `make bench` and `make bench-independent` |
 | `KERNEL_KL` | `.deps/kernel/klambda` | The kernel's KLambda files |
-| `KERNEL_DIR` | `.deps/kernel` | The kernel, for `make test-kernel`, `make test-thorn` and `make bench-independent` |
+| `KERNEL_DIR` | `.deps/kernel` | The kernel, for `make test-kernel`, `make test-thorn`, `make test-overrides` and `make bench-independent` |
 | `BENCH_DIR` | `.deps/shen-scheme-src` | Shen/Scheme's sources, for `make bench` |
 | `STLIB_DIR` | none | The standard library's sources, for `make bench-independent`, which leaves that workload out without them |
 
@@ -803,7 +803,7 @@ its sources.
 The fast tier takes about 20 s, and catches nearly everything:
 
 ```sh
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-ffi
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-ffi test-overrides
 ```
 
 | Target | What it does |
@@ -816,6 +816,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
+| `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
@@ -834,11 +835,11 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make dist` | Writes a source tarball, `build/shen-jit-VERSION.tar.gz`, with this guide rendered, once the generated files match |
 
 To run the test suites from a source tarball, point `KERNEL_DIR` at a directory with the kernel's `tests` and
-`extensions`:
+`extensions`, and its `klambda` for `make test-overrides`:
 
 ```sh
 make stlib
-make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-ffi
+make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-ffi test-overrides
 ```
 
 On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that

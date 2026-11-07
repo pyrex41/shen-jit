@@ -56,8 +56,10 @@ A commit message says what changed and what it measured.
 Run the fast tier after every change; it takes about 20 s and catches nearly everything:
 
 ```bash
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-ffi
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-ffi test-overrides
 ```
+
+`make test-overrides` (a second) runs each kernel function that the port replaces beside the kernel's own definition, taken from the KLambda, over generated values, as compiled and through C. They must agree exactly: 1 and 1.0 differ, and a value and an error, but not the text of two errors. What differs on purpose is listed in `o.known` in `tests/overrides.shen`, with its reason, as narrowly as it can be. A difference that no longer shows fails, and so does a new override that the test does not name, so a new one joins it there or `o.left-out`.
 
 A change that alters the generated files (the lowerer, the port, or the lowered test programs
 `tests/bench/programs.kl` and `tests/kl/ops.kl`) updates `generated.sha256` in the same commit, with `make

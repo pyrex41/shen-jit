@@ -28,6 +28,7 @@ All notable changes to this project are documented in this file. The format is b
   partial data on failure, and `read-byte` reports failed file reads.
 - Loading code with more than 255 parameters or call arguments, or a capture index above 255, reports which limit
   was exceeded. Reported by @pyrex41 in [#18](https://github.com/tizoc/shen-jit/pull/18).
+- The error for defining a function with a system function's name ends its line, as the kernel's does.
 
 ## [0.4] - 2026-11-06
 
