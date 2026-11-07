@@ -355,6 +355,13 @@
                                (shen-jit.lower.norm Scope B) (shen-jit.lower.norm Scope E))
       where (and (not (element? shen.bind! Scope)) (not (element? freeze Scope))
                  (shen-jit.sealed? shen.bind!))
+  \\ ! then (when false), THORN's cut-fail: shen.cut's continuation fails, so
+  \\ it locks L if L is unlocked and returns false, with no closure.
+  Scope [shen.cut B L K [freeze [when false B2 L2 K2 C]]]
+  -> (shen-jit.lower.norm Scope [if [shen.unlocked? L] [shen.lock K L] false])
+      where (and (empty? (intersection [shen.cut when freeze if] Scope))
+                 (shen-jit.sealed? shen.cut) (shen-jit.sealed? when)
+                 (empty? (difference [B L K B2 L2 K2 C] Scope)))
   Scope [if C X Y] -> [if (shen-jit.lower.norm Scope C) (shen-jit.lower.norm Scope X)
                           (shen-jit.lower.norm Scope Y)]
   Scope [and X Y] -> [and (shen-jit.lower.norm Scope X) (shen-jit.lower.norm Scope Y)]
