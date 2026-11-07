@@ -2684,9 +2684,10 @@ static void emit_prim(Emit *e, const uint32_t *p)
         break;
     case P_DEREF: {
         /* A value that is no variable is the result, and so is a variable
-           with no binding, or what it is bound to. Anything else takes the
-           slow path: a chain of variables, which is rare, or an error. */
+           with no binding, or what the chain of variables from it ends in.
+           Anything else takes the slow path, which raises. */
         sljit_emit_op1(c, SLJIT_MOV, R0, OPND(e, arg[0]));
+        struct sljit_label *next = sljit_emit_label(c);
         sljit_emit_op2(c, SLJIT_AND, R1, R0, IMM(0xFF));
         struct sljit_jump *plain = sljit_emit_cmp(c, SLJIT_NOT_EQUAL, R1, IMM(PVAR_TAG));
         sljit_emit_op1(c, SLJIT_MOV, R1, OPND(e, arg[1]));
@@ -2701,8 +2702,8 @@ static void emit_prim(Emit *e, const uint32_t *p)
         sljit_emit_op1(c, SLJIT_MOV, R1, SLJIT_MEM2(SLJIT_R1, SLJIT_R3), 3);
         struct sljit_jump *unbound = sljit_emit_cmp(c, SLJIT_EQUAL, R1, OPND(e, arg[2]));
         sljit_emit_op2(c, SLJIT_AND, R2, R1, IMM(0xFF));
-        slow->from[3] = sljit_emit_cmp(c, SLJIT_EQUAL, R2, IMM(PVAR_TAG));
         sljit_emit_op1(c, SLJIT_MOV, R0, R1);
+        sljit_set_label(sljit_emit_cmp(c, SLJIT_EQUAL, R2, IMM(PVAR_TAG)), next);
         struct sljit_label *done = sljit_emit_label(c);
         sljit_set_label(plain, done);
         sljit_set_label(unbound, done);

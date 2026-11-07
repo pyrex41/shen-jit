@@ -688,6 +688,8 @@ all that Shen/Scheme and the earlier prototype replace.
 
 ### Prolog
 
+- **`shen-jit.deref` follows a chain inline** (2026-11-07, A/B against the build before). Past one step it called C, which THORN `ec` did 1.08 million times a run. Three lines more. Ryzen 5 5600X cycles, median of 9: `ec` 0.970, L 0.989, schubert 1.004, set 1.003, kernel suite 1.000, where each run's spread is 1% to 3%. Apple M3 Max, 11 rounds: `ec` 0.98, L 0.993 to 0.997, schubert and set about 1.00.
+
 Prolog `tak` is not evidence for runtime changes: it needlessly allocates big vectors, and a kernel hook could fix
 that. Its readings decided nothing below.
 
@@ -1322,6 +1324,26 @@ Never run until now: every "Sealed / Scheme" above is against its normal mode. `
 - **`--seal` made `bytecode VM` slower on the M3, and not on x86-64.** Alone, 10^6 runs at depth 9, best of 7: M3 open 0.552 to 0.566 s and sealed 0.585 to 0.594, at each of 6 shifts by unrelated definitions; Ryzen 5 5600X VM open 0.852 to 0.861 and sealed 0.828 to 0.842. It helps `compile pipeline` on the M3, 68 to 62 ms at depth 5.
   - **What it was not.** The sealed bytecode is the open one less its guards, and in native code the same sequences, with fewer jumps. Self time by function is the same, and sealing `vm.shen` alone gives all of it, so it is in `exec`. 0 to 12 nops before the loop's aligned body, which run only on entry, move neither mode much.
   - **What moved it.** A taken jump added before each `cons` and each `+`, `-` and `*`, the jumps open code has between its inlined bodies, took sealed from about 0.590 to 0.572 and open from about 0.555 to 0.581. That pointed at straight-line code reloading slots it stored a few instructions before, and registers for those removed the gap: see "Two more registers" under Registers and caching.
+
+### Hardware counters on bare metal (2026-11-07, Ryzen 5 5600X, against Shen/Scheme 0.54)
+
+The VM has no counters, so this ran `perf` from a Linux booted from USB, pinned to one core, with Shen/JIT's static build from CI. Per run, median of 3, a nearly empty run subtracted, open:
+
+| | `bytecode VM` depth 9, Shen/JIT | Shen/Scheme | `compile pipeline` depth 7, Shen/JIT | Shen/Scheme |
+| --- | ---: | ---: | ---: | ---: |
+| Cycles | 3,443 | 4,176 | 67,545 | 66,255 |
+| Instructions | 13,034 | 15,263 | 257,341 | 241,063 |
+| IPC | 3.79 | 3.66 | 3.81 | 3.64 |
+| Loads | 3,611 | 3,812 | 63,426 | 54,027 |
+| Stores | 2,144 | 1,086 | 35,962 | 19,542 |
+| Branch misses | 6.3 | 8.9 | 150 | 141 |
+
+- **The lower IPC measured in the VM does not hold here:** Shen/JIT's is the higher on both. Mispredicted returns and memory-order flushes, the candidates that reading left, are out: returns almost never mispredict, and store-to-load retries are about 2% of cycles on both. An earlier callgrind count of 334,368 instructions for Shen/Scheme's pipeline run remains unexplained; this count is the one to use.
+- **The pipeline's gap, 1.02 where Shen/Scheme's own runs vary by 4.5%, is more work and not stalls:** 7% more instructions, 17% more loads, 84% more stores.
+- **Real programs show no such gap.** Cycles over Shen/Scheme's, whole process, median of 5, with test results and inference counts the same: kernel suite 0.25, extension tests 0.14, startup 0.03, THORN set 0.19, L 0.36, schubert 0.30, ec 0.44. These include loading and compiling, so they don't show THORN's search alone.
+- **Dead stores: not tried, for that reason.** The stores above are the one lead left on the two rows, but they are synthetic, and removing stores risks the collector. How many are dead was not measured.
+- **Where the time goes in those programs,** Shen/JIT with symbols. First-call compilation, by the cycle counter: kernel suite 12.2%, THORN set 7.9%, schubert 6.5%, L 5.4%, ec 3.9%, about 20 microseconds a code object. Installing definitions 0.6% to 3.4%. Loading THORN alone is 24% compilation. The IPC is 2.3 to 2.8, against 3.8 on the two rows, with 1.7 to 4.2 branch misses and 8 to 27 instruction-cache misses per 1,000 instructions and 8% to 17% of cycles in frontend stalls. Samples spread thin: the top function is at most 11% of `ec` (`shen-jit.occurs-in?`) and 19% of L (THORN's `prv`), and samples of cache misses and branch misses follow those of cycles, so they name no hot spot.
+- **Not tried: keeping native code in images,** which would remove some of that compilation in short runs. It would make images position-dependent, for at most 4% to 12%.
 
 ### x86-64 Linux
 

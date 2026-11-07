@@ -133,8 +133,7 @@ plus:
   compares it by identity. All three are inline, and `shen-jit.pvar?` fuses with
   a branch like the other type tests. An offset is a fixnum from 0 to 2^56 - 1.
   A variable is not an absvector. `shen-jit.deref` (arity 3) gives what a value is
-  bound to in a vector of bindings, given what marks no binding: one step is inline,
-  and a longer chain, which is rare, goes through C. The port's `shen.lazyderef` uses
+  bound to in a vector of bindings, given what marks no binding, along a chain of variables, inline. The port's `shen.lazyderef` uses
   it. `shen-jit.same?` (arity 2) tells whether two values are one and the same. The port's `shen.make-prolog-variable`, `shen.pvar?`,
   `shen.lazyderef`, `shen.deref`, `shen.bindv` and `shen.unwind` use them.
 - `shen-jit.thread`: arity 1, runs a procedure of no arguments in a new thread

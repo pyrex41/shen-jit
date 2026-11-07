@@ -33,7 +33,7 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 
 | Function | Why |
 | --- | --- |
-| `shen.lazyderef` | `shen-jit.deref`, inline for the step that nearly every variable needs; a longer chain goes through C |
+| `shen.lazyderef` | `shen-jit.deref`, inline along a chain of variables, of which nearly every one is a single step |
 | `shen.lzy=`, `shen.lzy=!` | A unifier that keeps a trail of the variables it bound, with no closures, and no `=` on two lists in `shen.lzy=!`. `tests/prolog-unify.shen` checks them against the kernel's |
 | `<-vector` | The kernel's body is over the inliner's limit of 15 nodes. Split into `<-vector` and `shen-jit.vector-element`, both inline, so a failing `<-address` happens in the caller, where a quiet handler catches it with a jump. Same checks, order and messages |
 | `shen.misc?` | The reader asks it about every byte of a symbol that is not a lowercase letter; the kernel's is an `element?` over 19 codes. The same codes as ranges, with non-numbers false as before |
