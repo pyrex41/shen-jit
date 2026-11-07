@@ -28,7 +28,7 @@ executables, the optional libraries and this guide: `shen-jit`, `shen-jit-stlib`
 On Linux, take a dynamic build unless your system is too old for it or has a different C library: those are
 built against an old glibc so that they run on newer ones. A static build runs anywhere, but cannot
 [call C](#calling-c). The executable is the whole installation, so copy it anywhere, such as a directory on your
-`PATH`.
+`PATH`, unless you use the libraries in `lib/`, which you then name by their path in the archive or source tree.
 
 ```sh
 tar xzf shen-jit-VERSION-linux-x86_64.tar.gz
@@ -53,8 +53,8 @@ make stlib                        # build/shen-jit-stlib
 make install PREFIX=/usr/local    # copies build/shen-jit to PREFIX/bin
 ```
 
-`make release` makes the same executable without the runtime's symbols and debug information: 0.98 MB instead of
-1.02 on macOS, and 0.97 MB instead of 2.14 on Linux, where gcc's debug information takes 1.1 MB. `make STATIC=1`
+`make release` makes the same executable without the runtime's symbols and debug information, which take about 5% of
+it on macOS, and over half on Linux, with gcc's. `make STATIC=1`
 links statically, for an executable that runs anywhere and cannot load libraries.
 
 The JIT maps memory that is writable and executable, so a system that forbids that will not run it.
@@ -130,6 +130,8 @@ The commands come from the kernel's launcher (`shen-jit --help`):
 | `repl` | The interactive REPL, and the default |
 | `script FILE [ARGS]` | Runs FILE, with `*argv*` set to `[FILE \| ARGS]` |
 | `eval ARGS` | Evaluates, from left to right: `-e EXPR`, `-l FILE`, `-s KEY VALUE`. `-q` silences output, and `-r` starts the REPL afterwards |
+
+An error that nothing catches, or an unknown argument, ends the process with status 1.
 
 Options for Shen/JIT itself go before the command:
 
@@ -294,8 +296,8 @@ waits or runs beside the main program, and no speed-up from more cores.
 
 ### Sealing
 
-Kernel and port functions are sealed: calls to them are direct, and redefining one raises
-`F is sealed and cannot be redefined`. Your definitions are open: you can redefine them at any time, and their
+Kernel and port functions are sealed: calls to them are direct, and redefining one raises an error:
+`F is sealed and cannot be redefined`, or for the names the kernel exports, `F is a system function`. Your definitions are open: you can redefine them at any time, and their
 callers see the new definition.
 
 With `--seal`, `SHEN_JIT_SEAL=1` or `(shen-jit.seal +)`, new definitions are sealed too, so calls to them are
@@ -713,6 +715,7 @@ shen-jit: uncaught error: hd: 1 is not a pair
 | --- | --- |
 | `(shen-jit.backtrace)` | The names of the active functions, innermost first |
 | `(shen-jit.code F)` | The bytecode of F, a function defined after startup |
+| `(shen-jit.collect)` | Collects now |
 | `(shen-jit.exit N)` | Ends the process with exit status N |
 
 ```repl
@@ -720,7 +723,7 @@ shen-jit: uncaught error: hd: 1 is not a pair
 (fn twice)
 
 (1-) (shen-jit.code twice)
-[defun twice [code twice 1 4 [] [[prim 3 + 2 2] [return 3]] [] [[V33] [+ V33 V33]]]]
+[defun twice [code twice 1 4 [] [[prim 3 + 2 2] [return 3]] [] [[V8] [+ V8 V8]]]]
 ```
 
 The kernel's `track`, `spy` and `step` work as in other ports. For where the time goes, `SHEN_JIT_PROFILE=1` prints a
@@ -738,14 +741,17 @@ flat profile at exit, and `SHEN_JIT_STATS=1` prints the collector's work and the
 | `SHEN_JIT_STATS=1` | Prints collection statistics, the live heap and its roots, and the native code compiled and freed, at exit |
 | `SHEN_JIT_PERF_MAP=1` | Writes `/tmp/perf-PID.map`, so external profilers can name compiled code |
 | `SHEN_JIT_GC_STRESS=N` | Collects after every N words allocated and overwrites the old space, for testing |
+| `SHEN_JIT_SLOW_PRIMS=1` | Sends every primitive to C, for testing |
+
+`SHEN_JIT_PROFILE`, `SHEN_JIT_STATS`, `SHEN_JIT_PERF_MAP` and `SHEN_JIT_SLOW_PRIMS` are on when set to anything, even 0.
 
 ### Differences from Shen/Scheme
 
 - **No stlib in the default image.** Only the kernel and the extensions are there: see
   [The standard library](#the-standard-library).
 - **Fixnums only.** Integers are 62-bit, and a result outside that range raises `integer overflow`.
-- **Sealing.** Kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
-- **Numbers compare by value.** `(= 8 8.0)` is true, and `hash` gives 8 and 8.0 the same value.
+- **Sealing.** Internal kernel functions cannot be redefined, where Shen/Scheme accepts such definitions.
+- **Numbers hash by value.** A real and an integer that are `=` have the same `hash`, where Shen/Scheme's tells them apart.
 - **Threads run one at a time,** where Shen/Scheme's run in parallel.
 - **On Windows,** a few things differ: see [On Windows](#on-windows).
 
@@ -785,7 +791,7 @@ These can be set on the command line, or in a file `local.mk`, which git ignores
 | `BOOTSTRAP` | `.deps/shen-jit/shen-jit` | The Shen that makes the generated files |
 | `SHEN_SCHEME` | `.deps/shen-scheme/bin/shen-scheme` | Shen/Scheme, for `make bench` and `make bench-independent` |
 | `KERNEL_KL` | `.deps/kernel/klambda` | The kernel's KLambda files |
-| `KERNEL_DIR` | `.deps/kernel` | The kernel, for `make test-kernel` |
+| `KERNEL_DIR` | `.deps/kernel` | The kernel, for `make test-kernel`, `make test-thorn` and `make bench-independent` |
 | `BENCH_DIR` | `.deps/shen-scheme-src` | Shen/Scheme's sources, for `make bench` |
 | `STLIB_DIR` | none | The standard library's sources, for `make bench-independent`, which leaves that workload out without them |
 
@@ -828,7 +834,8 @@ To run the test suites from a source tarball, point `KERNEL_DIR` at a directory 
 `extensions`:
 
 ```sh
-make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel
+make stlib
+make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-ffi
 ```
 
 On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that

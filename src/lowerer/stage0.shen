@@ -8,7 +8,7 @@
 \\
 \\   HOST script src/lowerer/stage0.shen [KLAMBDA-DIR [OUT-DIR [FILE ...]]]
 \\
-\\ The defaults are .deps/kernel/klambda/, build/stage0/ and the 23 kernel
+\\ The defaults are .deps/kernel/klambda/, build/stage0/ and the 22 kernel
 \\ files; OUT-DIR must exist. FILE names omit the .kl extension.
 \\
 \\ Output syntax, for a simple reader: lists in parentheses, separated by

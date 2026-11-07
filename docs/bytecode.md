@@ -3,7 +3,7 @@
 The lowerer ([src/lowerer/lower.shen](../src/lowerer/lower.shen)), written in Shen, turns
 KLambda into the symbolic instructions
 below. They are plain Shen lists, so the same form serves as the stage 0 file
-(printed as text) and as the value `eval-kl` passes to the `install` primitive
+(printed as text) and as the value `eval-kl` passes to the `shen-jit.install` primitive
 at runtime. C encodes them; the lowerer never deals with numeric opcodes, so no
 encoder needs to be generated for it.
 
@@ -11,8 +11,7 @@ C encodes each instruction as 32-bit words: the opcode, then its operands
 (`ops.h`). A code object keeps them packed (`bytecode_pack`): each word
 rotated left by one bit, so that the constant-operand flag (bit 31) becomes
 bit 0, then written as a variable-length integer, seven bits per byte. Nearly
-every word takes one byte, which makes the kernel's bytecode 3.9 times
-smaller (699 KB to 182 KB). The JIT unpacks a function's words when it
+every word takes one byte. The JIT unpacks a function's words when it
 compiles it, which is the only time they are read.
 
 ## Frames
@@ -60,7 +59,7 @@ such as an unchanged parameter, costs nothing.
   body, referred to by index.
 - `Inline`: for a `defun`, `(Params Body)` when the definition can be inlined
   where it is called sealed (see the lowering rules), and `()` otherwise.
-  Nested code objects leave it out.
+  Other code objects leave it out.
 
 A stage 0 file is a sequence of `(defun Name Code)` forms, one per line, in
 ASCII. Lists use parentheses; strings escape `"` and `\` with a backslash and
@@ -86,7 +85,7 @@ Boolean) as an immediate, and reads any other from its constant cell.
 | `(prim D Op O1 ... On)` | D := primitive Op (a KLambda primitive name) applied to O1..On. N must equal Op's arity. |
 | `(label L)` | Marks L. |
 | `(jump L)` | Continue at L. |
-| `(jump-if-false O L)` | If O is `false`, continue at L; if `true`, fall through; otherwise raise "expected a boolean". |
+| `(jump-if-false O L)` | If O is `false`, continue at L; if `true`, fall through; otherwise raise "X is not a boolean". |
 | `(call D A F N)` | Open named call: the callee is F's function binding, the arguments are in A+2..A+1+N, the result goes to D. |
 | `(call-sealed D A F N)` | As `call`, but F is a stage 0 definition and the target is fixed when the code is installed. |
 | `(call-value D A N)` | Dynamic call: the callee is already in A+1. N is 0 or 1, or more after `jump-unless-entry`. |
@@ -146,7 +145,7 @@ plus:
   no instruction is new. `shen-jit.pointer?`, `shen-jit.pointer-kind`, `shen-jit.pointer-address`,
   `shen-jit.pointer->string`, `shen-jit.pointer-kill` (arity 1), `shen-jit.bytes->pointer`, `shen-jit.pointer->bytes` (arity 3)
   handle the pointers such functions pass around, and `shen-jit.errno`, `shen-jit.c-errno` (arity 0) what
-  the last one left. `shen-jit.pointer-read-only` (arity 1) marks one against stores. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
+  the last one left. `shen-jit.pointer-sized` (arity 2) states a length, `shen-jit.pointer!` (arity 3) stores an address, and `shen-jit.pointer-read-only` (arity 1) marks one against stores. `shen-jit.pointer-guard` (arity 2), `shen-jit.pointer-owner` (arity 1) and `shen-jit.pointers-dead` (arity 0)
   tell Shen when a pointer has died, and `shen-jit.collect` (arity 0) collects. [ffi.md](ffi.md) has their use.
 - `shen-jit.integer?`: arity 1, the kernel's `integer?` as a primitive: true of a fixnum and of a
   real with no fraction.
@@ -176,8 +175,14 @@ plus:
 
 - `shen-jit.bytes` (arity 1), `shen-jit.bytes?` (1), `shen-jit.bytes-length` (1),
   `shen-jit.u8`, `shen-jit.u16`, `shen-jit.u32` (2), `shen-jit.u8!`, `shen-jit.u16!`,
-  `shen-jit.u32!` (3), `shen-jit.string->bytes` (1), `shen-jit.bytes->string` (3) and
+  `shen-jit.u32!` (3), `shen-jit.s32`, `shen-jit.s64`, `shen-jit.f32`, `shen-jit.f64` (2),
+  `shen-jit.s32!`, `shen-jit.s64!`, `shen-jit.f32!`, `shen-jit.f64!` (3),
+  `shen-jit.string->bytes` (1), `shen-jit.bytes->string` (3) and
   `shen-jit.copy-bytes` (5): byte buffers, below.
+- `shen-jit.read-file`: arity 2, a path and whether to give a list of bytes, else a string.
+  The port's file reading uses it.
+- `shen-jit.append`: arity 2, the port's `append` for a non-empty first list.
+- `shen-jit.arity?` and `shen-jit.inlined?`: arity 2, the tests in the rules below.
 - `shen-jit.bit-and`, `shen-jit.bit-or`, `shen-jit.bit-xor`, `shen-jit.shift-left`,
   `shen-jit.shift-right`, `shen-jit.rotate32` (2), `shen-jit.bit-not`,
   `shen-jit.bswap32`, `shen-jit.popcount`, `shen-jit.clz` and `shen-jit.ctz` (1): bit
@@ -207,7 +212,7 @@ is in memory, so it takes no floating point. `f64!` takes a real inline, and lea
 pointer differs in its header, which a store tests whole, so no other access pays for it.
 
 Code that loops, calls nothing and has no handlers, and reads or stores through a parameter it never changes, works out that memory's base and lengths once, on the way in, for any code,
-written by hand or not, however many loops it has. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
+written by hand or not, however many loops it has, for four parameters at most. They hold until C runs, as only C can collect or kill a pointer, and they are worked out again each time it has. What is not memory gets length 0, so that its first access raises as it would have, and a read-only pointer gets 0 for stores. Memory reached at one width, and only at word indices, keeps limits in place of lengths, the first index without room for that width, so that an access is one comparison, and what is in registers is used where it is.
 
 | Form | Result |
 | --- | --- |
@@ -237,8 +242,8 @@ one with no fraction.
 | `(shen-jit.bswap32 X)` | X, from 0 to 2^32 - 1, with its four bytes reversed. |
 | `(shen-jit.popcount X)`, `clz`, `ctz` | The bits set, and the leading and trailing zeros, of the 62 bits; `clz` and `ctz` of 0 are 62. |
 
-The JIT inlines the buffers' reads, stores and length, and `bit-and`, `bit-or`, `bit-xor`,
-`bit-not` and the shifts. The others are calls to C.
+The JIT inlines the accesses named above, and `bit-and`, `bit-or`, `bit-xor`, `bit-not` and
+the shifts. The others are calls to C.
 
 ## Lowering rules
 
@@ -262,7 +267,7 @@ The JIT inlines the buffers' reads, stores and length, and `bit-and`, `bit-or`, 
   `(thaw G)`, and binds no variable of E: the thaw is replaced by E and the
   `let` dropped. E then runs exactly when the thaw would have, with the same
   values, since KLambda variables are immutable.
-- `(is X Y B L K (freeze E))` and `is!`, with L and K variables or constants: unification,
+- `(is X Y B L K (freeze E))` and `is!`, with L and K variables, numbers or `[]`: unification,
   which returns the variables it bound or false, then E, and undoing them if E gives
   false. No closure is made. E is then never a tail call.
 - `(shen.bind! X Y B (freeze E))`: the binding, E where the kernel's thaws the closure,
@@ -325,7 +330,7 @@ The JIT inlines the buffers' reads, stores and length, and `bit-and`, `bit-or`, 
 - A call whose head is a fixed name lowers to `prim`, or for special forms, to
   the rules above. Fixed names are the primitives, the special forms (`if`,
   `and`, `or`, `cond`, `let`, `lambda`, `defun`, `freeze`, `type`,
-  `trap-error`) and `do` and `thaw`. A fixed name used with the wrong number of
+  `trap-error`) and `do`, `thaw` and `protect`. A fixed name used with the wrong number of
   arguments, or a malformed `cond` clause, is a lowering error.
 - Any other symbol head is a named call: `call-sealed` when the name is
   sealed, `call` otherwise.
@@ -337,8 +342,8 @@ The JIT inlines the buffers' reads, stores and length, and `bit-and`, `bit-or`, 
     holds the symbol until the first call binds it.
 - A sealed call with as many arguments as the callee's parameters is inlined
   when the callee's code carries an `Inline` body. A body qualifies when it
-  is at most 15 nodes, has no handlers, does not call its own name and has
-  no real literals. A closure it makes becomes one of the caller's own
+  is at most 15 nodes, has no handlers and no `eval-kl`, does not call its own
+  name and has no real literals. A closure it makes becomes one of the caller's own
   lambdas, capturing the parameter's variable. An integer argument replaces its parameter
   in the body, so that `(vector 1)` lowers to `(absvector 2)` and a constant
   length. The other arguments are bound to fresh variables, then the
@@ -351,12 +356,13 @@ The JIT inlines the buffers' reads, stores and length, and `bit-and`, `bit-or`, 
 - A call to an open F with such a body is inlined too, behind `(if
   (shen-jit.inlined? F Inline) Body (F X1 ... Xn))`, the arguments bound to
   fresh variables first. `shen-jit.inlined?` tests that F's definition is
-  still the code whose `Inline` is that very list: compiled code on arm64
+  still the code whose `Inline` is that very list: compiled code on arm64 and x86-64
   makes it a nop that a redefinition of F patches into a branch to the call,
   and elsewhere tests it each time.
 - `((fn F) X1 ... Xn)`, for a sealed F of arity n >= 1, is the named call
   `(F X1 ... Xn)`. F's lambda form would apply F to the same arguments, and F
   cannot be redefined.
+- A fixed name gets neither this rule nor the next: `(fn F)` is called and its result applied.
 - For an open F, which is how the kernel calls a function it did not know
   when compiling (one in another package, or defined later at the top
   level), the arguments go to fresh variables, then `(shen-jit.arity? F
@@ -408,7 +414,6 @@ verifies and the JIT may rely on:
 - Slots 0 and 1 are never written. A parameter slot is written only by a
   named tail call's arguments, and is not read afterwards except by that tail
   call.
-- A call's result slot is below its window.
 - Each nested code object is created by exactly one `closure` instruction.
 - Every slot is written on all paths before it is read, counting a call as
   overwriting every slot from its window up.
@@ -422,11 +427,9 @@ store a result that the code after it never reads. The lowerer's other habits, s
 as leaving parameters alone, are its own: code written by hand need not share them.
 
 Slot assignment is scope-based, so windows sit above every variable in scope
-and every pending temporary. Long nested `cons` chains therefore give large
-frames: `shen.initialise-environment` uses 830 slots, though the next largest
-kernel frame is 65 and most are 16 or fewer. Lowering the last operand directly
-into the destination would keep such chains at constant depth if frame size
-becomes a problem.
+and every pending temporary. A chain of `cons` with constant heads takes one slot
+(see the lowering rules), and most frames are 16 slots or fewer. The lowerer also
+keeps a call's result slot below its window, which is not checked.
 
 ## Native code written by hand
 
@@ -483,7 +486,7 @@ Code a program generates is data, not forms:
   written by hand with slot numbers and any instruction of the table above. `(defun F
   Code)` publishes F and returns it; a code object returns a closure of it, with no
   name, so generating many procedures uses up no symbols.
-- `shen-jit.install`, which `eval-kl` uses, checks only operand shapes. Wrong code
+- `shen-jit.install`, which `eval-kl` uses, checks only operand shapes and ranges, windows, labels and how the code ends. Wrong code
   given to it can crash.
 
 The checker holds the rules the lowerer's output is checked against, in
@@ -530,7 +533,7 @@ A word expression W is a word register; an integer, or `(const K)`; a slot, whic
 `(rotate-right W N)`, whose counts are taken modulo 64; `(u8 M I)`, `(u16 M I)`, `(u32 M I)`, `(s32 M I)`, `(u64 M I)`; or `(truncate E)`, toward zero, of a real expression, which is the machine's own beyond 64 bits.
 Arithmetic wraps and raises nothing. A literal has to fit a fixnum, so a wider constant is built, once, before the loop.
 
-An index I that is an integer or mentions a word register is a word expression, with no tag to check and only the bound; any other is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, and more than the registers there are is refused.
+The index of `u8` to `u64` and their stores is a word expression. So is that of `f64` and `f64!` when it is an integer or mentions a word register, with no tag to check and only the bound; any other is integer arithmetic through `prim`, as `(+ I 8)` on slots. A word index is checked as an unsigned number, so a negative one fails the bound. Intermediate values take registers too, and more than the registers there are is refused.
 
 - **Division is IEEE's:** dividing by zero gives an infinity or a NaN, where `/` raises.
 - **A register or slot keeps its value round a loop,** and what comes before a loop's head runs once. To leave a loop, jump

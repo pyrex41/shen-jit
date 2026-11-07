@@ -1,9 +1,8 @@
 # Shen/JIT semantics
 
-The behaviour Shen/JIT implements. The executable [contract examples](../contract/examples.shen) check every rule below that has an observable
-result, and their output under Shen/Scheme is recorded in [contract/shen-scheme-0.54.txt](../contract/shen-scheme-0.54.txt).
+The behaviour Shen/JIT implements. The executable [contract examples](../contract/examples.shen) check the main rules below, and their output under Shen/Scheme is recorded in [contract/shen-scheme-0.54.txt](../contract/shen-scheme-0.54.txt).
 
-Where Shen/JIT deliberately differs from Shen/Scheme, the rule says so and the example is marked as a deviation. Shen/Scheme's behaviour was observed by
+Where Shen/JIT deliberately differs from Shen/Scheme, the rule says so, and where there is an example, it is marked as a deviation. Shen/Scheme's behaviour was observed by
 running KLambda through `eval-kl`, not inferred from its source.
 
 ## 1. Inputs
@@ -14,7 +13,7 @@ running KLambda through `eval-kl`, not inferred from its source.
 | Stage 0 host | The release of Shen/JIT that `tools/ci-deps.sh` names, or the release of Shen/Scheme it names, which make the same files |
 | SLJIT | Upstream commit `a0020dd49a21`: see `vendor/sljit/UPSTREAM.md` |
 
-`tools/ci-deps.sh` fetches the kernel and Shen/Scheme by hash, and `generated.sha256` holds the hashes of what they make.
+`tools/ci-deps.sh` fetches the kernel, the earlier release of Shen/JIT and Shen/Scheme by hash, and `generated.sha256` holds the hashes of what they make.
 
 ## 2. Values
 
@@ -124,8 +123,9 @@ bytes; source text and files pass through as UTF-8 bytes without decoding.
 - `(string->n S)`: the first byte; the empty string raises an error.
 - `(n->string N)`: a one-byte string for N from 0 to 255; anything else raises
   an error. *Deviation:* Shen/Scheme accepts any Unicode scalar value and
-  creates a one-unit string that cannot be written as a byte. The kernel calls
-  `n->string` only on bytes.
+  creates a one-unit string that cannot be written as a byte. The kernel otherwise
+  passes only bytes, but its reader passes the N of a `c#N;` escape, so `c#955;` in a
+  string is a reader error here: write such a character as its UTF-8 bytes.
 - `(str X)`: for strings, the text in double quotes; symbols, their name;
   Booleans, "true" or "false"; numbers, as above; the empty list, "()". Other
   values give a description such as `#<procedure>`; `str` never raises.
@@ -158,8 +158,9 @@ ends the process with the message `shen-jit: =: the term is cyclic or too large`
 So does a term that, below its first 256 levels of nesting, needs about 1 GB of
 comparisons waiting or 2^31 steps.
 
-`(hash X N)`, for a positive N, returns an integer from 0 to N inclusive, as the
-kernel's port performance guide states, and is consistent with `=`: numbers
+`(hash X N)`, for a positive N, returns an integer within the bound of 0 to N that the
+kernel's port performance guide states, in fact from 1 to N-1, or 1 when N is 1, and
+looks at a structure's first 256 values. It is consistent with `=`: numbers
 hash by mathematical value (8, 8.0 and -0.0/0.0 agree), strings by bytes,
 symbols by their stored name hash, pairs and absvectors by their elements, byte
 buffers as strings of the same bytes, and pointers by kind and address.
@@ -184,7 +185,7 @@ error; a non-symbol raises an error.
   outward. X is never in tail position.
 - Every primitive error is an ordinary catchable exception. Message wording is
   informative but not a compatibility requirement; the examples check only that
-  an error occurred, except for `simple-error` messages.
+  an error occurred, except for `simple-error` messages and the kernel's messages from `get`.
 - Messages name the offending value in Shen notation, cut after 60 bytes, as
   in `hd: 5 is not a pair`; arity errors name the function and both
   argument counts.
@@ -206,10 +207,13 @@ error; a non-symbol raises an error.
   and the kernel, stlib and extension KLambda contain no named call with
   the wrong argument count.
 - **Other applications** `(E A1 ... An)` evaluate E, which must be a procedure.
-  Closures are unary or nullary. Applying one to more arguments than it takes
-  applies the result to the rest, left to right; the lowerer emits this as
-  nested applications. Applying a closure to too few arguments, or applying
-  anything that is not a procedure, raises an error.
+  A unary closure applied to more arguments applies the result to the rest, left
+  to right, and a thunk takes no arguments, so applying one to any raises an error.
+  Applying a closure to too few arguments, or applying anything that is not a
+  procedure, raises an error.
+- **Order and tail calls:** arguments are evaluated left to right, after the
+  operator of an application. A call in tail position, and the last form of `do`,
+  uses no stack, including between different functions.
 - **Symbols are not procedures.** Applying a symbol raises an error, as in
   Shen/Scheme, where `(map f L)` with a bare function name fails; Shen code uses
   `(fn f)` or `(function f)`.
@@ -226,30 +230,24 @@ error; a non-symbol raises an error.
 - **Fixed names** are lowered directly and cannot be redefined: `defun` of one
   raises an error. They are the 39 KLambda primitives (`input+` is not one; the port
   defines it), the special forms `if`, `and`, `or`, `cond`, `let`, `lambda`,
-  `defun`, `freeze`, `type` and `trap-error`, and the kernel functions `do` and
-  `thaw`. *Deviation:* Shen/Scheme accepts such a `defun` but its compiled
+  `defun`, `freeze`, `type` and `trap-error`, the kernel functions `do`, `thaw` and
+  `protect`, and the port's `shen-jit.*` primitives. A primitive or special form
+  with the wrong number of arguments is malformed: it raises when lowered, so a
+  `trap-error` in the same form does not catch it. *Deviation:* Shen/Scheme accepts such a `defun` but its compiled
   calls ignore it.
 - **Sealing:**
   the kernel, port code and the lowerer are sealed. Calls to them, from the
   kernel and from user code alike, are bound once, and a `defun` of one of
   their names raises "F is sealed and cannot be redefined". The extensions
-  stay open, since their tests reload their sources. `(shen-jit.seal +)`,
-  `--seal` or `SHEN_JIT_SEAL=1` also seal user definitions. *Deviation:*
-  Shen/Scheme accepts such a `defun`, as the paragraph below describes.
-- **Sealing (as first decided):** calls between definitions lowered at stage 0 (kernel,
-  stlib, overrides, port code and the lowerer) are sealed: they call fixed
-  targets with known arities. A later `defun` of one of those names, which only
-  raw `eval-kl` can do because the kernel rejects a Shen-level `define` of a
-  system function, changes the binding seen by open calls (user code,
-  `eval-kl` code and lambda forms) but not calls made inside the kernel. This is
-  the arrangement the kernel's port performance guide describes, and Shen/Scheme
-  behaves the same way for kernel-to-kernel calls: after an `eval-kl` `defun` of
-  `shen.misc?`, `shen.alpha?` still uses the original. Shen/Scheme's compiler is
-  in the same library as its kernel, so redefining `append` there leaves later
-  compilation working. Calls from its user code are bound when compiled: code
-  compiled before the `defun` keeps the original, and code compiled after it
-  sees the new definition. In Shen/JIT the lowerer and port code are lowered at
-  stage 0 and sealed with the kernel.
+  stay open, since their tests reload their sources, but for `shen.x.launcher.main`,
+  which the port replaces. `(shen-jit.seal +)`, `--seal` or `SHEN_JIT_SEAL=1` also
+  seal user definitions. *Deviation:* Shen/Scheme accepts such a `defun`. Its calls
+  within the kernel keep the original: after an `eval-kl` `defun` of `shen.misc?`,
+  `shen.alpha?` still uses it. Calls from its user code are bound when compiled, so
+  code compiled before the `defun` keeps the original. A Shen-level `define` of a
+  system function is rejected by the kernel in both.
+- **`defun`** is valid only as the whole form given to `eval-kl`. Nested, it raises
+  an error.
 
 ## 11. `eval-kl`
 
@@ -269,28 +267,30 @@ if it had been made then. *Deviation:* until then, reading the
 - `(open Path Direction)`: Path is a string, Direction is `in` or `out`. The file
   opened is `(cn (value *home-directory*) Path)`, resolved by the operating
   system. `out` creates or truncates. Failures raise errors.
-- `*home-directory*` is "" after stage 1, because stlib's initialization runs
-  `(cd "")`, so relative paths resolve against the process's working directory,
-  as in Shen/Scheme. Startup does not change it. This replaces the design
-  document's earlier step that set it from the host.
+- `*home-directory*` starts as "", so relative paths resolve against the process's
+  working directory, as in Shen/Scheme. Startup does not change it, and
+  `shen-jit.save-executable` saves it as "".
 - `(read-file-as-bytelist Path)` and `(read-file-as-string Path)` read the
   whole file in C, as Shen/Scheme's overrides do, with the path resolved and
   failures reported as for `open`. The kernel's read one byte at a time.
-- `(read-byte S)`: a byte from 0 to 255, or -1 at end of file.
+- `(read-byte S)`: a byte from 0 to 255, or -1 at end of file or on a read error. A
+  directory opens as an input stream, and on macOS reads as empty, and so do the
+  whole-file reads of one. *Deviation:* Shen/Scheme raises an error when reading it.
 - `(write-byte B S)`: B from 0 to 255; returns B. Output is buffered, so a failed write raises
   an error here only once the buffer fills, or else from `close`.
 - Reading from an output stream, writing to an input stream, or using a closed
   stream raises an error. `(close S)` returns the empty list, and raises an error if what was
   left to write could not be written; the stream is closed either way. Closing a closed stream
-  does nothing.
+  does nothing. A collection closes a file stream that nothing reaches, which writes what was
+  left but cannot report a failure.
 - The standard streams are `*stinput*`, `*stoutput*` and `*sterror*`. Output to
   `*stoutput*` is flushed before any read from `*stinput*` and at exit.
 - `(char-stream? S)` is false for every stream. `read-unit-string` and
   `write-string` raise "character streams are not supported", as in
   Shen/Scheme; the kernel only calls them for character streams.
 - `(get-time run)` returns CPU seconds and `(get-time unix)` wall-clock seconds
-  since the epoch, both as reals. Other arguments raise an error. Shen/Scheme
-  also accepts `real`; Shen/JIT does not.
+  since the epoch, both as reals. Other arguments raise an error. *Deviation:*
+  Shen/Scheme also accepts `real`.
 
 ## 13. Stage 1 order and extensions
 
@@ -298,8 +298,10 @@ Stage 1 runs, in order: install the stage 0 definitions; set `*os*`,
 `*language*`, `*implementation*`, `*release*`, `*port*` and `*porters*`; call
 `shen.initialise`; call `shen.x.features.initialise` with the feature list
 `[shen/shen-jit]`, then `shen.x.programmable-pattern-matching.initialise` and
-`shen.x.namespaces.initialise`; load the remaining port sources; call
-`stlib.initialise`; close every non-standard stream; write the image.
+`shen.x.namespaces.initialise`, and `shen-jit.initialise`, which registers the port's
+functions and defines `thread`; write the image, in which file streams are closed.
+`make stlib` loads the standard library later, into a running image, and calls
+`stlib.initialise` there.
 
 This follows Shen/Scheme's build. The factorise-defun, expand-dynamic and
 type-annotations extensions are not initialized. As built, what `define`
@@ -309,7 +311,8 @@ shows the definition as `define` produced it, and `shen.*factorise?*` stays
 false, as in Shen/Scheme. The command line is the
 kernel's launcher extension: `main` passes the process arguments to
 `shen.x.launcher.main`, which provides the `repl`, `script` and `eval` commands
-Shen/Scheme also uses, so Shen/JIT needs no command-line parser in C.
+Shen/Scheme also uses, so Shen/JIT needs none in C beyond `--seal` and `--save`, which
+come before those arguments.
 
 ## 14. Memory, stack and compilation failures
 
@@ -320,31 +323,31 @@ Shen/Scheme also uses, so Shen/JIT needs no command-line parser in C.
   cannot complete.
 - **The heap's size,** what a collection keeps and the room for new objects
   together, starts at 32 MiB and grows after a collection to five times what
-  is live, if that is more. It never shrinks in the first version.
+  is live, if that is more. It never shrinks.
 - **Large objects:** vectors, strings and byte buffers of 32K words or more are allocated
-  apart and never copied; collections mark them, scan them in place and
+  apart and copied only into an image; collections mark them, scan them in place and
   free the dead ones. They count as live data for that rule, and once
   toward `SHEN_JIT_MAX_HEAP`. An image holds them inside its heap.
 - **Guest stack.** It starts at 64K slots, filled with the cleared value, and
-  doubles on overflow up to a configurable maximum (default 1 GiB). Exceeding
+  doubles on overflow up to a maximum of 1 GiB. Exceeding
   the maximum raises a catchable "stack overflow" error. The stack never shrinks
   while guest code runs.
 - **Compilation.** If SLJIT cannot allocate executable memory or compilation
-  fails, the process terminates with a diagnostic; there is no fallback.
-  Debug builds abort on malformed bytecode.
+  fails, the process terminates with a diagnostic; there is no fallback. The
+  loader raises an error on code of the wrong shape.
 
 ## 15. Image format
 
 An image is a header followed by sections and a trailer, all little-endian:
 
 - **Header:** magic `SJHI`, format version, the executable's build identifier
-  (an image loads only into the build that wrote it), word size, heap size, and
-  the sizes of the root sections.
+  (an image loads only into the build that wrote it), word size, heap size, the
+  sizes of the root sections, the symbol count, the intern table's relative address,
+  and the primitive table's size and a checksum of its names, so an image cannot
+  load against a different primitive table.
 - **Heap:** the live heap after a final collection, with every pointer stored
   relative to the heap base and every raw native field stored as 0.
-- **Roots:** the global-cell and constant-slot arrays, with relative pointers;
-  the intern table; the primitive table size and a checksum of its names, so an
-  image cannot load against a different primitive table.
+- **Roots:** the global-cell and constant-slot arrays, with relative pointers.
 - **Trailer:** the image's length in bytes and the magic `SJHI-END`. A loader
   reads it from the end of the file, so an image can be appended to another
   file: the executable carries its image this way.

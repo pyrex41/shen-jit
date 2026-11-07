@@ -15,9 +15,8 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `vector` | native | the port's: `absvector` already fills with `(fail)` | Done |
 | `@p` | native | `shen-jit.absvector3`, inline | Done |
 | `variable?`, `symbol?` | native name analysis | C, by the kernel's rules for names | Done |
-| `shen.analyse-symbol?`, `shen.analyse-variable?` | native | the kernel's | Not needed: their only callers are `symbol?` and `variable?` |
+| `shen.analyse-symbol?` | native | the kernel's | Not needed: its only caller is `symbol?` |
 | `shen.pvar?` | native | `shen-jit.pvar?`, inline: a mask and a compare | Done |
-| `shen.make-prolog-variable`, `shen.deref`, `shen.bindv`, `shen.unwind` | a boxed variable | a variable is an immediate value holding its binding's offset, so these use `shen-jit.pvar` and `shen-jit.pvar-offset` | Done |
 | `integer?` | Chez `integer?` | a primitive, inline for fixnums | Done |
 | `not`, `boolean?` | native | the kernel's, small enough to inline | Not needed |
 | `shen.numbyte?`, `shen.byte->digit` | native | the kernel's `shen.digit?` and `shen.byte->digit`, small enough to inline | Not needed |
@@ -43,7 +42,8 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.+string?` | Behind string patterns: tests the type before comparing with `""`, where the kernel's compares first; the same answer for every value |
 | `fn` | One lookup, and it makes lambda forms when first asked for them |
 | `read-file` | Skips a `#!` line |
-| `shen.<-out`, `shen.hds=?` | Small enough to inline into the reader's 63 and 37 callers, and into user `defcc` code |
+| `shen.make-prolog-variable`, `shen.deref`, `shen.bindv`, `shen.unwind` | A variable is an immediate value holding its binding's offset, so these use `shen-jit.pvar` and `shen-jit.pvar-offset` |
+| `shen.<-out`, `shen.hds=?` | Small enough to inline into their callers across the kernel, 59 and 35 functions, and into user `defcc` code |
 | `shen.<shortnatters>`, `shen.<whitespaces>`, `shen.<digits>`, `shen.<alphanums>` | Loops over a run of bytes, where the kernel's rules call a rule and build a parse result per byte. Same results, including where a comment ends at a tab |
 | `append` | `shen-jit.append` copies the first list in C, in one pass straight into the free space, and keeps the copy by moving the heap pointer once the list proves proper; the empty list stays inline. Same error for a list that does not end in `[]` |
 | `shen.update-lambdatable` | Reading a definition made its lambda form at once, one compilation per definition. The port stores a placeholder holding the arity, and `fn` makes the form when first asked, so most are never made. `shen.*gensym*` still moves by the arity, so later gensyms are as before. `shen.lambda-entry` still makes them at once; it is rare. Reading the property directly shows the placeholder ([semantics.md](semantics.md), section 11) |
@@ -52,7 +52,8 @@ The functions that Shen/Scheme 0.54 replaces in its `src/overrides.shen`, with w
 | `shen.record-kl` | Puts a name without a `shen.source` property straight on `shen.*userdefs*`, instead of an `adjoin` over every definition |
 | `shen.shendef->kldef-h`, `shen.record-and-evaluate` | Evaluate what `define` produced factorised, keeping `ps` as written |
 | `shen.compute-integer`, `shen.compute-fraction-h`, `shen.compute-E` | Number reading as Shen/Scheme reads numbers: `8.0` reads as the integer 8, and literals beyond the fixnum range become the nearest real instead of overflowing ([semantics.md](semantics.md), section 3) |
-| `shen.read-evaluate-print`, `shen.x.launcher.main`, `shen-jit.repl-read` | Backtraces, Ctrl-C and the port's own options |
+| `shen.read-evaluate-print`, `shen-jit.repl-read` | Backtraces, and ending the process at end of input |
+| `shen.x.launcher.main` | Exit status 1 after an error or an unknown argument |
 
 ## Candidates found by profiling
 

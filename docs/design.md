@@ -39,8 +39,8 @@ with `shen-jit.lower.` changed to `stage0.lower.`. `tokl.shen` starts the compil
 
 1. Install every definition from stage 0. No guest code runs in this step.
 2. Set the host's globals: `*os*`, `*language*`, `*release*` and so on.
-3. Call `shen.initialise`, which sets the kernel's globals, then the selected extensions' initialisers.
-4. Close every stream but the standard ones, and write the image.
+3. Call `shen.initialise`, which sets the kernel's globals, then the selected extensions' initialisers, then the port's `shen-jit.initialise`.
+4. Write the image, in which file streams are recorded as closed.
 
 The build appends the image to the runtime to make `build/shen-jit`, a single file. The standard library
 stays out: `make stlib` loads the kernel's precompiled `stlib.kl` into a running image and writes a binary with
@@ -89,13 +89,14 @@ frame. Two invariants follow:
 - At a call, every caller slot at or above `A` is dead, except the window itself, which becomes the callee's.
 - Every slot live across a call lies below `A`.
 
-A tail call moves the new procedure and arguments into slots 1 to n+1, keeps the frame pointer and return
-address, and transfers with no host frames accumulating. The protected expression of `trap-error` is compiled
+A tail call puts the new procedure and arguments in slots 1 to n+1, the arguments of a named one computed there in
+place where they can be, keeps the frame pointer and return address, and transfers with no host frames accumulating. The protected expression of `trap-error` is compiled
 out of tail position, so a tail call never replaces a frame whose handler is active.
 
 Language arity is apart from the physical entry. A named call with the wrong argument count raises an error, and
-applying a closure to extra arguments is lowered as nested application, so there is no partial-application
-object.
+applying a closure to extra arguments is nested application, except that when they are all variables or constants, a
+closure whose code has `(entry N L)` takes all N in one call, as such code accepts two counts. There is no
+partial-application object.
 
 ### Native calling convention
 
@@ -103,6 +104,9 @@ One SLJIT context is shared by every compiled function and the C entry adapter. 
 frames: a return is an indirect jump through the frame's return address, and C is called only through
 `sljit_emit_icall`. SLJIT's own guest calls would put every non-tail call on the C stack, which rules out moving
 the stack and unwinding many frames without `longjmp`.
+
+S0 holds the frame pointer, S1 the VM, S2 CACHE and S3 the heap pointer, which is written back around any call to C
+that may allocate. S4 and up hold what the refinements below keep, and the argument count travels in R2.
 
 The callee checks the argument count, passed in a register. So uncompiled functions and foreign functions are just
 other entry addresses, and call sites need no checks of that kind.
@@ -116,11 +120,14 @@ call f (arguments already in slots A+2..A+n+1):
   jump to P's entry
 return label:  FP -= A; store the result in its destination slot
 entry:         if COUNT != n, jump to the arity stub
-               if FP + frame size > limit, jump to the stack-growth stub
+               if FP + frame size > limit, jump to the stack-growth path
 return:        result to the return register; jump through [FP]
 tail call:     load and check P; move P and the arguments into
                slots 1..n+1; COUNT = n; jump to P's entry
 ```
+
+A sealed call loads P from a constant slot of its own instead, with no test: it was bound at install or, for a
+definition not there yet, is bound once at its first call. A stage 0 definition is sealed, and with `--seal` a user's too.
 
 Some refinements are built on that:
 
@@ -128,31 +135,35 @@ Some refinements are built on that:
   its first branch starts with it cached. The slot, not the register, is the root, so whatever may collect
   reloads CACHE from the slot.
 - **A result read only from CACHE is not stored,** when nothing between it and its one reader could collect.
+- **Tests branch directly.** A Boolean primitive followed by a jump on its result branches on the comparison and stores
+  nothing, and after a `cons?` that falls through, `hd` and `tl` of that slot need no test. A run of conses, as a chain
+  with constant heads lowers to, checks room once and passes each pair on in CACHE.
 - **Leaves skip the stack check:** code that makes no call, with a frame of at most 64 words. Every check
   reserves 64 words beyond its own frame, and `jit_call` reserves as much, so a leaf's frame is always in checked space.
   Tail calls do not count against a leaf, except in code compiled once something needs interrupts seen, since
   functions that call each other in tail position loop, and only their entry checks see an interrupt.
-- **Loops keep their slots in registers.** Code that loops through a self tail call, makes no call but tail calls and has no
+- **Loops keep their slots in registers.** Code that loops through a self tail call, makes no call but named tail calls and has no
   handlers keeps slots 2 and up in registers when they fit: six on arm64 and four on x86-64. Those are saved registers, except for two
   of the four on x86-64 outside Windows, which are scratch registers, unless code written by hand uses them, and wait in the frame around any call to C. Code written by hand
   with more raw values than scratch registers gives them the saved ones instead ([bytecode.md](bytecode.md), "Real and word registers"). It stores them back before any call
   into C that may collect or raise, and loads them again after a collection, so the frame's words are always
   valid and the collector never sees a stale pointer.
 - **Two more registers hold results read again soon.** Code with no slots in registers and no raw values keeps up to two
-  slots besides CACHE's, when an instruction a little further on reads them, or when CACHE is about to change. Each is still
+  slots besides CACHE's when an instruction a little further on reads them: a result that CACHE need not hold, or what CACHE held when it is about to change. Each is still
   written to its slot, so the collector and the slow paths see nothing new. A label keeps what all the ways into it agree on,
   a call drops them, and a slow path that may have collected loads them again before going back.
-- **Loops exit out of line.** A test that ends a loop, an `=` with a constant whose true branch only returns, jumps
+- **Loops exit out of line.** A test that ends a loop, an `=` with a constant symbol, number or special whose true branch only returns, jumps
   to a return placed with the slow paths, so a turn of the loop takes one jump, back, instead of two.
-- **Small functions are inlined,** by the lowerer, sealed or open. An open one sits behind a test of the callee's
-  identity, which on arm64 is a nop that a redefinition patches into a branch to the ordinary call. Bodies are
-  marked in the bytecode, so a backtrace names them as if they were not inlined.
+- **Small functions are inlined,** by the lowerer, sealed or open. An open one sits behind a test that the name's
+  definition still has that body, which on arm64 and x86-64 is a nop that a redefinition patches into a branch to the ordinary
+  call, and elsewhere a test each time. Bodies inlined after stage 0 are marked in the bytecode, so a backtrace names them as if
+  they were not inlined.
 - **Open self tail calls are patched too:** they jump straight back to the body, and a `defun` of the name rewrites
   that branch, so the next turn reaches the new definition.
 
 ### Stubs
 
-Several shared stubs run before a callee's frame exists: compile-on-first-call, arity mismatch, stack growth and
+Shared stubs and one slow path run before a callee's frame exists: compile-on-first-call, arity mismatch, each function's own stack growth and
 foreign functions' entry. Any of them may collect. At each one, the frame pointer is already the callee's, and the
 published scanned extent ends after the window, so the procedure and arguments are rooted in the window, and nothing
 managed is held only in a register.
@@ -160,13 +171,14 @@ managed is held only in a register.
 ### Exceptions
 
 There is a handler stack with direct resumption. A handler record holds a frame offset and a catch address, and no
-managed values: the handler closure is evaluated into a frame slot. Raising goes through one shared stub: C
+managed values: the handler is code at a label of the same function, and H is evaluated only once something has raised. Raising goes through one shared stub: C
 makes the exception, pops the record, sets the frame pointer and returns the catch address, and the stub
 jumps there. Helpers that may raise return `V_CLEARED`, checked only at their call sites. Guest calls are never followed
 by a status check, and `setjmp` and `longjmp` are not used.
 
 The kernel raises in ordinary control flow, so this stays cheap. A handler that never reads its exception is quiet, and
-an error raised while it is innermost builds no exception at all.
+an error raised while it is innermost builds no exception at all. Under a quiet handler of the same code, a primitive that would
+raise jumps to it directly, popping the record, and if nothing else in the protected code can raise, no record is pushed at all.
 
 ### Re-entry and stack growth
 
@@ -174,7 +186,8 @@ No helper calls guest code: `eval-kl` is guest code, and dictionary folds iterat
 that C produces. C written for Shen does call in, through `jit_call_nested`, which pushes a handler with no catch address, so an
 error stops at the boundary and comes back to C by value, and which checks a bound on the native stack.
 
-On overflow the guest stack doubles: the used part is copied, the rest filled with the cleared value, and the
+The limit frames check is the mark of how far the stack has been dirtied (see Collection). Passing it raises the mark, with a
+margin, and only past the end of the stack does the stack double, up to 1 GiB, beyond which it raises an error: the used part is copied, the rest filled with the cleared value, and the
 frame pointer rebased. Handler records hold offsets and frames hold no stack pointers, so nothing else needs
 rebasing. It never shrinks while guest code runs.
 
@@ -190,7 +203,7 @@ either a header, which gives its size and which fields hold values, or the head 
 Symbols are ordinary heap objects, so the image is a single heap. Each stores a hash computed from its name, so
 hashing never depends on an address that moves. A symbol refers to its global cell by index. Cells and constant slots
 live outside the heap, in root arrays that grow by adding chunks, so none ever moves, and emitted code embeds their addresses and never a
-heap address. Native code lives in SLJIT's executable memory, and a collection frees that of code objects it did not reach.
+heap address. Native code lives in SLJIT's executable memory, and a collection frees that of code objects it did not reach, except under a profiler, and what was compiled before everything compiled again, which frames may still be running.
 
 ## Collection
 
@@ -207,8 +220,8 @@ collection copies at most a word for every four allocated. With its own area the
 
 - **Lists stay contiguous.** Cheney's breadth-first order scatters a list's pairs among everything else live, so when a pair is
   copied, the pairs of its tail are copied right after it.
-- **Large objects:** vectors and strings of 32K words or more are allocated apart and never copied. Collections mark
-  them, scan them in place and free the dead ones.
+- **Large objects:** vectors, strings and byte buffers of 32K words or more are allocated apart and copied only into an image. Collections mark
+  them, scan them in place and free the dead ones, whose blocks wait one collection for an object of the same size.
 - **Weak things:** the intern table holds symbols weakly, and symbols nothing needs are dropped, their global cells reused, and those above the last one kept taken out of the array that collections walk; streams nothing reaches are closed; the
   constant slots of dead code are reused; and a guarded pointer nothing reaches has its value put on a list for Shen. That value is a root until then, so nothing has to come back
   from the dead, and what one value uses outlasts it. The list's pair takes less to-space than the pointer, which is not copied, leaves free.
@@ -231,7 +244,7 @@ The stack is scanned linearly, from its base to the published top, which three r
 - **Return addresses scan as fixnums.** Return labels are aligned to 4 bytes, so their low bits match the zero tag.
 
 Under `SHEN_JIT_GC_STRESS` the collector also overwrites where objects were, and new objects go past those words for as long as they
-fit, so that a stale pointer fails at once.
+fit, so that a stale pointer fails at once. `SHEN_JIT_SLOW_PRIMS` compiles every primitive as a call to C, so that `make test-differential` can compare what the JIT inlines with the C versions.
 
 ## Threads
 
@@ -249,7 +262,7 @@ Foreign functions are procedures entered through one shared stub, so a call need
 [ffi.md](ffi.md).
 
 Memory outside the heap is a pointer with a length, and the byte primitives take one as they take a buffer. Their compiled code tests for a buffer, as it always has, so a buffer's path
-is unchanged. What is not one leaves through an out-of-line block that tests for a pointer, loads its length and address into the registers the buffer's length and base would be in, and comes back for the
+is unchanged. A loop that calls nothing and reads through a parameter it never changes works these out once on the way in ([bytecode.md](bytecode.md), "Byte buffers and bit operations"). Otherwise, what is not a buffer leaves through an out-of-line block that tests for a pointer, loads its length and address into the registers the buffer's length and base would be in, and comes back for the
 same bounds check and access. A pointer that is dead or has no length has length 0, so nothing else needs to test for that.
 
 ## Left out on purpose

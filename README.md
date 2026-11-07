@@ -7,7 +7,7 @@
 
 A small implementation of [Shen](https://shenlanguage.org) that compiles every function to native code, through a
 register bytecode and a baseline JIT built on [SLJIT](https://github.com/zherczeg/sljit). The lowerer is written in
-Shen and compiles itself. The runtime is about 8,000 lines of C, and the lowerer and the port add about 1,200 lines
+Shen and compiles itself. The runtime is about 9,000 lines of C, and the lowerer and the port add about 1,200 lines
 of Shen, not counting comments and blank lines.
 
 It passes the kernel's test suite, the extension tests and the contract examples, on macOS on arm64, on Linux on

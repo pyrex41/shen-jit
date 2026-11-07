@@ -21,7 +21,7 @@ it may change before then, and `SHEN_API_VERSION` says when the C API has.
 (shen-jit.library libm ["libm.so.6" "libm.dylib" "ucrtbase.dll"])
 (define-foreign c-cos libm "cos" (double) --> double)
 
-(c-cos 0)    \\ 1
+(c-cos 0)    \\ 1.0
 ```
 
 A library is named once, by a symbol, with the file names to try in order. `[]` means the executable and what it links, which on Windows
@@ -51,10 +51,12 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 
 **Limits:** at most 6 arguments that are not doubles, and at most 8 that are. No structs by value, and no `float`. A wrapper in C costs a few lines.
 
+A system function cannot be redefined this way, and a library must be named with `shen-jit.library` before it is used.
+
 **Finding functions:** at the first call, so a saved program finds them again in its own process. A function that cannot be found raises
 `foreign: cannot find cos in libm`, and a static Linux build raises `foreign: this static build cannot load libraries`.
 
-**Errors:** `(shen-jit.errno)` is what the last foreign call on this thread left in `errno`, or on Windows in `GetLastError`, which is also
+**Errors:** `(shen-jit.errno)` is what the last call declared with `define-foreign` on this thread left in `errno`, or on Windows in `GetLastError`, which is also
 `WSAGetLastError`, and there `(shen-jit.c-errno)` is the C library's. Both are saved straight after the call.
 
 **Pointers** have a kind, a symbol, for reading and for messages.
@@ -71,7 +73,7 @@ type called `int` or `long`, since `long` is 32 bits on Windows and 64 elsewhere
 | `(shen-jit.pointer! B I P)` | Stores a pointer's address at offset I, or NULL for `[]`, and returns B |
 | `(shen-jit.pointer-read-only P)` | A new pointer to the same memory, which keeps P alive, and raises when stored to, as any copy of it does |
 | `(shen-jit.pointer-guard P V)` | A new pointer like P, with the same length, whose V is handed back once nothing reaches it: see below |
-| `(shen-jit.pointer-owner P)` | The pointer that P was sized from, the V it was guarded with, or `[]` |
+| `(shen-jit.pointer-owner P)` | The pointer that P was sized or made read only from, the V it was guarded with, or `[]` |
 | `(shen-jit.pointers-dead)` | The values of the guarded pointers that have died since it was last called, as a list |
 | `(shen-jit.collect)` | Collects now |
 

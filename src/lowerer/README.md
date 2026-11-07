@@ -5,11 +5,11 @@ Shen, and its stage 0 driver.
 
 | File | Lines | Contents |
 | --- | --- | --- |
-| `lower.shen` | 1117 | The lowerer: normalization, then emission (tail positions, closure conversion, slots and windows). |
+| `lower.shen` | 1137 | The lowerer: normalization, then emission (tail positions, closure conversion, slots and windows). |
 | `stage0.shen` | 224 | Driver: lowers the kernel KLambda files and the port to `build/stage0/<file>.sbc`. |
 | `tokl.shen` | 39 | Compiles `lower.shen` to KLambda for stage 0. |
 | `host.shen` | 43 | What the lowerer takes from Shen/JIT, defined for running under a host. |
-| `check.shen` | 397 | Test code: reads the output back and checks it against the rules in `lib/native.shen`, unit cases. |
+| `check.shen` | 402 | Test code: reads the output back and checks it against the rules in `lib/native.shen`, unit cases. |
 
 Entry points, with `Sealed` the list of names defined in the stage 0 input:
 
@@ -58,7 +58,7 @@ The defaults are `.deps/kernel/klambda/` and `build/stage0/`. `check.shen`
 ends with `0 failures` when everything holds; it re-lowers the kernel in
 memory and compares it with the files, then checks every code object:
 
-- slots are below FrameSize; writes never touch slots 0 to arity+1; every
+- slots are below FrameSize; writes never touch slots 0 and 1; every
   window has A above the parameters and A+1+N < FrameSize;
 - constant, code and capture indices exist; each nested code is created by
   exactly one `closure`; top-level code has no captures;
@@ -71,7 +71,7 @@ memory and compares it with the files, then checks every code object:
   raise reaches the handler with the slots set at that point; all jumps go
   forward; no code falls off the end or is unreachable.
 
-It also runs 16 unit cases with expected instruction lists, 14 malformed
+It also runs 17 unit cases with expected instruction lists, 14 malformed
 inputs that must raise, and 16 broken code objects the checker must reject.
 
 ## Output syntax

@@ -101,7 +101,7 @@
 
 \\ A variable of the lowerer's own, fresh within the definition being lowered.
 \\ The count restarts with each definition, so the same few names come back:
-\\ gensym would intern a new symbol every time, and symbols are never freed.
+\\ gensym would intern a new symbol every time.
 (define shen-jit.lower.fresh
   Prefix -> (let N (+ (value shen-jit.lower.*fresh*) 1)
                  Count (set shen-jit.lower.*fresh* N)

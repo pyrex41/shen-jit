@@ -62,7 +62,7 @@ update-generated`; `check-generated` fails until it does. Any other difference i
 CI runs the heavier suites on every push, or the same thing natively, so leave them to it, before a release too. Run one here only to debug what it guards, one at a time:
 
 - `make test-kernel-stress test-kl-stress` (GC stress, about 2 minutes): changes to allocation, the collector or the heap pointer.
-  Under stress every allocation collects, so keep allocation loops in eval cases short. The old space is overwritten after each collection, so a stale pointer fails at once.
+  Under `test-kl-stress` every allocation collects, so keep allocation loops in eval cases short, and under `test-kernel-stress` every 1000 words. The old space is overwritten after each collection, so a stale pointer fails at once.
 - `make test-san` (sanitizers): changes to C code that handles memory.
 - `make test-x86` (x86-64 under Rosetta): new kinds of SLJIT instructions or calls in the JIT, and changes to how `src/runtime/ffi.c` calls C.
 - `make fuzz-native` (mutated code objects, a few minutes): changes to what the JIT assumes about bytecode, which the checker in `lib/native.shen` must then enforce for code written by hand.
