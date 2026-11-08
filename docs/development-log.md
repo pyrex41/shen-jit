@@ -1231,6 +1231,13 @@ the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, 
   were 17% slower, and 200 objects 139 to 140 against 136 to 139. Still left by hand, as a grammar would make every JSON
   user load `lib/grammar.shen` and need an entry point for a match of a prefix. What remains of the chunk extension's
   cost is its shape: nested optional parts and a recursive rule for quoted text.
+- **Byte tables for classes in loops, kept.** By a loop's first call, the functions its classes' guards call exist,
+  so it evaluates each guard for all 256 bytes and tests a table of them, embedded in its code. A guard that raises
+  stays a test. 15 lines. The token loop, whose guard searches a list for punctuation: 21 bytes 54 to 56 ns against
+  113 to 116 by hand, and 210 bytes 429 to 433 against 1,152 to 1,181, five rounds. A chunk extension 139 to 142 ns
+  against 130 to 131, and a body with one on each of 50 chunks 62.4 to 63.1 µs against 62.0 to 63.3, four rounds:
+  level, where it was 7% slower. Counter names, long, 106 to 108 ns against 116 to 118 before tables. A table cached
+  per class would go stale when the class is defined again; each loop makes its own, 256 bytes, once.
 - **Counter names in the SQLite example, kept.** `counter-app.<counter>`, `/counters/` and a name of letters,
   digits, `-` and `_`, in 4 lines with its caller, replaces 17. Five rounds of a million calls: `/counters/hits` 49
   to 52 ns against 51 to 53, a 25-byte name 98 to 99 against 148 to 150, `/counters/a/b` 44 to 46 against 34 to 36,

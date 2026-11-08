@@ -56,8 +56,19 @@
 (defgrammar <g.d3> <g.d2> "c";)
 (defgrammar <g.d4> <g.d3> "d";)
 (defgrammar <g.d5> <g.d4> "e" := deep;)
+(defgrammar <g.picky> B where (grammar-test.picky? B);)
+(defgrammar <g.pickies> (+ <g.picky>);)
+(defgrammar <g.redefined> B where (= B 97);)
+(defgrammar <g.as> (+ <g.redefined>);)
+(defgrammar <g.redefined> B where (= B 98);)
+(defgrammar <g.bs> (+ <g.redefined>);)
 (defgrammar <g.vowel> B where (grammar-test.vowel? B);)
 (defgrammar <g.vowels> (+ <g.vowel>);)
+\\ Raises for one byte, so a loop over it cannot make a table and keeps its test.
+(define grammar-test.picky?
+  0 -> (error "no zero")
+  B -> (= B 112))
+
 (define grammar-test.vowel?
   B -> (element? B [97 101 105 111 117]))
 
@@ -154,6 +165,11 @@
 (grammar-test.check "a class loop, empty, one and several" [ok ok ok [error 0 "no match"]]
   (freeze (map (/. T (grammar.parse <g.uppers> (grammar-test.view T) (function grammar-test.fail)))
                ["[]" "[A]" "[ABC]" "[a]"])))
+(grammar-test.check "a class whose guard raises for a byte keeps its test" [true false]
+  (freeze [(grammar.match? <g.pickies> (grammar-test.view "ppp")) (grammar.match? <g.pickies> (grammar-test.view "pq"))]))
+(grammar-test.check "each loop over a redefined class sees its own definition" [true false true false]
+  (freeze [(grammar.match? <g.as> (grammar-test.view "aaa")) (grammar.match? <g.as> (grammar-test.view "bbb"))
+           (grammar.match? <g.bs> (grammar-test.view "bbb")) (grammar.match? <g.bs> (grammar-test.view "aaa"))]))
 (grammar-test.raises "not a view" (freeze (grammar.parse <g.digits> "42" (function grammar-test.fail))))
 
 (define grammar-test.fill

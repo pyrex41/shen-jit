@@ -116,7 +116,8 @@ functions its file defines exist. Since a file is read whole before any of it ru
 each rule's arity as it is read, so that rules can call each other in any order.
 A byte class, a rule that is only `B where Guard`, is not called by the rules read after it: they test the
 byte in place, so that `(+ <tchar>)` is one loop with no call per byte, and a loop over a class is called only
-if its first byte matches. Other small rules that do not name themselves are compiled in place too, up to three
+if its first byte matches. When a loop first runs, it evaluates each class's guard for all 256 bytes and tests a
+table from then on, so a class's guard must depend only on its byte; one that raises for some byte stays a test. Other small rules that do not name themselves are compiled in place too, up to three
 deep. So define a grammar's parts before the rules that use them; a rule redefined later is not seen where an
 earlier definition was compiled in place.
 

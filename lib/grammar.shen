@@ -270,16 +270,21 @@
              (let Class (trap-error (get X grammar.class) (/. E []))
                (if (empty? Class)
                    (grammar.call C X Pos Fail (/. P [<-address (grammar.s C) 0]) Items Done)
-                   (grammar.inline C Class Items Pos Fail Done)))
+                   (grammar.inline C X Items Pos Fail Done)))
            (cons? X) (grammar.form C X Items Pos Fail Done)
            true (error "defgrammar: ~R is not an item" X)))
 
 (define grammar.inline
-  C [V Guard] Items Pos Fail Done ->
+  C X Items Pos Fail Done ->
     (let B (gensym (protect B))
       (grammar.byte C Pos Fail
         [let B [shen-jit.u8 (grammar.buf C) (grammar.pos Pos)]
-          [if (grammar.replace [[V | B]] Guard) (grammar.seq C Items (grammar.next Pos) Fail Done) Fail]])))
+          [if (grammar.in-class X B) (grammar.seq C Items (grammar.next Pos) Fail Done) Fail]])))
+
+\\ A class's test, as a form that the macro turns into its guard, or that a loop compiled at its
+\\ first call turns into a lookup in a table of the 256 bytes.
+(define grammar.in-class
+  X B -> (let Class (get X grammar.class) [grammar.in-class X B (grammar.replace [[(hd Class) | B]] (hd (tl Class)))]))
 
 \\ A loop over a byte class tests its first byte in place, and is called only if it matches.
 (define grammar.class-of
@@ -287,10 +292,10 @@
   _ -> [])
 
 (define grammar.class-test
-  C [V Guard] Pos ->
+  C X Pos ->
     (let B (gensym (protect B))
       [and [< (grammar.pos Pos) (grammar.end C)]
-           [let B [shen-jit.u8 (grammar.buf C) (grammar.pos Pos)] (grammar.replace [[V | B]] Guard)]]))
+           [let B [shen-jit.u8 (grammar.buf C) (grammar.pos Pos)] (grammar.in-class X B)]]))
 
 (define grammar.args
   C Pos -> [(grammar.buf C) (grammar.pos Pos) (grammar.end C) (grammar.s C)])
@@ -332,7 +337,7 @@
       (if (empty? Class)
           (grammar.after Loop -1 (/. P (grammar.seq C Items [P 0] Fail Done)))
           (let P (gensym (protect P))
-            [let P [if (grammar.class-test C Class Pos) Loop (grammar.pos Pos)]
+            [let P [if (grammar.class-test C X Pos) Loop (grammar.pos Pos)]
               (grammar.seq C Items [P 0] Fail Done)])))
   C [+ X] Items Pos Fail Done -> (grammar.seq C [X [* X] | Items] Pos Fail Done)
   C [? X] Items Pos Fail Done ->
@@ -397,11 +402,25 @@
       H))
 
 (define grammar.compile
-  H Buf At End S -> (do (eval (get H grammar.loop)) ((fn H) Buf At End S)))
+  H Buf At End S -> (do (eval (grammar.tables (get H grammar.loop))) ((fn H) Buf At End S)))
+
+\\ By a loop's first call, the functions a class's guard calls exist: a guard that depends only on
+\\ its byte, as a class's must, is evaluated once for each byte. One that raises stays a test.
+(define grammar.tables
+  [grammar.in-class _ B Guard] ->
+    (let Table (trap-error (grammar.fill (eval [/. B Guard]) (shen-jit.bytes 256) 0) (/. E none))
+      (if (= Table none) Guard [= [shen-jit.u8 Table B] 1]))
+  [X | Y] -> (map (function grammar.tables) [X | Y])
+  X -> X)
+
+(define grammar.fill
+  _ Table 256 -> Table
+  F Table B -> (grammar.fill F (if (F B) (shen-jit.u8! Table B 1) Table) (+ B 1)))
 
 (defmacro grammar.macro
   [defgrammar Name | Body] -> (grammar.define Name Body) where (grammar.nonterminal? Name)
   [defgrammar | Form] -> (error "defgrammar: expected <name> and rules, in ~R" Form)
+  [grammar.in-class _ _ Guard] -> Guard
   [grammar.parse Rule View Fail] -> (grammar.parse-form Rule View Fail) where (grammar.nonterminal? Rule)
   [grammar.match? Rule View] -> (grammar.match-form Rule View) where (grammar.nonterminal? Rule)
   [grammar.parse-range Rule Buffer At End Fail] -> (grammar.range-form Rule Buffer At End Fail)
