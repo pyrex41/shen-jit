@@ -1125,6 +1125,76 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Persistent HTTP throughput and slow-client retention (2026-11-07, M3 Max, macOS arm64)
+
+Measured the existing HTTP libraries without changing their implementation. Same-host Python asyncio
+clients, three rounds of three-second intervals after warm-up, reversing case order in alternate rounds.
+Every completed response was checked. The fixed route serves 1 KiB; the SQLite example has 100 seeded
+counters and retains its per-request database/statement work. Medians below; p95 is the median of each
+round's p95, including connection setup when closing each request. No request pipelining in these timings.
+
+| Response / connection policy | Clients | Requests/s | p95, ms |
+| --- | ---: | ---: | ---: |
+| 1 KiB fixed, persistent | 1 | 15721 | 0.069 |
+| 1 KiB fixed, close each | 1 | 4923 | 0.172 |
+| 1 KiB fixed, persistent | 8 | 35626 | 0.224 |
+| 1 KiB fixed, close each | 8 | 11912 | 0.734 |
+| SQLite one counter, persistent | 1 / 8 | 7526 / 9210 | 0.148 / 1.009 |
+| SQLite 100-row JSON list, persistent | 1 / 8 | 3324 / 2022 | 0.326 / 4.924 |
+| SQLite 100-row NDJSON, persistent | 1 / 8 | 1548 / 894 | 0.665 / 10.118 |
+
+Reuse gives 3.19 and 2.99 times the fixed-response throughput. The eight-client persistent trials range
+35163..35669 requests/s, using about 1.12 server CPU cores and 0.67 client cores. List/export throughput
+falls at eight clients; NDJSON performs one JSON/source/framing/write path per row. These measurements
+do not isolate a single cause. Bounded row batching is a better next experiment than replacing readiness
+or the scheduler. The unchanged executable was used throughout. Load began at 2.44 and ended at 3.89 on
+this 16-core host, including the benchmark's own work. These short loopback results are not network or
+production capacity claims; longer runs and Linux/Windows remain unmeasured.
+
+A separate listener provided measurement control. A benchmark-only C procedure invoked the runtime's
+post-collection census; RSS and CPU came from macOS libproc, with Mach CPU ticks converted through the
+host timebase. Census/control work stayed outside throughput timing. All limits were explicit: 64 admitted
+connections, 1000000 requests each, 30 s idle/write budgets, 300 s connection lifetime, 16 KiB producer
+chunks and 128 MiB output-body bound. This raised the ordinary budgets for measurement, rather than
+measuring accidental idle expiry. Slow readers used 8 KiB receive buffers and consumed 256 wire bytes per
+50 ms, pausing client transport read-ahead. Each hold lasted three seconds before disconnect and drain.
+
+| Held workload | Connections | Post-GC live heap, MiB | After drain, MiB |
+| --- | ---: | ---: | ---: |
+| No peers | 0 | 2.915 | 2.915 |
+| Idle persistent | 16 / 64 | 4.934 / 10.989 | 2.915 |
+| Slow streaming, 8 MiB source each | 16 / 64 | 4.759 / 10.239 | 2.915 |
+| Slow streaming, 64 MiB source each | 64 | 10.158 | 2.915 |
+| Slow fixed, 8 MiB body each | 16 | 132.939 | 2.915 |
+
+All throughput and held workloads returned exactly to their own live-heap baseline after drain and GC.
+Five repeated 64-peer idle/stream holds accumulated no reachable request/source state. Streaming memory
+stayed near 10.2 MiB for 64 clients when configured total payload rose from 8 to 64 MiB each. Production
+stopped at roughly 0.5..0.6 MiB per client in these socket/window conditions, so the full source was not
+prefetched. Kernel socket queues are outside these heap/RSS figures. Idle input costs about 129.2 KiB per
+connection: a 64 KiB reader and its pending 64 KiB scratch, plus state. The 64 idle peers consumed median
+0.178 s CPU per three-second hold, against 0.009 s with none, about 6% of one core.
+
+RSS did not return to startup size. A further 20 idle and 20 streamed waves returned to the same heap
+baseline every time, with five file descriptors after drain and all 1280 stream sources closed once.
+Native malloc in-use stayed around 2.3..2.5 MiB; RSS settled around 81 MiB idle and 102..103 MiB streamed.
+The heap keeps its grown capacity, and native allocation/thread caches also contribute to resident size.
+Three fixed-body waves left 313 MiB RSS with only 2.917 MiB live heap; after an explicit allocator-pressure
+probe and another census, RSS was 56.6 MiB. The pressure API reported zero released bytes, so the evidence
+is the observed RSS change, not its byte return. No runtime trimming change follows from this experiment.
+The tests found no accumulating reachable HTTP state; they do not exclude every native leak or workload.
+
+Healthy one-client fixed traffic measured 15710 requests/s alone, 15668 with 16 slow streams and 15779
+with 48, all with p95 about 0.068 ms while admission slots remained available. At the full 64-peer cap,
+a healthy connection stayed queued: releasing one slot after 0.5 s allowed completion at 0.516 s. With a
+separate two-second write budget, all 16 slow sources closed after 2.000..2.001 s from source creation;
+live heap returned to baseline while clients were still open. This is an observed cleanup bound under the
+measured scheduling conditions, not a real-time guarantee.
+
+Next experiments: batch NDJSON rows within the existing chunk bound; compare smaller HTTP reader
+capacities before changing defaults; repeat on other platforms and with a separate load generator.
+The current required fast tier, raw-record invariants and publication scan pass.
+
 ### Streaming responses and persistent HTTP connections (2026-11-07, M3 Max, macOS arm64)
 
 Compared with the preceding complete-body, one-response connection path, responses can now pull bounded
