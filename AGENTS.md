@@ -19,8 +19,8 @@ checkout's own workflow, and git ignores it.
 | `docs/` | The guide's source, and how it works |
 | `site/` | What renders the guide: pandoc's template and a filter |
 | `include/` | `shen.h`, for C written for Shen |
-| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, and `datalog.shen`, relations and recursive rules, over `native.shen` |
-| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, and `release-notes.sh` prints a version's section of the changelog |
+| `lib/` | Libraries that are not in the default image, loaded on request: `native.shen`, native code written by hand and the rules bytecode is checked against, `ffi.shen`, calling C, and `memory.shen`, `mmap.shen`, `sqlite.shen` and `socket.shen` over it, `handle.shen`, which releases memory once nothing reaches it, `datalog.shen`, relations and recursive rules, over `native.shen`, `buffer.shen` and `cursor.shen`, views over bytes, I/O over those (`io.shen`, `io-file.shen`, `io-socket.shen`, `frame.shen`, `deadline.shen` and `clock.shen`), HTTP/1.1 over that (`http-*.shen`), and `json.shen` |
+| `tools/` | Scripts: `stlib.shen` writes the executable of `make stlib`, `ci-deps.sh` fetches the kernel, the earlier release that builds this one and Shen/Scheme, `package.sh` makes a release archive, `release-notes.sh` prints a version's section of the changelog, and `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen` and `http-head-capture.shen` are small examples over the libraries |
 | `example-apps/` | Runnable applications built over the public libraries, each with its own README and independent test |
 | `assets/` | The logos and icons |
 | `tests/` | Unit tests, `eval-kl` cases, CLI tests and benchmark drivers |
