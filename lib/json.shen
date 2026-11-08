@@ -42,10 +42,10 @@
       (@p [number (shen-jit.bytes->string Data I (- Stop I))] Stop)))
 
 (define json.scan-literal
-  _ I _ "" Value -> (@p Value I)
-  Data I End Text Value ->
-    (if (= (json.scan-byte Data I End) (string->n (pos Text 0)))
-        (json.scan-literal Data (+ I 1) End (tlstr Text) Value)
+  _ I _ [] Value -> (@p Value I)
+  Data I End [Byte | Bytes] Value ->
+    (if (= (json.scan-byte Data I End) Byte)
+        (json.scan-literal Data (+ I 1) End Bytes Value)
         (json.scan-fail I "invalid literal")))
 
 (define json.scan-continuation?
@@ -180,9 +180,9 @@
          _ (if (and (element? B [91 123]) (>= Depth DepthLimit))
                (json.scan-fail At "nesting limit") true)
       (cond ((= B 34) (json.scan-string Data At End))
-            ((= B 110) (json.scan-literal Data At End "null" null))
-            ((= B 116) (json.scan-literal Data At End "true" true))
-            ((= B 102) (json.scan-literal Data At End "false" false))
+            ((= B 110) (json.scan-literal Data At End [110 117 108 108] null))
+            ((= B 116) (json.scan-literal Data At End [116 114 117 101] true))
+            ((= B 102) (json.scan-literal Data At End [102 97 108 115 101] false))
             ((or (= B 45) (json.scan-digit? B)) (json.scan-number Data At End))
             ((= B 91)
               (let Next (json.scan-space Data (+ At 1) End)

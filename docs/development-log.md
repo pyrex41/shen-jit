@@ -1214,6 +1214,11 @@ the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, 
   the bytes after one check of the view, where `frame.uint` makes six checked `buffer.u8` calls, which it could avoid
   by hand. Not worth making every framing user load `lib/grammar.shen`. `tools/buffer-parsers.shen` was left as it is:
   it shows the cursor API, and its payload's length is counted by its header, which a rule cannot take as an argument.
+- **What those two rejections showed, done by hand, kept.** `json.scan-literal` compares bytes with a list of the
+  literal's bytes, where it took the text apart with `pos`, `tlstr` and `string->n` at each byte: 900 literals 31.5
+  to 32.0 µs against 39.4 to 40.0, and 200 objects 130 to 134 against 133 to 135, five rounds. `frame.next` keeps the
+  raw bytes of the header it makes, and `frame.uint` reads them without a view to check at each byte: reading 100
+  frames of 18 bytes from memory, 499 to 509 ns a frame against 595 to 600, five rounds.
 - **Counter names in the SQLite example, kept.** `counter-app.<counter>`, `/counters/` and a name of letters,
   digits, `-` and `_`, in 4 lines with its caller, replaces 17. Five rounds of a million calls: `/counters/hits` 49
   to 52 ns against 51 to 53, a 25-byte name 98 to 99 against 148 to 150, `/counters/a/b` 44 to 46 against 34 to 36,
