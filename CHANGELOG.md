@@ -5,60 +5,58 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+## [0.5] - 2026-11-07
+
 ### Added
 
-- Bounded streaming HTTP responses with explicit lengths or chunked output, pull-based backpressure,
-  total write budgets and deterministic producer cleanup. Persistent connections retain one reader under
-  request-count, idle and total-lifetime limits; the SQLite example streams NDJSON exports.
-- Optional JSON decoding and encoding over byte views, with typed values, strict UTF-8, lossless number
-  tokens, exact integer conversion and bounded output builders. The SQLite example accepts JSON PUT bodies.
-- Bounded chunked HTTP requests, validated extensions and separate trailers, with decoded/metadata limits,
-  total body deadlines and preserved following bytes. Readers can peek an available span under a copy limit.
-- A bounded HTTP listener with connection limits, cooperative socket cancellation, controlled shutdown
-  and completion snapshots. A runnable SQLite counter API in `example-apps/sqlite-http/` demonstrates
-  per-request database ownership, atomic increments, JSON responses and an explicit shutdown command.
-- Optional HTTP/1.1 request parsing, bounded Content-Length bodies, response encoding and a one-request
-  socket driver with per-phase deadlines, typed APIs and a small echo/health example. Ambiguous framing
-  is rejected; HEAD/bodyless responses, partial output failure and owned body bytes have explicit rules.
-- `lib/native.shen` writes loops and branches without labels: `if`, `when`, `unless`, `while`, `for`, `block`, `exit`
-  and `next`, which become the same instructions. `shen-jit.expand-native` shows what they become.
 - `lib/datalog.shen`: relations, facts, recursive rules, stratified negation, arithmetic on 32-bit integers and
   aggregates (`count`, `sum`, `min` and `max`), evaluated bottom up to a fixed point, with each rule compiled to
   native code with `lib/native.shen`, facts added to a database incrementally, and facts removed. See the guide.
-- Optional HTTP head framing preserves unread body bytes under an explicit byte limit. Monotonic
-  operation deadlines cover socket transfers across short progress and retries, with typed results,
-  injected clocks and transient reader timeout recovery.
-- Optional `lib/frame.shen` reads bounded binary frames across I/O chunks; `lib/io-socket.shen` adds
-  owned TCP endpoints and flushing write shutdown over existing sockets. `tools/frame-echo.shen`
-  demonstrates framed sessions with bounded payloads and one flushed reply per message.
-- Optional `lib/io.shen` and `lib/io-file.shen`: bounded chunk readers/writers, memory endpoints and
-  native binary files, independent of kernel streams. Short transfers retain progress; explicit close
-  flushes pending output, and scoped helpers preserve primary and cleanup errors.
-- Optional `lib/buffer.shen` and `lib/cursor.shen`: checked views over managed bytes or sized foreign
-  memory, overlapping copies, owned captures, logical equality and typed cursor operations.
-  `tools/buffer-parsers.shen` demonstrates complete JSON and length-prefixed binary parsing over them.
+- `lib/native.shen` writes loops and branches without labels: `if`, `when`, `unless`, `while`, `for`, `block`, `exit`
+  and `next`, which become the same instructions. `shen-jit.expand-native` shows what they become.
+- Libraries for bytes and I/O that do not use Shen's streams: `lib/buffer.shen` and `lib/cursor.shen`, checked
+  views over heap bytes or foreign memory and positions in them; `lib/io.shen`, `lib/io-file.shen` and
+  `lib/io-socket.shen`, bounded readers and writers over memory, files and TCP connections, which keep what a short
+  transfer moved and flush on close; `lib/frame.shen`, bounded binary messages read across chunks; and
+  `lib/deadline.shen` with `lib/clock.shen`, a monotonic time budget for a whole operation, across retries.
+- HTTP/1.1, in `lib/http-head.shen`, `http-request.shen`, `http-response.shen`, `http-server.shen` and
+  `http-listener.shen`: request bodies bounded by Content-Length or chunked, with trailers kept apart, responses
+  whole or streamed with a length or chunked under a write budget, a deadline for each phase, persistent connections
+  under request, idle and lifetime limits, and a listener with a connection limit and controlled shutdown. Ambiguous
+  framing is rejected.
+- `lib/json.shen`: JSON decoded from and encoded to byte views, with strict UTF-8, numbers kept as written until
+  converted exactly, and bounded output.
+- `example-apps/sqlite-http/`, a counter served over HTTP from SQLite, which takes JSON bodies and streams NDJSON
+  exports. `tools/` has smaller examples: `buffer-parsers.shen`, `frame-echo.shen`, `http-echo.shen` and
+  `http-head-capture.shen`.
+- `make test-overrides` runs each kernel function that the port replaces beside the kernel's own definition, over
+  generated values, as compiled and through C.
 
 ### Changed
 
-- The SQLite NDJSON export batches rows within the sender's chunk bound and a 16 KiB cap, checking
-  its write deadline during construction. HTTP readers default to 16 KiB, reducing idle input memory;
-  `read-buffer-size` selects another capacity independently of head/body limits.
 - Release archives carry the example applications and the tests, beside the libraries and the guide.
+- Prolog does less work: `(when (= X Y))` compares as it dereferences, without copying both terms first, a cut
+  followed by `(when false)` no longer makes a closure, and a chain of Prolog variables is followed without a call to
+  C. THORN's problems take a few percent fewer instructions.
+  The first two were contributed by @pyrex41 in [#19](https://github.com/tizoc/shen-jit/pull/19) and
+  [#20](https://github.com/tizoc/shen-jit/pull/20).
 - The JIT reuses scratch buffers across liveness checks while compiling each code object.
   Reported by @pyrex41 in [#17](https://github.com/tizoc/shen-jit/pull/17).
 - Converting strings to byte lists for `read-from-string` takes time linear in the string's length.
   Reported by @pyrex41 in [#16](https://github.com/tizoc/shen-jit/pull/16).
 - Compiling code with many distinct constants no longer searches all of them for each new one: a list of 32000
   numbers takes about a thirtieth of what it did.
+  Contributed by @pyrex41 in [#13](https://github.com/tizoc/shen-jit/pull/13).
 - Lowering is faster: looking up a fixed name no longer scans them all, and a long definition with many inlined calls
   no longer takes time that grows with the square of its size.
+  Contributed by @pyrex41 in [#15](https://github.com/tizoc/shen-jit/pull/15).
 - Many threads waiting on sockets use far less CPU: giving up the runtime lock wakes the next thread, not every
   waiting one, so 1000 such threads no longer take over the machine.
 
 ### Fixed
 
-- Closing a guarded handle invalidates it even if its release function raises, so a retained view cannot
-  keep using storage that the release function freed.
+- `handle.close` invalidates the handle even if its release function raises, so nothing can keep using the memory
+  that function freed.
 - Under `SHEN_JIT_MAX_HEAP`, a vector or string of 256 KB or more no longer raises `out of memory` with the heap nearly
   empty, as it did for good once the heap had grown past half the limit. The process can use more memory at the limit
   as a result, up to about three times it.
@@ -164,7 +162,8 @@ All notable changes to this project are documented in this file. The format is b
 
 - Initial release
 
-[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.4...HEAD
+[Unreleased]: https://github.com/tizoc/shen-jit/compare/v0.5...HEAD
+[0.5]: https://github.com/tizoc/shen-jit/compare/v0.4...v0.5
 [0.4]: https://github.com/tizoc/shen-jit/compare/v0.3...v0.4
 [0.3]: https://github.com/tizoc/shen-jit/compare/v0.2...v0.3
 [0.2]: https://github.com/tizoc/shen-jit/compare/v0.1...v0.2
