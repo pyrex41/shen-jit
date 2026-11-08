@@ -84,12 +84,13 @@
   request-limit -> 14
   idle-timeout -> 15
   connection-timeout -> 16
+  read-buffer-size -> 17
   _ -> (error "http: unknown server option"))
 
 (define http.server-options
   Options ->
     (http.configure (io.record [16384 1048576 16384 1048576 5000 5000 5000
-                               8192 65536 16384 100 4096 16384 4096 100 5000 60000]) Options []))
+                               8192 65536 16384 100 4096 16384 4096 100 5000 60000 16384]) Options []))
 
 (define http.configure
   Config [] _ -> Config
@@ -105,6 +106,9 @@
          _ (if (and (>= I 12) (<= I 14))
                (if (and (> N 0) (<= N 1048576)) true
                    (error "http: chunk size, chunk count and request limit must be 1..1048576")) true)
+         _ (if (= I 17)
+               (if (and (> N 0) (<= N 65536)) true
+                   (error "http: read buffer size must be 1..65536")) true)
          _ (address-> Config I N)
       (http.configure Config Rest [Name | Seen]))
   _ _ _ -> (error "http: server options must be [Name Number] pairs"))
@@ -128,7 +132,8 @@
   E Handler Config Stop ->
     (do (io.socket-check E)
         (io.with-endpoint E
-          (/. Peer (let C (io.record [Peer (io.reader Peer []) Handler Config Stop
+          (/. Peer (let R (io.reader Peer [[chunk-size (<-address Config 17)]])
+                       C (io.record [Peer R Handler Config Stop
                                      (clock.deadline (<-address Config 16)) 0 0])
                     (http.connection-read C))))))
 
@@ -255,6 +260,10 @@
   Error [error Other N] -> [error (io.secondary Error (io.progress Other N))])
 
 (datatype http-server-options
+  N : number;
+  ===========================
+  [read-buffer-size N] : http.option;
+
   Option : http.response-option;
   ===========================
   Option : http.option;

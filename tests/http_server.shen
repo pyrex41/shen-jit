@@ -178,4 +178,19 @@
   (server-test.check "encoded response owns a foreign read-only body" "abc"
     (freeze (buffer.string (buffer.slice Wire (- (buffer.length Wire) 3) 3)))))
 
+(define server-test.repeat
+  Text 0 -> Text
+  Text N -> (server-test.repeat (cn Text Text) (- N 1)))
+
+(let Body (buffer.new 32768)
+     _ (buffer.u8! Body 32767 255)
+     Wire (cn (make-string "POST / HTTP/1.1c#13;c#10;Host: localc#13;c#10;X-Padding: ~Ac#13;c#10;Content-Length: 32768c#13;c#10;c#13;c#10;"
+                (server-test.repeat "z" 11)) (buffer.string Body))
+     Exchange (server-test.exchange Wire [[read-buffer-size 7]] (function server-test.handler) false)
+     Reply (hd (tl Exchange))
+  (do (server-test.check "head larger than the reader spans refills" 200
+        (freeze (server-test.status Exchange)))
+      (server-test.check "binary body larger than the reader is preserved" true
+        (freeze (buffer.equal? Body (buffer.slice Reply (- (buffer.length Reply) 32768) 32768))))))
+
 (output "~A passed, ~A failed~%" (value server-test.passed) (value server-test.failed))

@@ -59,8 +59,9 @@ The list limit is fixed; this example does not implement pagination.
 
 HTTP/1.1 connections can serve up to 100 sequential requests, with a 5-second idle limit and a
 60-second total lifetime. Each request still opens its own database connection. The NDJSON source owns
-its prepared SELECT and database until completion/disconnect; it holds one encoded row at a time,
-honors the configured chunk bound and uses the total 5-second write budget. A slow export can hold a
+its prepared SELECT and database until completion/disconnect. It batches rows under both a 16 KiB cap
+and the sender's chunk bound, holding one encoded row and one output batch. It checks the total 5-second
+write budget while assembling batches; even a one-byte chunk bound preserves every row and newline. A slow export can hold a
 SQLite read lock until that budget is observed; this small example does not enable WAL or implement
 pagination. Streaming storage and database lifetimes remain bounded by the row/output/time limits.
 

@@ -78,7 +78,9 @@
          (freeze (listener-test.raises? (freeze (listener-test.listen Options))))))
   [[[max-connections 0]] [[max-connections 1025]] [[shutdown-grace -1]]
    [[shutdown-grace 600001]] [[unknown 1]] [[max-connections 2] [max-connections 3]]
-   [[body-limit -1]] [[head-limit 3]] [[max-connections nope]]])
+   [[body-limit -1]] [[head-limit 3]] [[max-connections nope]]
+   [[read-buffer-size 0]] [[read-buffer-size 65537]] [[read-buffer-size -1]]
+   [[read-buffer-size 1] [read-buffer-size 2]]])
 
 (let S (listener-test.listen [[shutdown-grace 0]])
      _ (http.stop S)

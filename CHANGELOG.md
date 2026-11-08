@@ -40,6 +40,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- The SQLite NDJSON export batches rows within the sender's chunk bound and a 16 KiB cap, checking
+  its write deadline during construction. HTTP readers default to 16 KiB, reducing idle input memory;
+  `read-buffer-size` selects another capacity independently of head/body limits.
 - Release archives carry the example applications and the tests, beside the libraries and the guide.
 - The JIT reuses scratch buffers across liveness checks while compiling each code object.
   Reported by @pyrex41 in [#17](https://github.com/tizoc/shen-jit/pull/17).

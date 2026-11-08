@@ -186,8 +186,40 @@ def main():
             assert db.execute("SELECT name, value FROM counters").fetchall() == [("shared", 32)]
         with server(executable, database) as port:
             assert request(port, "GET", "/counters/shared") == {"value": 32}
+        check_batched_export(executable, Path(directory) / "export.db")
         check_cli_shutdown(executable, database)
         print(f"Counter API, 32 concurrent increments, persistence and shutdown passed ({elapsed:.3f}s for increments)")
+
+
+def check_batched_export(executable, database):
+    # Seed long UTF-8 names directly to exercise batch and code-point boundaries.
+    with server(executable, database) as port:
+        rows = [(f"{index:03d}-" + "é"*150, index) for index in range(100)]
+        with sqlite3.connect(database) as db:
+            db.executemany("INSERT INTO counters(name, value) VALUES (?, ?)", rows)
+        with socket.create_connection(("127.0.0.1", port), timeout=5) as peer, peer.makefile("rb") as stream:
+            peer.sendall(b"GET /counters.ndjson HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            assert stream.readline().startswith(b"HTTP/1.1 200 ")
+            fields = []
+            while (line := stream.readline()) != b"\r\n":
+                assert line
+                fields.append(line.lower())
+            assert b"transfer-encoding: chunked\r\n" in fields
+            chunks = []
+            sizes = []
+            while True:
+                size = int(stream.readline(), 16)
+                if size == 0:
+                    assert stream.readline() == b"\r\n" and stream.read() == b""
+                    break
+                sizes.append(size)
+                assert 0 < size <= 16384
+                chunks.append(stream.read(size))
+                assert stream.read(2) == b"\r\n"
+            decoded = [json.loads(line) for line in b"".join(chunks).splitlines()]
+            assert decoded == [{"name": name, "value": value} for name, value in rows]
+            assert sizes[:-1] == [16384] * (len(sizes)-1), sizes
+            assert 1 < len(sizes) < len(rows), sizes
 
 
 def check_cli_shutdown(executable, database):

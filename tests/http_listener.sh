@@ -24,7 +24,9 @@ run_case "$SHEN" eval "$@" -l tests/http_connection.shen
 run_case "$SHEN" eval "$@" -e '(tc +)' -l tests/http_listener_typed.shen
 run_case "$SHEN" eval "$@" -l example-apps/sqlite-http/main.shen \
     -s counter-test.path "\"$dir/counters.db\"" -l tests/sqlite_http.shen
-"$SHEN" --save "$dir/listener.img" eval "$@" \
+run_case "$SHEN" eval "$@" -l example-apps/sqlite-http/main.shen \
+    -s export-test.path "\"$dir/exports.db\"" -l tests/http_export.shen
+"$SHEN" --save "$dir/listener.img" eval "$@" -l example-apps/sqlite-http/main.shen \
     -e '(set listener-image.server (http.listen "127.0.0.1" 0 (/. Q (http.response 200 [] (buffer.new 0))) []))' \
     -e '(http.stop (value listener-image.server))' \
     -e '(http.wait (value listener-image.server) 2000)' > "$dir/save.out" 2>&1
@@ -35,4 +37,7 @@ grep -qxF 'saved: http: saved servers must be recreated' "$dir/load.out"
 SHEN_JIT_IMAGE="$dir/listener.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
     -l tests/http_listener_gc.shen > "$dir/gc.out" 2>&1
 grep -qxF 'listener gc ok' "$dir/gc.out"
-echo '2 passed, 0 failed'
+SHEN_JIT_IMAGE="$dir/listener.img" SHEN_JIT_GC_STRESS=1 "$SHEN" eval \
+    -s export-gc.path "\"$dir/export-gc.db\"" -l tests/http_export_gc.shen > "$dir/export-gc.out" 2>&1
+grep -qxF 'export gc ok' "$dir/export-gc.out"
+echo '3 passed, 0 failed'

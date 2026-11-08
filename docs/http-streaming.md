@@ -117,8 +117,9 @@ output retains that output count if cleanup itself fails.
 ## Example and validation
 
 The [SQLite counter application](../example-apps/sqlite-http/README.md) streams up to 100 rows from a
-prepared statement as NDJSON at `/counters.ndjson`. Its source retains one encoded row, slices it under
-Maximum, and finalizes its statement and database connection on every exit, including HEAD/disconnect.
+prepared statement as NDJSON at `/counters.ndjson`. Its source batches rows into at most 16 KiB and the sender's Maximum, retaining only the current encoded
+row and one output batch. Rows/newlines can cross chunk boundaries. It checks the deadline while building
+each batch and finalizes its statement and database connection on every exit, including HEAD/disconnect.
 
 `make test-http` covers managed short writes, exact/unknown lengths, output limits, deadline expiry,
 cleanup errors, typed APIs, stale images, every-allocation GC and native persistent connections.

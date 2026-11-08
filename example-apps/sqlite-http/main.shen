@@ -70,7 +70,7 @@
                 (/. X (counter-app.db-result [error (error-to-string X)]
                          (trap-error (do (sqlite.close Db) [ok])
                            (/. Y [error (error-to-string Y)])))))
-         State (io.record [Stmt (buffer.new 0) 0])
+         State (io.record [Stmt [] 0 false])
       (trap-error
         (http.stream-response 200 [["Content-Type" "application/x-ndjson"]] [chunked]
           (http.source (/. Maximum D (counter-app.export-next State Maximum D))
@@ -85,27 +85,43 @@
                    (/. X [error (io.error close "counter export database" (error-to-string X))]))
       (io.close-combine Finalized Closed)))
 
+\\ State: statement, pending encoded row, next row byte, query exhausted.
+\\ A batch owns its bytes; keep only one pending row across sender callbacks.
 (define counter-app.export-next
   State Maximum D ->
-    (do (deadline.check D)
-        (if (= (<-address State 2) (buffer.length (<-address State 1)))
-            (if (= (sqlite.step (<-address State 0)) done)
-                [eof]
-                (let Row (json.encode (counter-app.row-json (sqlite.row (<-address State 0))) [[byte-limit 4096]])
-                     Line (buffer.builder 4097)
-                     _ (buffer.append! Line Row)
-                     _ (buffer.append-byte! Line 10)
-                     _ (address-> State 1 (buffer.finish Line))
-                     _ (address-> State 2 0)
-                  (counter-app.export-span State Maximum)))
-            (counter-app.export-span State Maximum))))
+    (let Limit (io.min (io.capacity Maximum) 16384)
+      (counter-app.export-fill State (buffer.builder Limit) Limit D)))
 
-(define counter-app.export-span
-  State Maximum ->
-    (let At (<-address State 2)
-         N (io.min Maximum (- (buffer.length (<-address State 1)) At))
-         V (buffer.slice (<-address State 1) At N)
-      (do (address-> State 2 (+ At N)) [chunk V])))
+(define counter-app.export-fill
+  State Out Limit D ->
+    (cond ((deadline.expired? D)
+            [error (io.native-error read timeout 0 "counter export" "write deadline expired")])
+          ((= (buffer.builder-length Out) Limit) [chunk (buffer.finish Out)])
+          ((not (empty? (<-address State 1))) (counter-app.export-copy State Out Limit D))
+          ((<-address State 3)
+            (if (= (buffer.builder-length Out) 0) [eof] [chunk (buffer.finish Out)]))
+          (true (counter-app.export-step State Out Limit D (sqlite.step (<-address State 0))))))
+
+(define counter-app.export-copy
+  State Out Limit D ->
+    (let Row (<-address State 1)
+         At (<-address State 2)
+         Left (- (buffer.length Row) At)
+         N (io.min Left (- Limit (buffer.builder-length Out)))
+      (do (if (= Left 0)
+              (do (buffer.append-byte! Out 10) (address-> State 1 []))
+              (do (buffer.append! Out (buffer.slice Row At N))
+                  (address-> State 2 (+ At N))))
+          (counter-app.export-fill State Out Limit D))))
+
+(define counter-app.export-step
+  State Out Limit D done ->
+    (do (address-> State 3 true) (counter-app.export-fill State Out Limit D))
+  State Out Limit D row ->
+    (let Row (json.encode (counter-app.row-json (sqlite.row (<-address State 0))) [[byte-limit 4096]])
+         _ (address-> State 1 Row)
+         _ (address-> State 2 0)
+      (counter-app.export-fill State Out Limit D)))
 
 (define counter-app.found
   [] -> (counter-app.error 404 "counter not found")

@@ -15,7 +15,7 @@
 (define stream-typed.serve
   {io.endpoint --> (io.result number)}
   E -> (http.serve-connection E (function stream-typed.response)
-         [[request-limit 2] [idle-timeout 100] [connection-timeout 1000]
+         [[read-buffer-size 1024] [request-limit 2] [idle-timeout 100] [connection-timeout 1000]
           [response-chunk-size 1024] [response-chunk-count-limit 4]]))
 
 (define stream-typed.sent

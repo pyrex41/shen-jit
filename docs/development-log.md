@@ -1125,6 +1125,55 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
+
+Compared the existing one-row NDJSON source with a bounded batch producer, using the same executable,
+100 SQLite counters, own-I/O connection path and 64 KiB reader for both arms. Three three-second rounds,
+reversing case order in alternate rounds, after application warm-up; clients checked every completed
+export. Production now retains one encoded row plus at most 16 KiB of output, additionally capped by
+the sender's Maximum. It fills across row/newline boundaries, checks the deadline during construction,
+remembers query exhaustion and never steps the statement again after EOF. HEAD and all cleanup paths
+keep their existing rules. Invalid later rows or expiry can fail the first batch before output.
+
+| Persistent export clients | One-row requests/s | Batched requests/s | p95 before / after, ms |
+| --- | ---: | ---: | ---: |
+| 1 | 1547 | 2168 | 0.672 / 0.487 |
+| 8 | 900 | 1636 | 9.972 / 5.918 |
+
+That is 40% and 82% more completed exports. The ordinary 100 short rows now fit in one data chunk,
+instead of 100. Long rows still cross batch boundaries without losing UTF-8 bytes or newlines. No whole
+query result list is collected. The prepared statement and database stay owned by the response source.
+
+Separately compared 4/8/16/64 KiB readers through the new numeric `read-buffer-size` option, again three
+alternating rounds. Eight clients measured 1 KiB GETs and 128 KiB binary POST/echo bodies with a 6 KiB
+header, verifying every byte. Payload throughput below counts the body once per echo transaction.
+
+| Reader, KiB | Fixed GET requests/s | Binary echo, MiB/s | Idle live input per connection, KiB |
+| --- | ---: | ---: | ---: |
+| 4 | 39502 | 702.6 | 9.2 |
+| 8 | 39329 | 763.7 | 17.2 |
+| 16 | 38528 | 792.5 | 33.2 |
+| 64 | 35660 | 794.1 | 129.2 |
+
+Selected 16 KiB: about 74% less idle input memory and 8% more fixed GET throughput, with binary echo
+within 0.2% of 64 KiB here. The smaller capacities save more memory but cost bulk throughput. General
+I/O reader defaults and HTTP head/body limits are unchanged. Larger messages span refills; one reader
+still preserves pipelined input. Valid capacities are 1..65536, checked before socket adoption/bind.
+
+Each size's 64-idle-peer hold returned exactly to its own live-heap baseline after drain/GC; every export
+and body-throughput trial did too. The same runtime binary served all arms. Earlier attempts refused
+host load above the guard; this recording began at one-minute load 2.99 and ended at 4.75, including its
+own client/server work. No test suite ran during timing. These short macOS loopback comparisons do not
+establish cross-platform or deployment capacity. Baseline source snapshots and hashes pin the comparison.
+
+The required fast tier passes, including 634 HTTP checks. New cases cover one-byte and larger input
+readers, coalesced chunked/persistent requests, invalid options, typed clients, export bounds down to one
+byte, empty/limited queries, HEAD, invalid rows, deadlines, cleanup and every-allocation GC. Independent
+HTTP/SQLite clients also check full 16 KiB batches split through long UTF-8 names, persistent reuse,
+concurrent updates and shutdown. An intentional close with unread pipelined native input can reset the
+peer and lose a queued response; small-reader fixtures separate that documented best-effort rejection
+case from complete-input pipeline delivery. No runtime change or native adapter was needed.
+
 ### Persistent HTTP throughput and slow-client retention (2026-11-07, M3 Max, macOS arm64)
 
 Measured the existing HTTP libraries without changing their implementation. Same-host Python asyncio

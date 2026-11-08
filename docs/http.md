@@ -207,6 +207,7 @@ Rejections remain `[error Error]` even when an error response was sent successfu
 | --- | --- |
 | `head-limit` | 16384 bytes |
 | `body-limit` | 1048576 bytes |
+| `read-buffer-size` | 16384 bytes; configurable in 1..65536 |
 | `response-head-limit` | 16384 bytes, minimum 128 so an empty error response fits |
 | `response-body-limit` | 1048576 bytes |
 | `head-timeout`, `body-timeout`, `write-timeout` | 5000 ms each |
@@ -218,6 +219,11 @@ interrupted; its elapsed time is charged to that total and checked before output
 does not accept a second request or add an accept loop. The [bounded listener](http-listener.md) uses
 the persistent variant below with a connection cap and controlled shutdown.
 The [streaming response reference](http-streaming.md) covers source ownership and output chunk limits.
+
+`read-buffer-size` bounds the connection's input reader and each read scratch allocation. It is independent
+of head/body limits: larger heads and bodies span refills, and pipelined bytes remain in the same reader.
+Small values trade more reads/copies for less live input memory. It applies to both connection drivers
+and `http.listen`; the general I/O reader defaults are unchanged.
 
 Malformed/unsupported requests get an empty 400/413/414/417/431/501/505 response as appropriate; budget
 expiry gets 408. Application exceptions or invalid responses get an empty 500 before any application
