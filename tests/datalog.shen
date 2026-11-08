@@ -17,7 +17,7 @@
    sorted tuples. *\
 (define dt.runs
   Name Facts -> [(datalog.run-naive Name Facts) (datalog.run Name Facts) (dt.run-fixed Name Facts) (dt.run-kl Name Facts)
-                 (dt.run-added Name Facts)])
+                 (dt.run-added Name Facts) (dt.run-readded Name Facts)])
 
 \* The facts in three parts: a run of the first, then two adds. *\
 (define dt.run-added
@@ -26,6 +26,19 @@
                      B (dt.take Third (dt.drop Third Facts))
                      C (dt.drop (* 2 Third) Facts)
                   (datalog.add (datalog.add (datalog.run Name A) B) C)))
+
+\* A run of every fact, the middle third removed, and added back. *\
+(define dt.run-readded
+  Name Facts -> (let Mid (dt.middle Facts)
+                  (datalog.add (datalog.remove (datalog.run Name Facts) Mid) Mid)))
+
+(define dt.middle
+  Facts -> (let Third (dt.third (length Facts)) (dt.take Third (dt.drop Third Facts))))
+
+\* The facts that are not among these, every copy. *\
+(define dt.facts-without
+  [] _ -> []
+  [F | Fs] Gone -> (if (element? F Gone) (dt.facts-without Fs Gone) [F | (dt.facts-without Fs Gone)]))
 
 (define dt.third
   N -> (if (< N 3) 0 (+ 1 (dt.third (- N 3)))))
@@ -675,11 +688,15 @@
             Fixed (dt.run-fixed Name Facts)
             Kl (dt.run-kl Name Facts)
             Added (dt.run-added Name Facts)
+            Readded (dt.run-readded Name Facts)
+            Removed (datalog.remove (datalog.run Name Facts) (dt.middle Facts))
+            Left (datalog.run-naive Name (dt.facts-without Facts (dt.middle Facts)))
+            _ (dt.compare-relation N Removed Left Relations)
             Name2 (dtg.numbered "dt.h" N)
             _ (datalog.define Name2 (append (dtg.items (dtg.shuffle Relations) [])
                                             (dtg.rule-items (dtg.shuffle (dtg.shuffle-bodies Rules)))))
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
-            _ (dt.compare-all N [Fixed Db Kl Added] Reference Relations)
+            _ (dt.compare-all N [Fixed Db Kl Added Readded] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
          (dt.generated (- N 1))))
 

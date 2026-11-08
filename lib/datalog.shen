@@ -20,6 +20,7 @@
 \\ datalog.define      (datalog.define Name Items), the same with the program as data
 \\ datalog.run         (datalog.run Name Facts), a database from facts such as [imports a b]
 \\ datalog.add         (datalog.add Db Facts), the same database with more facts and what follows
+\\ datalog.remove      (datalog.remove Db Facts), the same without these facts and what they gave
 \\ datalog.run-naive   the same by the plain definition, which is slow and is what the rest is
 \\                     tested against
 \\ datalog.tuples      (datalog.tuples Db Relation), its tuples as lists, in no particular order
@@ -43,8 +44,8 @@
 \\ aggregated is complete before it is read. As data, a variable is [var "X"] and _ is [any].
 \\
 \\ Relations are sets, so duplicates count once, and the order of rules, atoms and facts does not
-\\ change a result. datalog.add changes a database in place, going on from what grew; removing
-\\ facts means a new datalog.run.
+\\ change a result. datalog.add and datalog.remove change a database in place: an add goes on
+\\ from what grew, and a removal evaluates again what it reaches.
 \\
 \\ Each rule becomes a native kernel, for an order of joins, kept with the program. The order comes
 \\ from the sizes of the relations as it runs, and changes when they have. Symbols and strings are
@@ -2357,6 +2358,47 @@
   [] _ -> []
   [R | Rs] Grown -> (append (map (/. P [R P]) (datalog.positions-in (datalog.atoms (hd (tl R))) 1 Grown))
                             (datalog.grown-variants Rs Grown)))
+
+\\ ---------------------------------------------------------------------------
+\\ Removing facts. Tuples are never deleted from storage: a component that holds a relation that
+\\ lost a fact, or reads one evaluated again, is emptied to the facts left and evaluated again, in
+\\ order, and the rest stay. A fact the database does not have is no change.
+
+(define datalog.remove
+  [db Name S Interned Rounds Plans Facts] Gone
+  -> (let Program (datalog.program Name)
+          Relations (datalog.nth 3 Program)
+          Split (datalog.split-facts Facts (datalog.fact-set Gone (shen.dict 8)) [] [])
+          Left (hd Split)
+          Lost (tl Split)
+          Run [Name Relations (datalog.nth 5 Program) S]
+          _ (set datalog.*plans* 0)
+          More (datalog.remove-components (get Name datalog.schedule) (datalog.nth 4 Program) Run [Left Interned] Lost [] 0)
+       [db Name S Interned (+ Rounds More) (+ Plans (value datalog.*plans*)) Left])
+  Db _ -> (error "datalog: datalog.remove takes a database that datalog.run made, not ~S" Db))
+
+(define datalog.fact-set
+  [] Table -> Table
+  [F | Fs] Table -> (do (shen.dict-> Table F true) (datalog.fact-set Fs Table)))
+
+\\ [the facts left | the relations of those going that the database has].
+(define datalog.split-facts
+  [] _ Left Lost -> [(reverse Left) | Lost]
+  [[Rel | Values] | Fs] Table Left Lost
+  -> (if (cons? (datalog.dict-find Table [Rel | Values]))
+         (datalog.split-facts Fs Table Left (adjoin Rel Lost))
+         (datalog.split-facts Fs Table [[Rel | Values] | Left] Lost)))
+
+\\ Lost are the relations that lost a fact, Again the ones evaluated again so far.
+(define datalog.remove-components
+  [] _ _ _ _ _ Rounds -> Rounds
+  [[C First Variants] | Cs] Rules Run Facts Lost Again Rounds
+  -> (let In (datalog.rules-in Rules C)
+          Reads (union (datalog.all-complete In) (datalog.all-positive In))
+       (if (or (cons? (datalog.keep-in C Lost)) (cons? (datalog.keep-in Reads Again)))
+           (datalog.remove-components Cs Rules Run Facts Lost (union C Again)
+             (datalog.again [C First Variants] Run Facts Rounds))
+           (datalog.remove-components Cs Rules Run Facts Lost Again Rounds))))
 
 (define datalog.relation-of
   [db Name S | _] Rel

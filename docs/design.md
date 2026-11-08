@@ -302,6 +302,11 @@ atom of such a relation, and the component's own rounds follow. One that negates
 evaluated again, could lose tuples, so its relations are emptied, given their facts again, kept with the database for this, and the component runs
 as in `datalog.run`. Plans and kernels are the same ones, kept with the program.
 
+`datalog.remove` never deletes a tuple from storage, whose buffers, tables and index chains only grow. It takes the facts out of those the
+database keeps, and goes through the components in order: one that holds a relation that lost a fact, or reads one evaluated again, is emptied to
+its facts and evaluated again, and the rest stay. Deleting and rederiving would be faster for a small removal from a large recursive relation, but
+would need storage that can delete, and so a check of each tuple in every kernel, or compacting after each removal.
+
 Symbols and strings are interned, the program's own constants first, so that generated code can hold their numbers, and an integer is its own 32 bits, so that arithmetic and comparisons need no table. A relation's tuples are u32 columns one after another in a byte buffer, which the collector does not scan, with the
 new tuples and those for the next round as ranges of it. A round reads only what was there when it began, so a loop can keep the buffer it started with while growing replaces the relation's. A table of 64-bit entries, open addressed, deduplicates: each holds the top half of its hash, which
 also says where it goes when the table grows, and the tuple's position plus one. An index is such a table by key, for the first tuple with that key, and a chain of u32s for the rest, made for each set of columns this run's plans look up, when first needed. Keys that are a whole tuple use

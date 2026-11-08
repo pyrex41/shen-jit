@@ -36,6 +36,7 @@ false
 | `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
 | `(datalog.run Name Facts)` | A database from facts such as `[imports a b]` |
 | `(datalog.add Db Facts)` | The database with these facts added and what follows from them, changed in place and given back |
+| `(datalog.remove Db Facts)` | The same with these facts removed, and what no longer follows; a fact it does not have is no change |
 | `(datalog.tuples Db Relation)`, `(datalog.sorted Db Relation)` | Its tuples as lists, in no particular order or sorted |
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
@@ -101,5 +102,8 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
 - **The order of a rule's atoms** need not be tuned. A run chooses the order of joins from the sizes of the relations, and again when one has doubled.
 - **Adding facts** with `datalog.add` gives what a run of all of them would. It goes on from what grew where it can, and
   evaluates again only what negates or aggregates something that changed, or reads what was evaluated again. The database
-  changes, so a value from before the add sees the new tuples too. There is no removing facts: that is a new run.
+  changes, so a value from before the add sees the new tuples too.
+- **Removing facts** with `datalog.remove` evaluates again whatever holds a relation that lost a fact, or reads something evaluated
+  again, and keeps the rest. That costs about a full run of what it reaches, and nothing for the parts of a program a removal
+  does not reach. It removes facts given, not tuples derived: a tuple that still follows from what is left stays.
 - **Saving:** a program saved with `--save` runs in the saved image.

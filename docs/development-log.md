@@ -1684,6 +1684,19 @@ The call-graph analysis spent 1.3 of its 1.9 ms loading 5,463 facts, and timing 
 - **Not done:** removing facts, which would need counting or deleting and rederiving; a new run does it. Recomputing only the part of a component that a change reaches.
 - **Checked:** every fixture and generated program also runs with its facts in three parts, a run and two adds, against the reference: 4,943 checks. Planted, a delta of only the last round fails 89, a negated change treated as growth 20, facts not given back to a component evaluated again 102, and growth not passed on 4. A sum that passes 32 bits on the way between adds raises then, as the database it would be does.
 
+### Removing facts (2026-11-07, Apple M3 Max, against full runs)
+
+`datalog.remove` takes facts out of those the database keeps and evaluates again, in order, each component that holds a relation that lost one or reads one evaluated again. Storage never deletes. This was chosen over deleting and rederiving, which would be faster for a small removal from a large recursive relation but needs storage that can delete: tombstones, with a check of each tuple in every native scan and probe even for programs that never remove, or compacting each relation after a removal. Neither is built; compacting would keep the kernels as they are.
+
+| ms, best of five | Full run of what is left | Removing 10 | Removing 1 |
+| --- | --- | --- | --- |
+| Closure, sparse (1,361,567 tuples left) | 88 | 84 | |
+| The kernel's call graph | 6.0 | 6.6 | |
+| The kernel analysis | 1.09 | 1.49 | 0.66 |
+
+- **About a full run of what it reaches:** a removal from a relation everything reads costs a run, and up to 1.4 times one on the small analysis, where finding the facts that go, about 250 µs with a dictionary keyed by fact, and loading each component's facts again show. A removal that reaches less costs less.
+- **Checked:** every fixture and generated program also removes its middle third and adds it back, against the whole result, and every generated program compares the removal alone with the reference over the facts left: 6,839 checks. Planted, readers not evaluated again fail 10, removed facts given back 609, and no relation counted as losing one 609.
+
 ### Against Soufflé again, with native joins (2026-11-07, Apple M3 Max, the same builds of Soufflé 2.5)
 
 The same comparison after native joins and arithmetic, the same builds and settings, so that only our side changed; load 2 to 2.4, and 6 by the end of the parallel run. Every result Soufflé finished matches ours. Ms, best of three.
