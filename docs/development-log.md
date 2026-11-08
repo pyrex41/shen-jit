@@ -1624,6 +1624,7 @@ A workload that uses what the last three entries added, on the same 731 function
 - **Agreed** with the reference on the whole graph, in 1.3 s, with KL joins, and with a version written by hand for SWI-Prolog, on all 4,332 tuples of its nine relations.
 - **Its time is loading:** 1.9 ms a run, of which 1.3 ms is interning and storing the facts, which a program with no rules takes alone; the rules take about 0.6 ms. KL joins take 1.9 to 2.0 ms, so native kernels gain little here, where the relations are small. Its first run takes 4.3 ms against 2.9 with KL, which is compiling 25 kernels.
 - **So what would help such an analysis** is loading, not joins: interning symbols through a dictionary, one fact at a time. Not tried.
+- **Under GC stress,** with negation, arithmetic, aggregates and native joins, `make test-datalog` passes all 3,943 checks under `SHEN_JIT_GC_STRESS=1000` in about six minutes, with the fingerprint test cut to 3,000 tuples. At 150,000 it did not finish in 15 minutes: each collection copies the facts it holds.
 
 ### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
 
@@ -1660,6 +1661,42 @@ The same rules and facts, written out for Soufflé; every result it finished mat
 
   On 12 threads it is 2.3 to 8.3 times our time on nonlinear closure, same generation, the skewed join and points-to as written, about even on the dense closure, and behind us on the sparse closure, the call graph, whose recursion goes deep and narrow, and a badly ordered rule. Its build with 32-bit values is also a little faster on one thread than the bottle's with 64. One thread runs Shen at a time here, so this is the gap that stays.
 - **Not measured:** its magic sets.
+
+### Against Soufflé again, with native joins (2026-11-07, Apple M3 Max, the same builds of Soufflé 2.5)
+
+The same comparison after native joins and arithmetic, the same builds and settings, so that only our side changed; load 2 to 2.4, and 6 by the end of the parallel run. Every result Soufflé finished matches ours. Ms, best of three.
+
+| ms | Ours | Ours before | Soufflé compiled | Soufflé interpreted |
+| --- | --- | --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 99 | 129 | 429 | 562 |
+| Closure, dense | 6.2 | 9.6 | 37.5 | 50 |
+| Nonlinear closure | 239 | 501 | 673 | 1,376 |
+| Same generation | 11.7 | 21 | 54 | 76 |
+| Mutual recursion | 0.5 | 0.8 | 0.2 | 0.3 |
+| Triangles | 0.2 | 0.3 | 0.0 | below its startup |
+| Skewed join (2,222,705) | 110 | 160 | 103 | 189 |
+| The kernel's call graph | 8.3 | 11 | 44 | 56 |
+| Points-to small, order a / b / c | 131 / 155 / 136 | 191 / 215 / 189 | 1,398 / over 100 s / 224 | 2,956 / over 100 s / 370 |
+| Points-to large, order a / b / c | 475 / 545 / 449 | 704 / 804 / 665 | 16,512 / over 100 s / 946 | 35,618 / over 100 s / 1,487 |
+
+- **On one thread** we are now ahead everywhere but the skewed join, at 1.07 times Soufflé's time where it was 1.5, and the runs under a millisecond. Points-to as analyses write it, order c, is 2.1 times as fast as Soufflé's compiled program.
+
+In parallel, the OpenMP build with 32-bit values:
+
+| ms | Ours | 1 thread | 4 | 8 | 12 |
+| --- | --- | --- | --- | --- | --- |
+| Closure, sparse | 95 | 403 | 179 | 161 | 156 |
+| Closure, dense | 6.3 | 36.5 | 13.1 | 11.2 | 10.3 |
+| Nonlinear closure | 243 | 601 | 162 | 86 | 64 |
+| Same generation | 11.7 | 48.1 | 15.2 | 11.1 | 9.3 |
+| Skewed join | 103 | 100 | 26.7 | 16.5 | 15.6 |
+| The call graph | 8.4 | 40.7 | 24.6 | 29.9 | 30.8 |
+| Points-to small, order c | 132 | 195 | 65.4 | 45.8 | 40.5 |
+| Points-to large, order a | 493 | 15,355 | 4,054 | 2,132 | 1,494 |
+| Points-to large, order c | 536 | 792 | 260 | 192 | 165 |
+
+- **On 12 threads** Soufflé is now 1.3 times our time on same generation, 3.3 on points-to as written, 3.8 on nonlinear closure and 6.6 on the skewed join, against 2.3 to 8.3 before. We are ahead on both closures now, the dense one included, on the call graph and on the badly ordered rule. Our points-to large, order c, read 536 ms here and 449 on the one-thread run, as the load rose during this one.
+- **What is left is threads:** at one thread each, only the skewed join is behind, and the gap on 12 is what Soufflé's parallel joins give it.
 
 ## Benchmark results
 
