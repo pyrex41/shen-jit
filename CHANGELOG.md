@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- `lib/grammar.shen`: `defgrammar`, Shen-YACC's notation for parsers over byte views. Each rule compiles to a
+  function over a buffer, a position and an end, with repetition as loops, captures of the bytes matched as strings
+  or views, binary fields, and `require`, which stops a parse with a message and a position. See the guide.
+
 ## [0.5] - 2026-11-07
 
 ### Added

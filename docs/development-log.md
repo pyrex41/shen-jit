@@ -1129,6 +1129,33 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Grammars over byte views (2026-11-08, M3 Max, macOS arm64, against the scanner written by hand)
+
+The parsers in `lib/` are loops over a buffer, a position and an end: fast, but long. `defcc` reads like the
+grammar it implements, but it reads lists with `hd` and `tl`, and each step allocates the pair of the remaining
+input and a value. **Rejected before building:** turning a span into a list of bytes and running `defcc`, and kernel
+hooks for other kinds of input, which would change every port and still allocate at each step.
+
+- **Built:** `lib/grammar.shen`, a macro, `defgrammar`, with `defcc`'s notation where the meaning is the same. Each
+  rule becomes a `define` over the buffer, a position, the end and a parse state, returning a position or -1. 253 lines
+  of code, no change to the runtime or the kernel.
+- **Values** go through the state, not the return: a rule with `:=` stores its value, and its caller reads it only
+  if it names the rule. Returning a pair, as `defcc` does, would allocate at every step of a scan.
+- **Errors** are `(require Items... Message)`, a cut with a reason: -2 and a message in the state, which alternatives
+  and loops pass up. A clean match pays nothing for it, and no handler is installed. A furthest-failure report, as
+  PEG tools give, was left out: it would store on every failed alternative, the most frequent path.
+- **Input ended and invalid are not told apart:** every client frames a complete unit first.
+- **Repetitions take one item:** the kernel's macros rewrite `(* A B C)` into `(* A (* B C))` before a later macro
+  sees it, so `(*` and `(+` with several items would change meaning silently. They are refused instead.
+- **Arity at read time.** A file is read whole before any of it runs, so a loop's helper, compiled while the
+  grammar is read, called the rules it names, and itself, curried. The macro now stores arity 4 for every rule it
+  names, as `define-native` does for its own names, and the calls are direct.
+- **Speed.** A loop over a byte class, `(+ <tchar>)`, against `http.token-range?`, five alternating rounds in
+  one process, load average 2.7 to 2.9 from another agent's work: 210 bytes take 1,080 to 1,100 ns either way, and
+  21 bytes 114 to 116 ns against 106 to 111. The difference is the state record each parse allocates. A first entry
+  point read the view with `buffer.owner`, `buffer.offset` and `buffer.end`, a check each, and cost 24 ns more per
+  parse; it now checks the view once, as `cursor.shen` does.
+
 ### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
 
 Compared the existing one-row NDJSON source with a bounded batch producer, using the same executable,

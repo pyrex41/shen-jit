@@ -192,7 +192,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-streaming http-listener json datalog
+GUIDE_PAGES := design semantics bytecode ffi buffers grammar io framing io-sockets deadlines http-head http http-streaming http-listener json datalog
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -291,9 +291,11 @@ test-native: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l tests/native.shen | \
 	  grep '^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
 
-# Byte views and cursors, independent of native assembly or kernel streams.
+# Byte views and cursors, and grammars over them, independent of native assembly or kernel streams.
+# A macro applies only to files read after it, so the grammar tests load as a file of their own.
 test-buffer: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l tests/grammar.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
 	  -l lib/json.shen -l tools/buffer-parsers.shen -l tests/buffer_examples.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l tests/buffer_typed.shen | $(FFI_RESULT)
