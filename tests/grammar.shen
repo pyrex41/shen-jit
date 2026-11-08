@@ -43,6 +43,10 @@
 (defgrammar <g.empty> (* <g.space>) := empty;)
 (defgrammar <g.ab> (require "a" "b" (make-string "want ~A" "ab")) := ok;)
 (defgrammar <g.utf8> "é" := e;)
+(defgrammar <g.early> (+ <g.upper>) := early;)
+(defgrammar <g.upper> B where (and (>= B 65) (<= B 90));)
+(defgrammar <g.late> (+ <g.upper>) := late;)
+(defgrammar <g.capture> B <g.upper> := B;)
 
 (grammar-test.check "digits match" true (freeze (grammar.match? <g.digits> (grammar-test.view "2026"))))
 (grammar-test.check "+ needs one" false (freeze (grammar.match? <g.digits> (grammar-test.view ""))))
@@ -118,6 +122,14 @@
   (freeze (grammar.parse-range <g.digits> (shen-jit.string->bytes "x12yz") 1 5 (function grammar-test.fail))))
 (grammar-test.check "a range of storage, matched" [number "12"]
   (freeze (grammar.parse-range <g.number> (shen-jit.string->bytes "x12y") 1 3 (/. P M (error M)))))
+(grammar-test.check "a class named before it is defined" early
+  (freeze (grammar.parse <g.early> (grammar-test.view "AB") (function grammar-test.fail))))
+(grammar-test.check "a class tested in place" late
+  (freeze (grammar.parse <g.late> (grammar-test.view "AB") (function grammar-test.fail))))
+(grammar-test.check "a class in place fails as a call does" false
+  (freeze (grammar.match? <g.late> (grammar-test.view "Ab"))))
+(grammar-test.check "a class's variable does not capture the rule's" 98
+  (freeze (grammar.parse <g.capture> (grammar-test.view "bC") (function grammar-test.fail))))
 (grammar-test.raises "not a view" (freeze (grammar.parse <g.digits> "42" (function grammar-test.fail))))
 
 (define grammar-test.fill

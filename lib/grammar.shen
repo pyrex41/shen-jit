@@ -90,12 +90,18 @@
     (let Rules (map (/. R (grammar.split-rule R [])) (grammar.split Body [] []))
          _ (if (empty? Rules) (error "defgrammar ~A: no rules" Name) skip)
          _ (put Name grammar.value (grammar.every? (/. R (not (= (hd (tl R)) grammar.none))) Rules))
+         _ (put Name grammar.class (grammar.class Rules))
          _ (map (function grammar.arity) [Name | (mapcan (function grammar.called) (map (function hd) Rules))])
          Buf (gensym (protect Buf)) At (gensym (protect At)) End (gensym (protect End))
          S (gensym (protect S)) Count (address-> (absvector 1) 0 0)
       [define Name Buf At End S ->
         (grammar.alternatives
           (map (/. R (grammar.rule [Name Buf End S Count (grammar.values Name R)] R At)) Rules))]))
+
+\\ A byte class, B where Guard and nothing else, is tested in place by the rules read after it.
+(define grammar.class
+  [[[V] Sem Guard]] -> [V Guard] where (and (variable? V) (= Sem grammar.none) (not (= Guard grammar.none)))
+  _ -> [])
 
 \\ A file is read whole before any of it runs, so a rule's arity is stored as it is read, for
 \\ calls to it, earlier or later in the file, to be direct, as for define.
@@ -244,9 +250,19 @@
                  (grammar.seq C Items (grammar.next Pos) Fail Done)])
            (= X <e>) (grammar.seq C Items Pos Fail Done)
            (grammar.nonterminal? X)
-             (grammar.call C X Pos Fail (/. P [<-address (grammar.s C) 0]) Items Done)
+             (let Class (trap-error (get X grammar.class) (/. E []))
+               (if (empty? Class)
+                   (grammar.call C X Pos Fail (/. P [<-address (grammar.s C) 0]) Items Done)
+                   (grammar.inline C Class Items Pos Fail Done)))
            (cons? X) (grammar.form C X Items Pos Fail Done)
            true (error "defgrammar: ~R is not an item" X)))
+
+(define grammar.inline
+  C [V Guard] Items Pos Fail Done ->
+    (let B (gensym (protect B))
+      (grammar.byte C Pos Fail
+        [let B [shen-jit.u8 (grammar.buf C) (grammar.pos Pos)]
+          [if (grammar.replace [[V | B]] Guard) (grammar.seq C Items (grammar.next Pos) Fail Done) Fail]])))
 
 (define grammar.args
   C Pos -> [(grammar.buf C) (grammar.pos Pos) (grammar.end C) (grammar.s C)])

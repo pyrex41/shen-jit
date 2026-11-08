@@ -113,6 +113,8 @@ A definition becomes `(define <rule> Buffer At End State -> ...)`, which returns
 match, or -1 when it does not match, and -2 when a require failed. A repetition becomes a function of
 its own, `<rule>/1` and so on, which loops by calling itself. Since a file is read whole before any of it
 runs, `defgrammar` records each rule's arity as it is read, so that rules can call each other in any order.
+A byte class, a rule that is only `B where Guard`, is not called by the rules read after it: they test the
+byte in place, so that `(+ <tchar>)` is one loop with no call per byte. Define classes first.
 
 ## Compared with defcc
 

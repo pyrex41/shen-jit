@@ -1172,6 +1172,26 @@ alternating processes, each a loop over the case in one process, under a load av
   lines against 9, and slower: with the request line, 880 ns against 1,060 for the small head and 3,560 against 5,400
   for the browser's, five rounds. A grammar walks every byte of a value to find where it ends, at about 5 ns a byte,
   while `http.field` reads only the whitespace at either end, since `http.line-end` has checked the bytes between.
+- **Byte classes in place, kept.** A rule that is only `B where Guard` is now tested where a rule read after it
+  names it, instead of called: `(+ <tchar>)` is one loop with no call per byte. The token loop above went from
+  equal to faster than `http.token-range?`: 21 bytes 107 to 110 ns against 113 to 115, and 210 bytes 1,068 to 1,080
+  against 1,153 to 1,164, five rounds. The request line stayed where it was, 920 ns (905 to 961) against 905 (889 to
+  917) and 3,661 against 3,666, eight rounds: its parts are short.
+- **Chunk extensions, kept on the frequent case.** `http.<chunk-extensions>`, `;` and a name, perhaps `=` and a token
+  or a quoted string, with optional whitespace, in 13 lines, replaces `http.chunk-extensions`, `http.chunk-quoted` and
+  `http.token-end`, 37. The chunk size stays by hand, as its overflow check needs the body limit. A size line with no
+  extension, nearly every one, never reaches the grammar: 60 to 64 ns either way, and a body of 50 such chunks 56 to
+  59 µs either way, six rounds. **A line with an extension is slower:** `1fa0;name="value"` takes 210 to 214 ns
+  against 130 to 136, and a body with one on each of its 50 chunks 66 to 68 µs against 62 to 63. About 25 rule calls
+  per extension against 8 calls by hand, which neither defining the classes first nor scanning quoted text by runs
+  changed. Kept by Wirth's rule, as extensions are the exceptional case and the frequent one costs nothing, though
+  this is the one use outside "within noise" for some inputs: dropping it is reverting one commit.
+- **Helpers before the file's own functions.** A loop's helper is compiled as its grammar is read, before the file's
+  own definitions exist, so a guard calling one of them goes through an arity check rather than a direct call; the
+  rule itself, compiled later, calls directly. Returning `(package null [] ...)` from the macro would splice the
+  helpers into the file as ordinary definitions, compiled in order, and works for files, but `-e` and the REPL
+  evaluate only the first form a splice gives, which would drop the rule itself. Rejected; the token loop above
+  includes the check.
 
 ### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
 

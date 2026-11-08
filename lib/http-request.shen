@@ -623,7 +623,11 @@
          End (buffer.end V)
          Stop (http.chunk-hex-end Data Start End)
          _ (if (> Stop Start) true (http.invalid "empty or invalid chunk size"))
-         _ (http.chunk-extensions Data Stop End)
+         _ (if (= Stop End)
+               true
+               (grammar.parse-range http.<chunk-extensions> Data Stop End
+                 (/. Position Message
+                   (http.invalid (if (= Message "trailing input") "invalid chunk extension separator" Message)))))
       (http.chunk-hex Data Start Stop 0 (shen-jit.shift-right Limit 4) (shen-jit.bit-and Limit 15))))
 
 (define http.chunk-hex
@@ -634,45 +638,24 @@
           too-large
           (http.chunk-hex Data (+ At 1) End (+ (* N 16) Digit) Tens Last))))
 
-(define http.token-end
-  Data At End ->
-    (if (and (< At End) (http.token-byte? (shen-jit.u8 Data At)))
-        (http.token-end Data (+ At 1) End) At))
+(define http.text-byte?
+  B -> (or (= B 9) (and (>= B 32) (not (= B 127)))))
 
-(define http.chunk-extensions
-  _ At At -> true
-  Data At End ->
-    (let Semi (http.trim-start Data At End)
-         _ (if (and (< Semi End) (= (shen-jit.u8 Data Semi) 59))
-               true (http.invalid "invalid chunk extension separator"))
-         Start (http.trim-start Data (+ Semi 1) End)
-         NameEnd (http.token-end Data Start End)
-         _ (if (> NameEnd Start) true (http.invalid "invalid chunk extension name"))
-         Equal (http.trim-start Data NameEnd End)
-      (if (and (< Equal End) (= (shen-jit.u8 Data Equal) 61))
-          (let Value (http.trim-start Data (+ Equal 1) End)
-               _ (if (< Value End) true (http.invalid "missing chunk extension value"))
-               Stop (if (= (shen-jit.u8 Data Value) 34)
-                        (http.chunk-quoted Data (+ Value 1) End)
-                        (http.token-end Data Value End))
-               _ (if (> Stop Value) true (http.invalid "invalid chunk extension value"))
-            (http.chunk-extensions Data Stop End))
-          (http.chunk-extensions Data NameEnd End))))
-
-(define http.chunk-quoted
-  _ At End -> (http.invalid "unterminated chunk extension string") where (>= At End)
-  Data At End ->
-    (let Byte (shen-jit.u8 Data At)
-      (cond ((= Byte 34) (+ At 1))
-            ((= Byte 92)
-              (if (and (< (+ At 1) End)
-                       (let Next (shen-jit.u8 Data (+ At 1))
-                         (or (= Next 9) (and (>= Next 32) (not (= Next 127))))))
-                  (http.chunk-quoted Data (+ At 2) End)
-                  (http.invalid "invalid quoted chunk extension")))
-            ((or (= Byte 9) (and (>= Byte 32) (not (= Byte 127))))
-              (http.chunk-quoted Data (+ At 1) End))
-            (true (http.invalid "invalid quoted chunk extension")))))
+\\ Extensions are named and ignored: ; name, or ; name = token or quoted string, with optional whitespace.
+(defgrammar http.<ws> B where (http.ows? B);)
+(defgrammar http.<ows> (* http.<ws>);)
+(defgrammar http.<text-byte> B where (http.text-byte? B);)
+(defgrammar http.<qdtext> B where (and (http.text-byte? B) (not (= B 34)) (not (= B 92)));)
+(defgrammar http.<quoted> 34 http.<quoted-rest>;)
+(defgrammar http.<quoted-rest>
+  (+ http.<qdtext>) http.<quoted-rest>; 92 http.<text-byte> http.<quoted-rest>;
+  (require 34 "unterminated chunk extension string");)
+(defgrammar http.<chunk-value-text> http.<token>; http.<quoted>;)
+(defgrammar http.<chunk-value>
+  http.<ows> "=" http.<ows> (require http.<chunk-value-text> "invalid chunk extension value");)
+(defgrammar http.<chunk-extension>
+  http.<ows> ";" http.<ows> (require http.<token> "invalid chunk extension name") (? http.<chunk-value>);)
+(defgrammar http.<chunk-extensions> (* http.<chunk-extension>);)
 
 (define http.chunk-trailers
   B D Bytes Count Acc -> (http.chunk-trailer-line B D Bytes Count Acc (http.chunk-line B D)))
