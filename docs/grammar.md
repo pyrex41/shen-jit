@@ -87,7 +87,8 @@ repetition. Repetitions build no lists: a list is a recursive rule, as `<names>`
 
 Values cost what they build and nothing more. Rules pass positions, not values, so matching allocates
 nothing, and a rule's value is read only where its caller names it. `(text <rule>)` copies the bytes into
-a string, and `(span <rule>)` makes a view that shares them.
+a string, and `(span <rule>)` makes a view that shares them, once the alternative has matched, unless a
+later item in it names them: an alternative that fails after a capture does not build it.
 
 ## Errors
 

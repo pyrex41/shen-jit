@@ -70,6 +70,7 @@
 (defgrammar <g.swap> A B (<g.pair2> B A) := <g.pair2>;)
 (defgrammar (<g.text-at-least> N) (text <g.digits>) := <g.digits> where (>= (shen-jit.bytes-length (shen-jit.string->bytes <g.digits>)) N);)
 (defgrammar <g.year> (<g.text-at-least> 4) := <g.text-at-least>;)
+(defgrammar <g.answer> (text <g.digits>) (where (= <g.digits> "42")) "!" := yes; (text <g.digits>) "?" := <g.digits>;)
 (defgrammar <g.vowel> B where (grammar-test.vowel? B);)
 (defgrammar <g.vowels> (+ <g.vowel>);)
 \\ Raises for one byte, so a loop over it cannot make a table and keeps its test.
@@ -192,6 +193,9 @@
             (grammar.parse <g.swap> V (function grammar-test.fail)))))
 (grammar-test.check "a parameter in a guard" ["2026" [error 0 "no match"]]
   (freeze (map (/. T (grammar.parse <g.year> (grammar-test.view T) (function grammar-test.fail))) ["2026" "26"])))
+(grammar-test.check "a capture a later item names is there for it, and one left for the end too"
+  [yes [error 0 "no match"] "7"]
+  (freeze (map (/. T (grammar.parse <g.answer> (grammar-test.view T) (function grammar-test.fail))) ["42!" "41!" "7?"])))
 (grammar-test.raises "not a view" (freeze (grammar.parse <g.digits> "42" (function grammar-test.fail))))
 
 (define grammar-test.fill

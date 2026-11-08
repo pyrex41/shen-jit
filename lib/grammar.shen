@@ -42,9 +42,9 @@
 \\ The compiler. A position is [Var Offset], known up to a constant; Fail is the code to give
 \\ when an item does not match: -1, or inside a require, its error. Done makes the code that
 \\ follows a match, given its position. A context is [Name Buf End S Count Values Stack Scope
-\\ Inner], where Values maps each rule named in the semantics to the variable holding its value,
-\\ Stack lists the rules being inlined, Scope the variables bound so far, and Inner is true inside a
-\\ repetition or an option, which bind no values.
+\\ Inner Rule], where Values maps each rule named in the semantics to the variable holding its value,
+\\ Stack lists the rules being inlined, Scope the variables bound so far, Inner is true inside a
+\\ repetition or an option, which bind no values, and Rule holds the captures the rule's end builds.
 
 (define grammar.nonterminal?
   X -> (and (symbol? X) (not (variable? X))
@@ -74,13 +74,13 @@
   [_ _ _ S | _] -> S)
 
 (define grammar.inner
-  [Name Buf End S Count Values Stack Scope _] -> [Name Buf End S Count Values Stack Scope true])
+  [Name Buf End S Count Values Stack Scope _ _] -> [Name Buf End S Count Values Stack Scope true []])
 
 (define grammar.bind
-  [Name Buf End S Count Values Stack Scope Inner] X -> [Name Buf End S Count Values Stack [X | Scope] Inner])
+  [Name Buf End S Count Values Stack Scope Inner Rule] X -> [Name Buf End S Count Values Stack [X | Scope] Inner Rule])
 
 (define grammar.inner?
-  [_ _ _ _ _ _ _ _ Inner] -> Inner)
+  [_ _ _ _ _ _ _ _ Inner | _] -> Inner)
 
 \\ A rule as an item or an entry: <rule>, or (<rule> Arguments...) for a rule with parameters.
 (define grammar.rule-form?
@@ -122,7 +122,7 @@
          S (gensym (protect S)) Count (address-> (absvector 1) 0 0)
       (append [define Name Buf At End S | Params]
               [-> (grammar.alternatives
-                    (map (/. R (grammar.rule [Name Buf End S Count (grammar.values Name R) [] Params false] R [At 0]))
+                    (map (/. R (grammar.rule [Name Buf End S Count (grammar.values Name R) [] Params false []] R [At 0]))
                          Rules))])))
 
 \\ A byte class, B where Guard and nothing else, is tested in place by the rules read after it.
@@ -235,14 +235,32 @@
   _ -> [])
 
 (define grammar.rule
-  C [Items Sem Guard] Pos -> (grammar.seq C Items Pos -1 (/. P (grammar.done C P Sem Guard))))
+  [Name Buf End S Count Values Stack Scope Inner _] [Items Sem Guard] Pos ->
+    (let Cell (address-> (address-> (absvector 2) 0 []) 1 (grammar.symbols (mapcan (function grammar.item-uses) Items)))
+         C [Name Buf End S Count Values Stack Scope Inner Cell]
+      (grammar.seq C Items Pos -1 (/. P (grammar.done C P Sem Guard)))))
 
+\\ The captures left for the end are built before the guard if it names them, and after it if not.
 (define grammar.done
   C P Sem Guard ->
-    (let Value (if (= Sem grammar.none)
-                   (grammar.pos P)
-                   [do [address-> (grammar.s C) 0 (grammar.subst C Sem)] (grammar.pos P)])
-      (if (= Guard grammar.none) Value [if (grammar.subst C Guard) Value -1])))
+    (let Cell (grammar.cell C)
+         Deferred (if (absvector? Cell) (reverse (<-address Cell 0)) [])
+         Checked (if (= Guard grammar.none) [] (grammar.subst C Guard))
+         Named (grammar.symbols Checked)
+         Early (mapcan (/. D (if (element? (hd D) Named) [D] [])) Deferred)
+         Late (mapcan (/. D (if (element? (hd D) Named) [] [D])) Deferred)
+         Value (grammar.binds Late
+                 (if (= Sem grammar.none)
+                     (grammar.pos P)
+                     [do [address-> (grammar.s C) 0 (grammar.subst C Sem)] (grammar.pos P)]))
+      (grammar.binds Early (if (= Guard grammar.none) Value [if Checked Value -1]))))
+
+(define grammar.cell
+  [_ _ _ _ _ _ _ _ _ Cell | _] -> Cell)
+
+(define grammar.binds
+  [] Code -> Code
+  [[V | E] | Rest] Code -> [let V E (grammar.binds Rest Code)])
 
 (define grammar.seq
   _ [] Pos _ Done -> (Done Pos)
@@ -299,7 +317,7 @@
            (grammar.nonterminal? X)
              (let Class (trap-error (get X grammar.class) (/. E []))
                (if (empty? Class)
-                   (grammar.call C X Pos Fail (/. P [<-address (grammar.s C) 0]) Items Done)
+                   (grammar.call C X Pos Fail (/. P [<-address (grammar.s C) 0]) false Items Done)
                    (grammar.inline C X Items Pos Fail Done)))
            (cons? X) (grammar.form C X Items Pos Fail Done)
            true (error "defgrammar: ~R is not an item" X)))
@@ -332,12 +350,24 @@
 
 \\ Calls R, binds its value if the semantics name it, and goes on from where it stopped.
 (define grammar.call
-  C R Pos Fail Value Items Done ->
+  C R Pos Fail Value Capture Items Done ->
     (grammar.after (grammar.invoke C R Pos) Fail
-      (/. P (let Found (assoc (grammar.rule-name R) (grammar.subst-values C))
+      (/. P (let Name (grammar.rule-name R)
+                 Found (assoc Name (grammar.subst-values C))
                  Bind (and (cons? Found) (not (grammar.inner? C)))
-                 Rest (grammar.seq (if Bind (grammar.bind C (tl Found)) C) Items [P 0] Fail Done)
-              (if Bind [let (tl Found) (Value P) Rest] Rest)))))
+                 Defer (and Bind Capture (grammar.defer C Name (tl Found) (Value P)))
+                 Now (and Bind (not Defer))
+                 Rest (grammar.seq (if Now (grammar.bind C (tl Found)) C) Items [P 0] Fail Done)
+              (if Now [let (tl Found) (Value P) Rest] Rest)))))
+
+\\ A capture that no later item names is left for the rule's end, so that a match that fails after
+\\ it does not build it. A rule's own value must be read at once, before the next call replaces it.
+(define grammar.defer
+  C Name Var Code ->
+    (let Cell (grammar.cell C)
+      (if (and (absvector? Cell) (not (element? Name (<-address Cell 1))))
+          (do (address-> Cell 0 [[Var | Code] | (<-address Cell 0)]) true)
+          false)))
 
 (define grammar.subst-values
   [_ _ _ _ _ Values | _] -> Values)
@@ -345,7 +375,7 @@
 \\ R's alternatives in place, when it is small, or a call to it. In place, its parameters are
 \\ renamed and bound to the arguments, which are evaluated first.
 (define grammar.invoke
-  [Name Buf End S Count Values Stack Scope Inner] R Pos ->
+  [Name Buf End S Count Values Stack Scope Inner _] R Pos ->
     (let Callee (grammar.rule-name R)
          Args (grammar.replace Values (grammar.rule-args R))
          Params (trap-error (get Callee grammar.params) (/. E Args))
@@ -357,7 +387,7 @@
           (let Fresh (map (/. X (gensym (protect A))) Params)
             (grammar.lets Fresh Args
               (grammar.alternatives
-                (map (/. Alt (grammar.rule [Name Buf End S Count (grammar.values Callee Alt) [Callee | Stack] Fresh false]
+                (map (/. Alt (grammar.rule [Name Buf End S Count (grammar.values Callee Alt) [Callee | Stack] Fresh false []]
                                            Alt Pos))
                      (grammar.replace (grammar.zip Params Fresh) Rules))))))))
 
@@ -380,7 +410,7 @@
 
 (define grammar.form
   C [R | Args] Items Pos Fail Done ->
-    (grammar.call C [R | Args] Pos Fail (/. P [<-address (grammar.s C) 0]) Items Done)
+    (grammar.call C [R | Args] Pos Fail (/. P [<-address (grammar.s C) 0]) false Items Done)
     where (grammar.nonterminal? R)
   C [* X] Items Pos Fail Done ->
     (let Class (grammar.class-of X)
@@ -399,10 +429,10 @@
         (/. P (grammar.seq C Items [P 0] Fail Done))))
   C [text R] Items Pos Fail Done ->
     (grammar.call C R Pos Fail
-      (/. P [shen-jit.bytes->string (grammar.buf C) (grammar.pos Pos) [- P (grammar.pos Pos)]]) Items Done)
+      (/. P [shen-jit.bytes->string (grammar.buf C) (grammar.pos Pos) [- P (grammar.pos Pos)]]) true Items Done)
     where (grammar.rule-form? R)
   C [span R] Items Pos Fail Done ->
-    (grammar.call C R Pos Fail (/. P [buffer.make (grammar.buf C) (grammar.pos Pos) P]) Items Done)
+    (grammar.call C R Pos Fail (/. P [buffer.make (grammar.buf C) (grammar.pos Pos) P]) true Items Done)
     where (grammar.rule-form? R)
   C [require | Rest] Items Pos Fail Done ->
     (let Message (grammar.last Rest)
@@ -440,13 +470,13 @@
 \\ compiled then would call them through fn; so it defines a stub, and the stub compiles the loop
 \\ at its first call.
 (define grammar.loop
-  [Name Buf End S Count Values Stack Scope Inner] X ->
+  [Name Buf End S Count Values Stack Scope Inner _] X ->
     (let N (+ (<-address Count 0) 1)
          _ (address-> Count 0 N)
          H (intern (make-string "~A/~A" Name N))
          At (gensym (protect At))
          P (gensym (protect P))
-         Body (grammar.seq [Name Buf End S Count Values Stack Scope true] [X] [At 0] -1 (function grammar.pos))
+         Body (grammar.seq [Name Buf End S Count Values Stack Scope true []] [X] [At 0] -1 (function grammar.pos))
          Free (grammar.unique (intersection (grammar.symbols Body) Scope) [])
          Params [Buf At End S | Free]
          _ (grammar.arity [H | (length Params)])

@@ -1302,6 +1302,11 @@ and the scanner it replaced, under a load average of 2.5 to 3.8. The third does 
   the unfinished string, 69 collections against 1 for the scanner, about 2 GB.
 - **Kept: framing, then a complete parse,** which every client here already does: HTTP heads and chunk lines, binary
   frames and NDJSON. Suspension is left for a long unframed value, which no client has.
+- **Captures built at the end, kept,** as that third finding suggested. A `text` or `span` capture that no later item
+  names is bound at the rule's end, after its guard unless the guard names it, so an alternative that fails after it
+  does not build it. 24 lines, bringing the macro to 413. The restart above made 2 collections instead of 69, and in an
+  ordinary parse a JSON string with escapes no longer builds the text before its first escape, as the first
+  alternative did: 500 such strings 158 to 160 µs against 162 to 164, four rounds; the other documents did not move.
 
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 
