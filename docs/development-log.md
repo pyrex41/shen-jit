@@ -1670,6 +1670,20 @@ The call-graph analysis spent 1.3 of its 1.9 ms loading 5,463 facts, and timing 
 - **Measured:** the analysis 1.1 to 1.2 ms against 1.8, and the four-join chain, 60,000 facts, 5.9 to 6.0 ms against 12.3. Points-to is joins, and did not move.
 - **Left:** interning, about 40 ns a value through `shen.dict`. A table of its own would take more code than this is worth now.
 
+### Adding facts (2026-11-07, Apple M3 Max, against full runs)
+
+`datalog.add` gives what a run of every fact would, going on from the database it is given, which it changes. Each relation's size before the facts is its mark. A component that reads only relations that grew goes on semi-naively, with one variant of each rule for each atom of such a relation, reading what is past its mark; one that negates or aggregates a relation that changed, or reads one that was evaluated again, is emptied to its facts and evaluated again; the rest stay. The database keeps every fact for this.
+
+| ms, best of five | Full run | Adding 10 | Adding 1 |
+| --- | --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 82 to 84 | 5.0 | 4.0 |
+| The kernel's call graph | 7.0 | 1.7 | |
+| The kernel analysis | 1.06 | 0.30 | 0.17 |
+
+- **The first add can build an index** the full run never needed: the closure's new edges look `path` up by its second column. A second add of 1 to the same database took 2.4 ms and of 10 1.9 ms, with new paths derived over 33 more rounds.
+- **Not done:** removing facts, which would need counting or deleting and rederiving; a new run does it. Recomputing only the part of a component that a change reaches.
+- **Checked:** every fixture and generated program also runs with its facts in three parts, a run and two adds, against the reference: 4,943 checks. Planted, a delta of only the last round fails 89, a negated change treated as growth 20, facts not given back to a component evaluated again 102, and growth not passed on 4. A sum that passes 32 bits on the way between adds raises then, as the database it would be does.
+
 ### Against Soufflé again, with native joins (2026-11-07, Apple M3 Max, the same builds of Soufflé 2.5)
 
 The same comparison after native joins and arithmetic, the same builds and settings, so that only our side changed; load 2 to 2.4, and 6 by the end of the parallel run. Every result Soufflé finished matches ours. Ms, best of three.

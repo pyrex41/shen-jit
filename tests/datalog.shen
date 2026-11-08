@@ -13,11 +13,33 @@
   Name Got Want -> (do (set dt.*checks* (+ 1 (value dt.*checks*)))
                        (if (= Got Want) ok (dt.fail Name Got Want))))
 
-\* The reference and both kinds of plan give the same sorted tuples. *\
+\* The reference, both kinds of plan, KL joins and facts added in three parts give the same
+   sorted tuples. *\
 (define dt.runs
-  Name Facts -> [(datalog.run-naive Name Facts) (datalog.run Name Facts) (dt.run-fixed Name Facts) (dt.run-kl Name Facts)])
+  Name Facts -> [(datalog.run-naive Name Facts) (datalog.run Name Facts) (dt.run-fixed Name Facts) (dt.run-kl Name Facts)
+                 (dt.run-added Name Facts)])
 
-\* With plans that do not follow sizes. *\
+\* The facts in three parts: a run of the first, then two adds. *\
+(define dt.run-added
+  Name Facts -> (let Third (dt.third (length Facts))
+                     A (dt.take Third Facts)
+                     B (dt.take Third (dt.drop Third Facts))
+                     C (dt.drop (* 2 Third) Facts)
+                  (datalog.add (datalog.add (datalog.run Name A) B) C)))
+
+(define dt.third
+  N -> (if (< N 3) 0 (+ 1 (dt.third (- N 3)))))
+
+(define dt.take
+  0 _ -> []
+  _ [] -> []
+  N [X | Xs] -> [X | (dt.take (- N 1) Xs)])
+
+(define dt.drop
+  0 Xs -> Xs
+  _ [] -> []
+  N [_ | Xs] -> (dt.drop (- N 1) Xs))
+
 \* With joins as KL, not native kernels, compiled afresh. *\
 (define dt.run-kl
   Name Facts -> (let _ (set datalog.*native* false)
@@ -27,6 +49,7 @@
                      _ (datalog.forget-code Name)
                   Db))
 
+\* With plans that do not follow sizes. *\
 (define dt.run-fixed
   Name Facts -> (let _ (set datalog.*adaptive* false)
                      Db (datalog.run Name Facts)
@@ -513,7 +536,11 @@
 (datalog.forget-code dt.agg-sum)
 (dt.raises "a sum past 32 bits, reference" "outside 32 bits"
   (freeze (datalog.run-naive dt.agg-sum [[w a 2147483647] [w a 1]])))
-(dt.same "a sum back within 32 bits" [[w a 2147483647] [w a 1] [w a -5]] dt.agg-sum weight [[a 2147483643]])
+\* Added a part at a time, this sum would pass 32 bits on the way, so only whole runs. *\
+(set dt.back [[w a 2147483647] [w a 1] [w a -5]])
+(dt.check "a sum back within 32 bits" (datalog.sorted (datalog.run dt.agg-sum (value dt.back)) weight) [[a 2147483643]])
+(dt.check "a sum back within 32 bits, KL" (datalog.sorted (dt.run-kl dt.agg-sum (value dt.back)) weight) [[a 2147483643]])
+(dt.check "a sum back within 32 bits, reference" (datalog.sorted (datalog.run-naive dt.agg-sum (value dt.back)) weight) [[a 2147483643]])
 
 (dt.raises "an aggregate of itself" "its own negation or aggregate"
   (freeze (datalog.define dt.bad [[relation p [symbol integer]] [relation q [symbol]]
@@ -647,11 +674,12 @@
             Db (datalog.run Name Facts)
             Fixed (dt.run-fixed Name Facts)
             Kl (dt.run-kl Name Facts)
+            Added (dt.run-added Name Facts)
             Name2 (dtg.numbered "dt.h" N)
             _ (datalog.define Name2 (append (dtg.items (dtg.shuffle Relations) [])
                                             (dtg.rule-items (dtg.shuffle (dtg.shuffle-bodies Rules)))))
             Shuffled (datalog.run Name2 (dtg.shuffle Facts))
-            _ (dt.compare-all N [Fixed Db Kl] Reference Relations)
+            _ (dt.compare-all N [Fixed Db Kl Added] Reference Relations)
             _ (dt.compare-relation N Shuffled Reference Relations)
          (dt.generated (- N 1))))
 

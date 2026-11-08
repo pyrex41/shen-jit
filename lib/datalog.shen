@@ -19,6 +19,7 @@
 \\                     <-- and a body of atoms and comparisons
 \\ datalog.define      (datalog.define Name Items), the same with the program as data
 \\ datalog.run         (datalog.run Name Facts), a database from facts such as [imports a b]
+\\ datalog.add         (datalog.add Db Facts), the same database with more facts and what follows
 \\ datalog.run-naive   the same by the plain definition, which is slow and is what the rest is
 \\                     tested against
 \\ datalog.tuples      (datalog.tuples Db Relation), its tuples as lists, in no particular order
@@ -42,7 +43,8 @@
 \\ aggregated is complete before it is read. As data, a variable is [var "X"] and _ is [any].
 \\
 \\ Relations are sets, so duplicates count once, and the order of rules, atoms and facts does not
-\\ change a result. Evaluation is a snapshot: new facts mean a new datalog.run.
+\\ change a result. datalog.add changes a database in place, going on from what grew; removing
+\\ facts means a new datalog.run.
 \\
 \\ Each rule becomes a native kernel, for an order of joins, kept with the program. The order comes
 \\ from the sizes of the relations as it runs, and changes when they have. Symbols and strings are
@@ -2112,7 +2114,11 @@
                           (tl Entry)
                           (let Id (shen.dict-count Interned)
                                _ (shen.dict-> Interned Value Id)
+                               _ (set datalog.*fresh* [[Id | Value] | (value datalog.*fresh*)])
                             Id))))
+
+\\ The values interned since this was last emptied, for datalog.add to give their numbers.
+(set datalog.*fresh* [])
 
 (define datalog.intern-all
   [] _ -> []
@@ -2186,9 +2192,10 @@
   -> (do (address-> S I (datalog.new-relation (length Types)))
          (datalog.fill-state Rs S (+ I 1))))
 
+\\ The interned values by number, in a vector, so that number N is at N + 1.
 (define datalog.values-vector
-  Interned -> (let V (absvector (shen.dict-count Interned))
-                (do (shen.dict-fold (/. K Id Acc (address-> V Id K)) Interned V) V)))
+  Interned -> (let V (vector (datalog.max 1 (shen.dict-count Interned)))
+                (do (shen.dict-fold (/. K Id Acc (vector-> V (+ Id 1) K)) Interned V) V)))
 
 (define datalog.merge-state
   S I End -> (if (> I End)
@@ -2211,12 +2218,145 @@
           S (absvector (+ 1 N))
           _ (datalog.fill-state Relations S 1)
           _ (datalog.load-facts Facts Relations S Interned)
+          _ (set datalog.*fresh* [])
           _ (address-> S 0 (datalog.values-vector Interned))
           _ (datalog.merge-state S 1 N)
           Run [Name Relations Constants S]
           _ (set datalog.*plans* 0)
           Rounds (datalog.run-components (get Name datalog.schedule) Run 0)
-       [db Name S Interned Rounds (value datalog.*plans*)]))
+       [db Name S Interned Rounds (value datalog.*plans*) Facts]))
+
+\\ ---------------------------------------------------------------------------
+\\ Adding facts to a database. The facts go in, and each relation remembers its size before them,
+\\ its mark. Then each component, in order: one that reads only relations that grew goes on from
+\\ them, semi-naively, with a variant of each rule for each atom of a relation that grew, reading
+\\ what is past its mark; one that negates or aggregates a relation that changed, or reads one
+\\ that was evaluated again, could lose tuples, so it is emptied to its facts and evaluated again;
+\\ one that reads nothing that changed stays as it is. The database changes in place.
+
+(define datalog.add
+  [db Name S Interned Rounds Plans Facts] New
+  -> (let Program (datalog.program Name)
+          Relations (datalog.nth 3 Program)
+          Constants (datalog.nth 5 Program)
+          N (length Relations)
+          Marks (datalog.marks S 1 N)
+          _ (set datalog.*fresh* [])
+          _ (datalog.load-facts New Relations S Interned)
+          _ (address-> S 0 (datalog.more-values (<-address S 0) (value datalog.*fresh*) (shen.dict-count Interned)))
+          _ (datalog.merge-each S 1 N)
+          All (append Facts New)
+          Run [Name Relations Constants S]
+          _ (set datalog.*plans* 0)
+          Grown (datalog.grown Relations S Marks 1)
+          More (datalog.add-components (get Name datalog.schedule) (datalog.nth 4 Program) Run Marks [All Interned] Grown [] 0)
+       [db Name S Interned (+ Rounds More) (+ Plans (value datalog.*plans*)) All])
+  Db _ -> (error "datalog: datalog.add takes a database that datalog.run made, not ~S" Db))
+
+(define datalog.marks
+  S I N -> (if (> I N) [] [(<-address (<-address S I) 6) | (datalog.marks S (+ I 1) N)]))
+
+(define datalog.merge-each
+  S I N -> (if (> I N) true (do (datalog.merge (<-address S I)) (datalog.merge-each S (+ I 1) N))))
+
+\\ The relations that have more tuples than their marks.
+(define datalog.grown
+  [] _ _ _ -> []
+  [[Rel | _] | Rs] S [Mark | Marks] I
+  -> (if (> (<-address (<-address S I) 6) Mark)
+         [Rel | (datalog.grown Rs S Marks (+ I 1))]
+         (datalog.grown Rs S Marks (+ I 1))))
+
+\\ A values vector with room for the new ones: doubled when it is full.
+(define datalog.more-values
+  Values [] _ -> Values
+  Values Fresh Count
+  -> (let Size (limit Values)
+          Bigger (if (>= Size Count)
+                     Values
+                     (datalog.copy-values Values (vector (datalog.max Count (* 2 Size))) 1 Size))
+       (do (map (/. F (vector-> Bigger (+ 1 (hd F)) (tl F))) Fresh) Bigger)))
+
+(define datalog.copy-values
+  From To I N -> (if (> I N) To (do (address-> To I (<-address From I)) (datalog.copy-values From To (+ I 1) N))))
+
+\\ Facts is [every fact so far, Interned].
+(define datalog.add-components
+  [] _ _ _ _ _ _ Rounds -> Rounds
+  [[C First Variants] | Cs] Rules Run Marks Facts Grown Again Rounds
+  -> (let In (datalog.rules-in Rules C)
+          Changed (union Grown Again)
+          Complete (datalog.all-complete In)
+          Positive (difference (datalog.all-positive In) C)
+          Kind (cases (or (cons? (datalog.keep-in Complete Changed)) (cons? (datalog.keep-in Positive Again))) again
+                      (cons? (datalog.keep-in (union Positive C) Grown)) grow
+                      true same)
+          More (cases (= Kind again) (datalog.again [C First Variants] Run Facts Rounds)
+                      (= Kind grow) (datalog.grow-component [C First Variants] In Run Marks Grown Rounds)
+                      true Rounds)
+          S (datalog.nth 4 Run)
+          Relations (hd (tl Run))
+          Grew (datalog.keep-in C (datalog.grown Relations S Marks 1))
+       (datalog.add-components Cs Rules Run Marks Facts
+         (if (= Kind grow) (union Grew Grown) Grown)
+         (if (= Kind again) (union C Again) Again)
+         More)))
+
+(define datalog.all-complete
+  [] -> []
+  [[_ Body] | Rules] -> (union (datalog.complete-relations Body) (datalog.all-complete Rules)))
+
+(define datalog.all-positive
+  [] -> []
+  [[_ Body] | Rules] -> (union (map (function hd) (datalog.atoms Body)) (datalog.all-positive Rules)))
+
+\\ A component emptied to its facts and evaluated as datalog.run would.
+(define datalog.again
+  [C First Variants] [Name Relations Constants S] [Facts Interned] Rounds
+  -> (let Run [Name Relations Constants S]
+          _ (map (/. Rel (address-> S (datalog.relation-slot Rel Relations)
+                           (datalog.new-relation (datalog.arity-in Rel Relations))))
+                 C)
+          _ (datalog.load-facts (datalog.facts-of C Facts) Relations S Interned)
+          _ (map (/. Rel (datalog.merge (datalog.run-relation Rel Run))) C)
+       (datalog.run-component [C First Variants] Run Rounds)))
+
+(define datalog.facts-of
+  _ [] -> []
+  C [[Rel | Values] | Facts] -> (if (element? Rel C)
+                                    [[Rel | Values] | (datalog.facts-of C Facts)]
+                                    (datalog.facts-of C Facts)))
+
+\\ A component that goes on from what grew: each relation that grew reads as new what is past its
+\\ mark, a round of every rule with one variant for each atom of such a relation, and then the
+\\ component's own rounds until nothing is new.
+(define datalog.grow-component
+  [C First Variants] In Run Marks Grown Rounds
+  -> (let S (datalog.nth 4 Run)
+          Relations (hd (tl Run))
+          _ (datalog.since-marks Relations S Marks Grown 1)
+          Rels (map (/. R (datalog.run-relation R Run)) C)
+          Est (datalog.estimator Run)
+          Fs (datalog.variant-functions (datalog.grown-variants In Grown) Est Run)
+          _ (datalog.call-all Fs S)
+          Any (datalog.merge-all Rels false)
+       (if (and Any (cons? Variants))
+           (+ Rounds 1 (datalog.fixpoint Variants Rels Run
+                         (datalog.variant-functions Variants (datalog.estimator Run) Run)
+                         (datalog.signature Relations Run) 0))
+           (+ Rounds 1))))
+
+(define datalog.since-marks
+  [] _ _ _ _ -> true
+  [[Rel | _] | Rs] S [Mark | Marks] Grown I
+  -> (do (if (element? Rel Grown) (address-> (<-address S I) 5 Mark) skip)
+         (datalog.since-marks Rs S Marks Grown (+ I 1))))
+
+\\ [Rule Position] for each atom whose relation grew.
+(define datalog.grown-variants
+  [] _ -> []
+  [R | Rs] Grown -> (append (map (/. P [R P]) (datalog.positions-in (datalog.atoms (hd (tl R))) 1 Grown))
+                            (datalog.grown-variants Rs Grown)))
 
 (define datalog.relation-of
   [db Name S | _] Rel
@@ -2233,7 +2373,7 @@
   Tuples Base [Type | Types] Values
   -> (let Word (shen-jit.u32 Tuples Base)
           More (datalog.tuple-at Tuples (+ Base 4) Types Values)
-       [(if (= Type integer) (datalog.word-int Word) (<-address Values Word)) | More]))
+       [(if (= Type integer) (datalog.word-int Word) (<-vector Values (+ Word 1))) | More]))
 
 (define datalog.read-tuples
   P To _ _ _ _ Acc -> Acc where (= P To)
@@ -2288,7 +2428,7 @@
 
 \\ Rounds, plans made, and for each relation its tuples, its derivations and its indexes.
 (define datalog.stats
-  [db Name S _ Rounds Plans]
+  [db Name S _ Rounds Plans | _]
   -> (let Relations (datalog.nth 3 (datalog.program Name))
        [[rounds Rounds] [plans Plans]
         | (map (/. R (let Rec (<-address S (datalog.relation-slot (hd R) Relations))

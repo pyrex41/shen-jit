@@ -35,6 +35,7 @@ false
 | --- | --- |
 | `(defdatalog Name Item ...)` | Defines a program, checked now. An item is `(relation Name [Types])` or `(rule Head <-- Body ...)`, or `(rule Head)` for one that always holds |
 | `(datalog.run Name Facts)` | A database from facts such as `[imports a b]` |
+| `(datalog.add Db Facts)` | The database with these facts added and what follows from them, changed in place and given back |
 | `(datalog.tuples Db Relation)`, `(datalog.sorted Db Relation)` | Its tuples as lists, in no particular order or sorted |
 | `(datalog.count Db Relation)` | How many tuples it has |
 | `(datalog.holds? Db [Relation Value ...])` | Whether a tuple is there |
@@ -98,5 +99,7 @@ With nodes `a` and `b`, an edge from `a` to `b` and costs 3 and 5 for `a`, `degr
 ```
 - **Results** are sets, and the order of rules, atoms and facts does not change them.
 - **The order of a rule's atoms** need not be tuned. A run chooses the order of joins from the sizes of the relations, and again when one has doubled.
-- **A run is a snapshot.** New facts mean a new `datalog.run`, which starts over.
+- **Adding facts** with `datalog.add` gives what a run of all of them would. It goes on from what grew where it can, and
+  evaluates again only what negates or aggregates something that changed, or reads what was evaluated again. The database
+  changes, so a value from before the add sees the new tuples too. There is no removing facts: that is a new run.
 - **Saving:** a program saved with `--save` runs in the saved image.
