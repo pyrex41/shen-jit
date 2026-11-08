@@ -1288,9 +1288,15 @@ or faster, starting with the example.
   HEAD as GET. Routing was spread over `counter-app.route`, `counter-app.counter`, `counter-app.handle` and
   `counter-app.name`; the API is now one table. 234 lines of code to 231, and a counter's target is decoded once per
   request where it was decoded twice. Its test now asks `counter-app.resource` for the invalid names.
-- **A result binding, `let-ok`, not applied:** the example has no chain of results to bind; its `[ok]` and `[error]`
-  dispatch on what a wait or a cleanup gave, once each. The chains are in the HTTP and I/O libraries, where each read
-  continues in a function of its own.
+- **A result binding, `let-ok`, not applied to the example:** it has no chain of results to bind; its `[ok]` and
+  `[error]` dispatch on what a wait or a cleanup gave, once each. The chains are in the HTTP and I/O libraries.
+- **`io.let-ok` in the libraries, kept** (later the same day). `(io.let-ok X Result ... Body)` binds each X to the value
+  of an `[ok X]` result and returns the first other result as it is. In the socket and file endpoints, the head reader,
+  response output, the connection driver and request bodies, 17 functions existed only to pass `[error Error]` on to
+  the step after; they fold into their callers. 2,233 lines of code to 2,171 across the seven files, with the macro 8 of
+  them. Steps that add progress to an error, or tell `[eof]` apart, keep their functions. Five alternating rounds: a 1
+  KiB response sent to memory 1,436 to 1,456 ns either way, and a chunked body of 50 chunks 56.0 to 57.7 µs against 56.3
+  to 57.0. The I/O and HTTP suites and their wire tests pass unchanged.
 - **A resource scope, `with`, not applied:** `counter-app.with-db` already is one, as a function that takes a lambda,
   and a macro would add the same cleanup and more code. The export's database lives until its stream closes, which a
   scope cannot express.

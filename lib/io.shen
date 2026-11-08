@@ -625,6 +625,18 @@
   =====================
   [[chunk-size N]] : io.buffer-options;)
 
+\\ (io.let-ok X Result ... Body): Body with each X bound to the value of [ok X], in order, or the
+\\ first result that is not ok, as it is. _ takes [ok] or [ok X] and binds nothing. The libraries
+\\ read after this one use it for their chains of results.
+(defmacro io.let-ok-macro
+  [io.let-ok Body] -> Body
+  [io.let-ok X Result | More] ->
+    (let R (gensym (protect R))
+      [let R Result
+        [if [and [cons? R] [= [hd R] ok]]
+            (if (= (str X) "_") [io.let-ok | More] [let X [hd [tl R]] [io.let-ok | More]])
+            R]]))
+
 (declare io.error [symbol --> [string --> [string --> io.error]]])
 (declare io.native-error [symbol --> [symbol --> [number --> [string --> [string --> io.error]]]]])
 (declare io.error? [A --> boolean])

@@ -202,16 +202,12 @@
 (define http.connection-prepared
   C _ _ [error Error] -> (http.connection-fail C Error)
   C D Close [ok Plan] ->
-    (http.connection-sent C Close (http.send-plan (<-address C 0) D Plan)))
-
-(define http.connection-sent
-  _ _ [error Error] -> [error Error]
-  C Close [ok N] ->
-    (let _ (address-> C 6 (+ (<-address C 6) 1))
-         _ (address-> C 7 (+ (<-address C 7) N))
-      (if (or Close (thaw (<-address C 4)) (deadline.expired? (<-address C 5)))
-          [ok (<-address C 7)]
-          (http.connection-idle C (deadline.within (<-address C 5) (<-address (<-address C 3) 15))))))
+    (io.let-ok N (http.send-plan (<-address C 0) D Plan)
+      (let _ (address-> C 6 (+ (<-address C 6) 1))
+           _ (address-> C 7 (+ (<-address C 7) N))
+        (if (or Close (thaw (<-address C 4)) (deadline.expired? (<-address C 5)))
+            [ok (<-address C 7)]
+            (http.connection-idle C (deadline.within (<-address C 5) (<-address (<-address C 3) 15)))))))
 
 \\ Idle time starts after the response. Short bounded waits observe shutdown without
 \\ cancelling an active request or renewing the idle/connection deadline.

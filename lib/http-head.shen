@@ -55,14 +55,10 @@
         Result))
 
 (define http.head-loop
-  F D -> (http.head-ready F D (http.head-budget F D)))
-
-(define http.head-ready
-  _ _ [error Error] -> [error Error]
-  F D [ok] ->
-    (if (= (<-address F 4) (<-address F 2))
-        (http.head-error F "head exceeds byte limit")
-        (http.head-input F D (io.peek-some (<-address F 1)))))
+  F D -> (io.let-ok _ (http.head-budget F D)
+           (if (= (<-address F 4) (<-address F 2))
+               (http.head-error F "head exceeds byte limit")
+               (http.head-input F D (io.peek-some (<-address F 1))))))
 
 (define http.head-input
   F _ [eof] ->
@@ -109,11 +105,9 @@
   F _ V [invalid Count Message] ->
     (do (http.head-copy F V Count) (http.head-error F Message))
   F D V [done Count] ->
-    (do (http.head-copy F V Count) (http.head-complete F (http.head-budget F D))))
-
-(define http.head-complete
-  _ [error Error] -> [error Error]
-  F [ok] -> [head (buffer.wrap (buffer.bytes (buffer.slice (<-address F 3) 0 (<-address F 4))))])
+    (do (http.head-copy F V Count)
+        (io.let-ok _ (http.head-budget F D)
+          [head (buffer.wrap (buffer.bytes (buffer.slice (<-address F 3) 0 (<-address F 4))))])))
 
 (datatype http-head-results
   V : buffer.view;
