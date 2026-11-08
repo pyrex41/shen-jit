@@ -1277,6 +1277,32 @@ the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, 
   78 ns for `/counters/hits` and 50 for `/health`; it parses the string's bytes as a range now. The difference on
   other targets is under 1% of a request, which every request pays once.
 
+### Streaming input: framing against restarting (2026-11-08, M3 Max, macOS arm64)
+
+Before building a parser that can stop at the end of its input and resume, three ways to parse a value that arrives
+in pieces were to be compared: frame it, then parse it complete; parse all that has arrived after each piece, until
+it parses; or suspend and resume. The first two were timed with `tests/bench/json-streaming.shen`, the JSON grammar
+and the scanner it replaced, under a load average of 2.5 to 3.8. The third does not exist, and nothing here asks for it.
+
+| `["a…"]` of 64 KiB, chunks of | Restart: attempts | Bytes decoded | Scanner | Grammar | Frame, then decode |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4,096 bytes | 17 | 0.6 M | 3.1 ms | 3.1 ms | 0.9 ms |
+| 256 | 257 | 8.5 M | 33 ms | 33 ms | 0.9 ms |
+| 16 | 4,097 | 134 M | 502 ms | 510 ms | 1.0 ms |
+| 1 | 65,540 | 2,148 M | 8,040 ms | 8,104 ms | 3.3 ms |
+
+- **Restarting is quadratic,** as expected: a 64 KiB value sent a byte at a time costs 8 s and 2 G bytes of scanning,
+  which a client can choose to cause. Framing, a newline here, scans each byte once and decodes once. A 2.9 KB
+  document of objects in 16-byte chunks took 4 ms by restarting against 1.2 by framing.
+- **Restarting needs "input ended" told from "invalid".** The scanner reports "unexpected end" whenever it reads past
+  the end. The grammar reports a require where it began, so a literal cut after `t`, or a `\u` escape cut after two
+  digits, reads as invalid, and the restart gave up on the 2.9 KB document fed a byte at a time. A grammar would need
+  the furthest position it read to tell them apart, a store on every read.
+- **A capture is built where it matches,** before what follows it is checked: each failed attempt built the text of
+  the unfinished string, 69 collections against 1 for the scanner, about 2 GB.
+- **Kept: framing, then a complete parse,** which every client here already does: HTTP heads and chunk lines, binary
+  frames and NDJSON. Suspension is left for a long unframed value, which no client has.
+
 ### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
 
 A read of the libraries and the example found code that reads like Scheme or ML: index loops, records reached by slot
