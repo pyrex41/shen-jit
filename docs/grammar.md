@@ -101,6 +101,7 @@ that fails because the span ended reports the span's end as its position.
 | --- | --- |
 | `(grammar.parse <rule> View Fail)` | The rule's value, if it matches the whole view. Otherwise `(Fail Position Message)` |
 | `(grammar.match? <rule> View)` | Whether the rule matches the whole view |
+| `(grammar.parse-range <rule> Storage Start End Fail)` | The same as `grammar.parse`, over bytes from Start to End in a buffer's storage, for a library that has already checked them |
 
 The message given to Fail is a require's, `"no match"` when no alternative matched and nothing was
 required, or `"trailing input"` at the first byte the rule left. Positions count from the start of the

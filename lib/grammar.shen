@@ -33,6 +33,10 @@
   Rule View -> (let V (buffer.check View) End (<-address V 3)
                  (= ((fn Rule) (<-address V 1) (<-address V 2) End (grammar.state)) End)))
 
+\\ The same over a range of storage that a library has already checked.
+(define grammar.parse-range
+  Rule Buffer At End Fail -> (let S (grammar.state) (grammar.result ((fn Rule) Buffer At End S) S At End Fail)))
+
 \\ The compiler. A position is [Var Offset], known up to a constant; Fail is the code to give
 \\ when an item does not match: -1, or inside a require, its error. Done makes the code that
 \\ follows a match, given its position. A context is [Name Buf End S Count Values], where Values
@@ -333,7 +337,9 @@
   [defgrammar Name | Body] -> (grammar.define Name Body) where (grammar.nonterminal? Name)
   [defgrammar | Form] -> (error "defgrammar: expected <name> and rules, in ~R" Form)
   [grammar.parse Rule View Fail] -> (grammar.parse-form Rule View Fail) where (grammar.nonterminal? Rule)
-  [grammar.match? Rule View] -> (grammar.match-form Rule View) where (grammar.nonterminal? Rule))
+  [grammar.match? Rule View] -> (grammar.match-form Rule View) where (grammar.nonterminal? Rule)
+  [grammar.parse-range Rule Buffer At End Fail] -> (grammar.range-form Rule Buffer At End Fail)
+    where (grammar.nonterminal? Rule))
 
 \\ With the rule named, a parse calls it directly.
 (define grammar.parse-form
@@ -347,3 +353,9 @@
     (let V (gensym (protect V)) End (gensym (protect End))
       [let V [buffer.check View] End [<-address V 3]
         [= [Rule [<-address V 1] [<-address V 2] End [grammar.state]] End]]))
+
+(define grammar.range-form
+  Rule Buffer At End Fail ->
+    (let B (gensym (protect B)) A (gensym (protect A)) E (gensym (protect E)) S (gensym (protect S))
+      [let B Buffer A At E End S [grammar.state]
+        [grammar.result [Rule B A E S] S A E Fail]]))

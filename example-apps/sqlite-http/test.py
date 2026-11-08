@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 LIBRARIES = ["ffi", "socket", "sqlite", "buffer", "io", "json", "deadline", "clock", "io-socket",
-             "http-head", "http-request", "http-response", "http-server", "http-listener"]
+             "grammar", "http-head", "http-request", "http-response", "http-server", "http-listener"]
 
 
 def shen_string(text):

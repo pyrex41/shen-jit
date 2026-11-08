@@ -1,5 +1,5 @@
 \\ Complete HTTP/1.1 request heads and bounded in-memory bodies over our I/O reader.
-\\ Load buffer.shen, io.shen and http-head.shen first. No socket or kernel I/O dependency.
+\\ Load buffer.shen, io.shen, grammar.shen and http-head.shen first. No socket or kernel I/O dependency.
 
 (define http.problem
   Status Message -> [error (io.native-error http-request http Status "HTTP request" Message)])
@@ -76,41 +76,30 @@
            (http.digit? B)
            (element? B [33 36 38 39 40 41 42 43 44 45 46 47 58 59 61 63 64 95 126])))
 
-(define http.target-range?
-  _ At At -> true
-  B At End ->
-    (if (= (shen-jit.u8 B At) 37)
-        (and (< (+ At 2) End)
-             (http.hex? (shen-jit.u8 B (+ At 1)))
-             (http.hex? (shen-jit.u8 B (+ At 2)))
-             (http.target-range? B (+ At 3) End))
-        (and (http.uri-byte? (shen-jit.u8 B At)) (http.target-range? B (+ At 1) End))))
+(defgrammar http.<tchar> B where (http.token-byte? B);)
+(defgrammar http.<token> (+ http.<tchar>);)
+(defgrammar http.<digit> B where (http.digit? B);)
+(defgrammar http.<hex> B where (http.hex? B);)
+(defgrammar http.<pchar> 37 http.<hex> http.<hex>; B where (http.uri-byte? B);)
+(defgrammar http.<origin> 47 (* http.<pchar>);)
+(defgrammar http.<not-space> B where (not (= B 32));)
+(defgrammar http.<authority> (+ http.<not-space>);)
+(defgrammar http.<version> "HTTP/" http.<digit> "." http.<digit>;)
+
+\\ The method decides the target: CONNECT names an authority, and OPTIONS may name the server.
+(defgrammar http.<request-line>
+  "CONNECT " (text http.<authority>) " " (text http.<version>) := ["CONNECT" http.<authority> http.<version>];
+  "OPTIONS * " (text http.<version>) := ["OPTIONS" "*" http.<version>];
+  (text http.<token>) (require " " "invalid request line")
+    (require (text http.<origin>) " " "unsupported or invalid request target")
+    (require (text http.<version>) "invalid HTTP version") := [http.<token> http.<origin> http.<version>];)
 
 (define http.request-line
   B At End ->
-    (let _ (if (<= (- End At) 8192) true (http.invalid "request line too long"))
-         First (http.find-byte B At End 32)
-         Second (http.find-byte B (+ First 1) End 32)
-         _ (if (and (> First At) (< First End) (> Second (+ First 1)) (< Second End))
-               true (http.invalid "invalid request line"))
-         _ (if (http.token-range? B At First) true (http.invalid "invalid method"))
-         Method (http.text B At First)
-         Target (http.text B (+ First 1) Second)
-         Version (http.text B (+ Second 1) End)
-         _ (if (= Method "CONNECT")
-               true
-               (if (or (and (= Method "OPTIONS") (= Target "*"))
-                       (and (= (shen-jit.u8 B (+ First 1)) 47)
-                            (http.target-range? B (+ First 1) Second)))
-                   true (http.invalid "unsupported or invalid request target")))
-         V (shen-jit.string->bytes Version)
-         _ (if (and (= (shen-jit.bytes-length V) 8)
-                    (= (http.text V 0 5) "HTTP/")
-                    (http.digit? (shen-jit.u8 V 5))
-                    (= (shen-jit.u8 V 6) 46)
-                    (http.digit? (shen-jit.u8 V 7)))
-               true (http.invalid "invalid HTTP version"))
-      [Method Target Version]))
+    (do (if (<= (- End At) 8192) true (http.invalid "request line too long"))
+        (grammar.parse-range http.<request-line> B At End
+          (/. Position Message (http.invalid (if (element? Message ["no match" "trailing input"])
+                                          "invalid request line" Message))))))
 
 (define http.field
   B At End ->

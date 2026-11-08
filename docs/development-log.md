@@ -1151,10 +1151,27 @@ hooks for other kinds of input, which would change every port and still allocate
   grammar is read, called the rules it names, and itself, curried. The macro now stores arity 4 for every rule it
   names, as `define-native` does for its own names, and the calls are direct.
 - **Speed.** A loop over a byte class, `(+ <tchar>)`, against `http.token-range?`, five alternating rounds in
-  one process, load average 2.7 to 2.9 from another agent's work: 210 bytes take 1,080 to 1,100 ns either way, and
+  one process, load average 2.7 to 2.9 from other work: 210 bytes take 1,080 to 1,100 ns either way, and
   21 bytes 114 to 116 ns against 106 to 111. The difference is the state record each parse allocates. A first entry
   point read the view with `buffer.owner`, `buffer.offset` and `buffer.end`, a check each, and cost 24 ns more per
   parse; it now checks the view once, as `cursor.shen` does.
+
+### Grammars in the libraries (2026-11-08, M3 Max, macOS arm64, against the scanners written by hand)
+
+Each use was kept only if it was clearly shorter and clearer, its speed within noise of the code it replaced, and the
+suites of that library passed unchanged. Times are old and new library files loaded by the same executable, in
+alternating processes, each a loop over the case in one process, under a load average of 2.3 to 4 from other work.
+`make bench-independent` runs workloads that load none of these libraries, so it cannot move with them.
+
+- **HTTP request line, kept.** `http.<request-line>` reads as RFC 9112 does, method, target and version, with
+  CONNECT's authority and OPTIONS' `*` as alternatives, and 20 lines of code replace 33. Ten alternating rounds of
+  `http.parse-request`: a three-field head 904 ns (893 to 943) by hand against 916 (909 to 929), and a browser's
+  eleven-field head 3,648 (3,600 to 3,716) against 3,642 (3,584 to 3,687). It needs `lib/grammar.shen` loaded first.
+  `grammar.parse-range` was added for it, to parse a range the library has already checked without making a view.
+- **HTTP fields, rejected.** `http.<field>`, a token, a colon, and a value without its outer whitespace, was 14
+  lines against 9, and slower: with the request line, 880 ns against 1,060 for the small head and 3,560 against 5,400
+  for the browser's, five rounds. A grammar walks every byte of a value to find where it ends, at about 5 ns a byte,
+  while `http.field` reads only the whitespace at either end, since `http.line-end` has checked the bytes between.
 
 ### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
 

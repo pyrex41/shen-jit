@@ -114,6 +114,10 @@
   (freeze (let Rule <g.number> (grammar.parse Rule (grammar-test.view "42") (function grammar-test.fail)))))
 (grammar-test.check "match? through fn" true
   (freeze (let Rule <g.digits> (grammar.match? Rule (grammar-test.view "42")))))
+(grammar-test.check "a range of storage" [error 3 "trailing input"]
+  (freeze (grammar.parse-range <g.digits> (shen-jit.string->bytes "x12yz") 1 5 (function grammar-test.fail))))
+(grammar-test.check "a range of storage, matched" [number "12"]
+  (freeze (grammar.parse-range <g.number> (shen-jit.string->bytes "x12y") 1 3 (/. P M (error M)))))
 (grammar-test.raises "not a view" (freeze (grammar.parse <g.digits> "42" (function grammar-test.fail))))
 
 (define grammar-test.fill

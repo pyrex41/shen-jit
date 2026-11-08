@@ -11,6 +11,10 @@ All notable changes to this project are documented in this file. The format is b
   function over a buffer, a position and an end, with repetition as loops, captures of the bytes matched as strings
   or views, binary fields, and `require`, which stops a parse with a message and a position. See the guide.
 
+### Changed
+
+- `lib/http-request.shen` parses the request line with a grammar, so `lib/grammar.shen` must be loaded before it.
+
 ## [0.5] - 2026-11-07
 
 ### Added

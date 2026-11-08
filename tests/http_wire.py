@@ -11,7 +11,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LIBRARIES = ["lib/ffi.shen", "lib/socket.shen", "lib/buffer.shen", "lib/io.shen",
-             "lib/deadline.shen", "lib/clock.shen", "lib/io-socket.shen", "lib/http-head.shen",
+             "lib/deadline.shen", "lib/clock.shen", "lib/io-socket.shen", "lib/grammar.shen", "lib/http-head.shen",
              "lib/http-request.shen", "lib/http-response.shen", "lib/http-server.shen"]
 
 HANDLER = '''(define wire.handler
