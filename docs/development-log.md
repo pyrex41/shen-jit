@@ -121,6 +121,14 @@ Lowering rules, the collector and the kernel port have their own sections.
 - **Rejected: fewer instructions in `reverse`** (2026-11-02, M3 Max). Operands straight from CACHE (4 fewer) and
   `cons` moving the heap pointer first (2 fewer) read 1.001 and 1.013 overall. Keeping the next call's value in
   CACHE instead of the last result made `reverse` 12% slower.
+- **Rejected: `(tl X)` computed after `(cons (hd X) Acc)`** (2026-11-08, M3 Max). In a self tail call
+  `(rev (tl X) (cons (hd X) Acc))`, `tl X` goes to a temporary and is moved into X's slot after the `cons`, which
+  still reads X. Computed last, it could go straight there, legal where X is known to be a pair. Modelled first
+  with `lib/native.shen`, the lowerer's own code for a 1,000-element reverse against the same code with `tl` last and
+  no move, 200,000 runs, three alternating rounds: 4.13-4.14 to 3.93-3.94 G instructions, but 0.97-0.99 to
+  1.04-1.07 G cycles, 0.23 to 0.25 s. Taken early, the load of the next cell overlaps the `cons`; taken last, it
+  delays the next round's tests. The JIT's order is the better one, so the lowerer was not changed. Other CPUs may
+  differ, and a loop whose arguments make a call between them was not measured.
 - **Dead stores in pattern tests** (2026-11-02, M3 Max). A general "dead after one read" was deferred on
   2026-11-01: slow paths would have to store first, and the collector would not see the value. The narrow form
   skips a store only before a fused test with no slow path after which the slot dies. A/B: list pattern rows 38-46%
@@ -360,8 +368,6 @@ Lowering rules, the collector and the kernel port have their own sections.
 - **A bump-allocated code region, and a flag per cell for `redefine`'s scan** (2026-11-03, M3 Max). SLJIT's
   first-fit allocator held 28-36% of samples when re-evaluating definitions and the scan 8%, in a loop that
   redefines the same names. Either adds code without simplifying anything.
-- **The lowerer computing `(cons (hd X) Acc)` before `(tl X)`** (2026-11-02). Would let `tl X` go straight to X's
-  slot in `reverse`-style loops. Needs the lowerer to know X is a pair for the whole branch. No estimate.
 - **Rotating loops, with the exit test repeated at the back edge** (2026-11-03). Its backward jump must meet the
   body label's state, and in open loops it would pass by the patched jump. No estimate.
 - **Stores of pattern parts used further on** (2026-11-03, M3 Max). What remains of the pattern rows (a nested late
@@ -852,8 +858,6 @@ that. Its readings decided nothing below.
 
 - **Correctly rounded fractions and negative exponents.** They do not overflow, so they read as the kernel reads them, as under Shen/Scheme: `0.3` as `0.30000000000000004`, and `1e-300` as `1.0000000000000022e-300`. Measured on 2026-11-05, 59% of random fractions land on the nearest double, the worst 1 unit
   in the last place off. `shen-jit.decimal` could read them too, at the cost of differing from the kernel and Shen/Scheme.
-- The lowerer computing `(cons (hd X) Acc)` before `(tl X)`, so `tl X` goes straight into X's slot. It needs the
-  lowerer to know X is a pair after its `cons?` test.
 - A dictionary behind `shen.sysfunc?`, 60% of reading code in a package (2026-11-02). It needs a way to tell that the
   278-symbol list changed.
 - The lowerer lowering itself as a gate on every change, after Wirth and Gutknecht's rule that an optimisation must
