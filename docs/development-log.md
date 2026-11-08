@@ -1186,12 +1186,32 @@ alternating processes, each a loop over the case in one process, under a load av
   per extension against 8 calls by hand, which neither defining the classes first nor scanning quoted text by runs
   changed. Kept by Wirth's rule, as extensions are the exceptional case and the frequent one costs nothing, though
   this is the one use outside "within noise" for some inputs: dropping it is reverting one commit.
-- **Helpers before the file's own functions.** A loop's helper is compiled as its grammar is read, before the file's
-  own definitions exist, so a guard calling one of them goes through an arity check rather than a direct call; the
-  rule itself, compiled later, calls directly. Returning `(package null [] ...)` from the macro would splice the
+- **Helpers before the file's own functions.** A loop's helper was compiled as its grammar is read, before the
+  file's own definitions exist, so a guard calling one of them went through `fn`; the rule itself, compiled later,
+  calls directly. Returning `(package null [] ...)` from the macro would splice the
   helpers into the file as ordinary definitions, compiled in order, and works for files, but `-e` and the REPL
-  evaluate only the first form a splice gives, which would drop the rule itself. Rejected; the token loop above
-  includes the check.
+  evaluate only the first form a splice gives, which would drop the rule itself. Rejected.
+- **Loops compiled at their first call, kept.** `eval` curries a call to a function not defined yet, and a file's
+  definitions get their arities only once the whole file is read, after the macro has run, so a loop called a guard
+  written in its own file through `fn`, which also kept it from being inlined. A loop is now a stub that compiles the loop at its first call. JSON numbers below went from 70 to 65 µs,
+  a chunk extension from 210 to 200 ns, and the request line to 928 ns against 925 by hand, and 3,725 against
+  3,738, eight rounds. A loop saved in an image before its first call compiles in the loaded image.
+- **Fail evaluated only on failure, kept.** The parse forms tested the result in a function and so evaluated their
+  Fail argument on every call: a lambda, as the HTTP request line passes, was made each time. The test is now in
+  the expansion.
+- **JSON scalars, rejected.** Numbers as `json.<number>`, optional minus, a required integer, an optional fraction
+  and exponent with required digits, in 8 lines against 23, and literals as `"null" := null; "true" := true; "false"
+  := false;`, under the arrays, objects and strings written by hand, which carry the depth limit, which a rule cannot
+  take as an argument. 200 objects of six members took 141 to 150 µs against 137 to 139, 1,000 numbers 65 to 67
+  against 56 to 57, and 900 literals 35 to 37 against 41 to 42, four rounds, with the loops above. Each number pays for
+  a parse state and four or five rule calls where the scanner makes two or three. Literals gain from comparing bytes
+  where `json.scan-literal` takes the text apart with `pos` and `tlstr`, which the scanner could do by hand; three
+  lines saved would not pay for making every JSON user load `lib/grammar.shen`.
+- **Binary frame headers, rejected.** `(u16-be Tag) (u32-be N) := [Tag N]` read the header 4.4 times as fast as
+  `frame.uint`, 22.5 ns against 100, five rounds of a million. But it saves one line, and the gain comes from reading
+  the bytes after one check of the view, where `frame.uint` makes six checked `buffer.u8` calls, which it could avoid
+  by hand. Not worth making every framing user load `lib/grammar.shen`. `tools/buffer-parsers.shen` was left as it is:
+  it shows the cursor API, and its payload's length is counted by its header, which a rule cannot take as an argument.
 
 ### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
 

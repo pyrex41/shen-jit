@@ -18,10 +18,12 @@
   -> (address-> (absvector 3) 0 skip))
 
 (define grammar.result
-  P S At End Fail -> (cases (= P End) (<-address S 0)
-                            (= P -2) (Fail (<-address S 1) (<-address S 2))
-                            (= P -1) (Fail At "no match")
-                            true (Fail P "trailing input")))
+  P S At End Fail -> (if (= P End) (<-address S 0) (grammar.failed P S At Fail)))
+
+(define grammar.failed
+  P S At Fail -> (cases (= P -2) (Fail (<-address S 1) (<-address S 2))
+                        (= P -1) (Fail At "no match")
+                        true (Fail P "trailing input")))
 
 \\ The view is checked once, then read as cursor.shen reads it: owner, start, end in slots 1 to 3.
 (define grammar.parse
@@ -335,7 +337,10 @@
       (let Byte [shen-jit.u8 (grammar.buf C) (grammar.pos [Var Off])]
         (if (= Acc 0) Byte [+ [shen-jit.shift-left Acc 8] Byte]))))
 
-\\ (* X) as a function of its own: it stops where X no longer matches, or matches nothing.
+\\ (* X) as a function of its own: it stops where X no longer matches, or matches nothing. The
+\\ macro runs as its file is read, before the file's own functions exist, and a definition
+\\ compiled then would call them through fn; so it defines a stub, and the stub compiles the loop
+\\ at its first call.
 (define grammar.loop
   [Name Buf End S Count Values] X ->
     (let N (+ (<-address Count 0) 1)
@@ -345,9 +350,13 @@
          At (gensym (protect At))
          P (gensym (protect P))
          Body (grammar.seq [Name Buf End S Count []] [X] [At 0] -1 (function grammar.pos))
-         _ (eval [define H Buf At End S ->
-                   [let P Body [if [> P At] [H Buf P End S] [if [= P -2] P At]]]])
+         _ (put H grammar.loop [define H Buf At End S ->
+                                 [let P Body [if [> P At] [H Buf P End S] [if [= P -2] P At]]]])
+         _ (eval [define H Buf At End S -> [grammar.compile H Buf At End S]])
       H))
+
+(define grammar.compile
+  H Buf At End S -> (do (eval (get H grammar.loop)) ((fn H) Buf At End S)))
 
 (defmacro grammar.macro
   [defgrammar Name | Body] -> (grammar.define Name Body) where (grammar.nonterminal? Name)
@@ -357,12 +366,17 @@
   [grammar.parse-range Rule Buffer At End Fail] -> (grammar.range-form Rule Buffer At End Fail)
     where (grammar.nonterminal? Rule))
 
-\\ With the rule named, a parse calls it directly.
+\\ With the rule named, a parse calls it directly, and Fail is evaluated only when it fails.
 (define grammar.parse-form
   Rule View Fail ->
     (let V (gensym (protect V)) S (gensym (protect S)) At (gensym (protect At)) End (gensym (protect End))
       [let V [buffer.check View] S [grammar.state] At [<-address V 2] End [<-address V 3]
-        [grammar.result [Rule [<-address V 1] At End S] S At End Fail]]))
+        (grammar.finish [Rule [<-address V 1] At End S] S At End Fail)]))
+
+(define grammar.finish
+  Call S At End Fail ->
+    (let P (gensym (protect P))
+      [let P Call [if [= P End] [<-address S 0] [grammar.failed P S At Fail]]]))
 
 (define grammar.match-form
   Rule View ->
@@ -374,4 +388,4 @@
   Rule Buffer At End Fail ->
     (let B (gensym (protect B)) A (gensym (protect A)) E (gensym (protect E)) S (gensym (protect S))
       [let B Buffer A At E End S [grammar.state]
-        [grammar.result [Rule B A E S] S A E Fail]]))
+        (grammar.finish [Rule B A E S] S A E Fail)]))

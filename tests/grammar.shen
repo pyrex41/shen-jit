@@ -47,6 +47,10 @@
 (defgrammar <g.upper> B where (and (>= B 65) (<= B 90));)
 (defgrammar <g.late> (+ <g.upper>) := late;)
 (defgrammar <g.capture> B <g.upper> := B;)
+(defgrammar <g.vowel> B where (grammar-test.vowel? B);)
+(defgrammar <g.vowels> (+ <g.vowel>);)
+(define grammar-test.vowel?
+  B -> (element? B [97 101 105 111 117]))
 
 (grammar-test.check "digits match" true (freeze (grammar.match? <g.digits> (grammar-test.view "2026"))))
 (grammar-test.check "+ needs one" false (freeze (grammar.match? <g.digits> (grammar-test.view ""))))
@@ -130,6 +134,8 @@
   (freeze (grammar.match? <g.late> (grammar-test.view "Ab"))))
 (grammar-test.check "a class's variable does not capture the rule's" 98
   (freeze (grammar.parse <g.capture> (grammar-test.view "bC") (function grammar-test.fail))))
+(grammar-test.check "a loop over a function its file defines later" [true false]
+  (freeze [(grammar.match? <g.vowels> (grammar-test.view "aeiou")) (grammar.match? <g.vowels> (grammar-test.view "aex"))]))
 (grammar-test.raises "not a view" (freeze (grammar.parse <g.digits> "42" (function grammar-test.fail))))
 
 (define grammar-test.fill
