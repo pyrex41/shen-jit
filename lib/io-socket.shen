@@ -45,59 +45,39 @@
 
 (define io.socket-wait
   Token Name Policy Event Op ->
-    (io.socket-wait-ready Token Name Policy Event Op (io.socket-budget Policy Op Name)))
-
-(define io.socket-wait-ready
-  _ _ _ _ _ [error Error] -> [error Error]
-  Token Name Policy Event Op [ok] ->
-    (let Slice (io.socket-slice Policy)
-      (if (= Slice 0)
-          [error (io.native-error Op timeout 0 Name "deadline expired")]
-          (let Ready (socket.c-poll (socket.pollfd (io.socket-id Token) Event) 1 Slice)
-               Code (if (< Ready 0) (io.socket-code) 0)
-            (cond ((> Ready 0) (io.socket-budget Policy Op Name))
-                  ((or (= Ready 0) (io.socket-again? Code))
-                    (io.socket-wait Token Name Policy Event Op))
-                  (true [error (io.socket-error poll Name Code)]))))))
+    (io.let-ok _ (io.socket-budget Policy Op Name)
+      (let Slice (io.socket-slice Policy)
+        (if (= Slice 0)
+            [error (io.native-error Op timeout 0 Name "deadline expired")]
+            (let Ready (socket.c-poll (socket.pollfd (io.socket-id Token) Event) 1 Slice)
+                 Code (if (< Ready 0) (io.socket-code) 0)
+              (cond ((> Ready 0) (io.socket-budget Policy Op Name))
+                    ((or (= Ready 0) (io.socket-again? Code))
+                      (io.socket-wait Token Name Policy Event Op))
+                    (true [error (io.socket-error poll Name Code)])))))))
 
 (define io.socket-read
   Token Name Policy Chunk ->
-    (io.socket-read-ready Token Name Policy Chunk (io.socket-budget Policy read Name)))
-
-(define io.socket-read-ready
-  _ _ _ _ [error Error] -> [error Error]
-  Token Name Policy Chunk [ok] ->
-    (let N (socket.c-recv (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) 0)
-         Code (if (< N 0) (io.socket-code) 0)
-      (cond ((> N 0) [read N])
-            ((= N 0) [eof])
-            ((io.socket-again? Code)
-              (io.socket-read-after-wait Token Name Policy Chunk
-                (io.socket-wait Token Name Policy (socket.readable-event) read)))
-            (true [error (io.socket-error read Name Code)]))))
-
-(define io.socket-read-after-wait
-  _ _ _ _ [error Error] -> [error Error]
-  Token Name Policy Chunk [ok] -> (io.socket-read Token Name Policy Chunk))
+    (io.let-ok _ (io.socket-budget Policy read Name)
+      (let N (socket.c-recv (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) 0)
+           Code (if (< N 0) (io.socket-code) 0)
+        (cond ((> N 0) [read N])
+              ((= N 0) [eof])
+              ((io.socket-again? Code)
+                (io.let-ok _ (io.socket-wait Token Name Policy (socket.readable-event) read)
+                  (io.socket-read Token Name Policy Chunk)))
+              (true [error (io.socket-error read Name Code)])))))
 
 (define io.socket-write
   Token Name Policy Chunk ->
-    (io.socket-write-ready Token Name Policy Chunk (io.socket-budget Policy write Name)))
-
-(define io.socket-write-ready
-  _ _ _ _ [error Error] -> [error Error]
-  Token Name Policy Chunk [ok] ->
-    (let N (socket.c-send (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) (socket.send-flags))
-         Code (if (< N 0) (io.socket-code) 0)
-      (cond ((>= N 0) [written N])
-            ((io.socket-again? Code)
-              (io.socket-write-after-wait Token Name Policy Chunk
-                (io.socket-wait Token Name Policy (socket.writable-event) write)))
-            (true [error (io.socket-error write Name Code)]))))
-
-(define io.socket-write-after-wait
-  _ _ _ _ [error Error] -> [error Error]
-  Token Name Policy Chunk [ok] -> (io.socket-write Token Name Policy Chunk))
+    (io.let-ok _ (io.socket-budget Policy write Name)
+      (let N (socket.c-send (io.socket-id Token) Chunk (shen-jit.bytes-length Chunk) (socket.send-flags))
+           Code (if (< N 0) (io.socket-code) 0)
+        (cond ((>= N 0) [written N])
+              ((io.socket-again? Code)
+                (io.let-ok _ (io.socket-wait Token Name Policy (socket.writable-event) write)
+                  (io.socket-write Token Name Policy Chunk)))
+              (true [error (io.socket-error write Name Code)])))))
 
 (define io.socket-close
   Token Name ->

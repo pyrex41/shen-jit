@@ -1129,6 +1129,216 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Grammars over byte views (2026-11-08, M3 Max, macOS arm64, against the scanner written by hand)
+
+The parsers in `lib/` are loops over a buffer, a position and an end: fast, but long. `defcc` reads like the
+grammar it implements, but it reads lists with `hd` and `tl`, and each step allocates the pair of the remaining
+input and a value. **Rejected before building:** turning a span into a list of bytes and running `defcc`, and kernel
+hooks for other kinds of input, which would change every port and still allocate at each step.
+
+- **Built:** `lib/grammar.shen`, a macro, `defgrammar`, with `defcc`'s notation where the meaning is the same. Each
+  rule becomes a `define` over the buffer, a position, the end and a parse state, returning a position or -1. 253 lines
+  of code, no change to the runtime or the kernel.
+- **Values** go through the state, not the return: a rule with `:=` stores its value, and its caller reads it only
+  if it names the rule. Returning a pair, as `defcc` does, would allocate at every step of a scan.
+- **Errors** are `(require Items... Message)`, a cut with a reason: -2 and a message in the state, which alternatives
+  and loops pass up. A clean match pays nothing for it, and no handler is installed. A furthest-failure report, as
+  PEG tools give, was left out: it would store on every failed alternative, the most frequent path.
+- **Input ended and invalid are not told apart:** every client frames a complete unit first.
+- **Repetitions take one item:** the kernel's macros rewrite `(* A B C)` into `(* A (* B C))` before a later macro
+  sees it, so `(*` and `(+` with several items would change meaning silently. They are refused instead.
+- **Arity at read time.** A file is read whole before any of it runs, so a loop's helper, compiled while the
+  grammar is read, called the rules it names, and itself, curried. The macro now stores arity 4 for every rule it
+  names, as `define-native` does for its own names, and the calls are direct.
+- **Speed.** A loop over a byte class, `(+ <tchar>)`, against `http.token-range?`, five alternating rounds in
+  one process, load average 2.7 to 2.9 from other work: 210 bytes take 1,080 to 1,100 ns either way, and
+  21 bytes 114 to 116 ns against 106 to 111. The difference is the state record each parse allocates. A first entry
+  point read the view with `buffer.owner`, `buffer.offset` and `buffer.end`, a check each, and cost 24 ns more per
+  parse; it now checks the view once, as `cursor.shen` does.
+
+### Grammars in the libraries (2026-11-08, M3 Max, macOS arm64, against the scanners written by hand)
+
+Each use was kept only if it was clearly shorter and clearer, its speed within noise of the code it replaced, and the
+suites of that library passed unchanged. Times are old and new library files loaded by the same executable, in
+alternating processes, each a loop over the case in one process, under a load average of 2.3 to 4 from other work.
+`make bench-independent` runs workloads that load none of these libraries, so it cannot move with them: run once on
+the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, extensions 25, the standard library
+67, the contract examples 14 and THORN 231, 198, 192 and 250, as the row of 2026-11-06 below.
+
+- **HTTP request line, kept.** `http.<request-line>` reads as RFC 9112 does, method, target and version, with
+  CONNECT's authority and OPTIONS' `*` as alternatives, and 20 lines of code replace 33. Ten alternating rounds of
+  `http.parse-request`: a three-field head 904 ns (893 to 943) by hand against 916 (909 to 929), and a browser's
+  eleven-field head 3,648 (3,600 to 3,716) against 3,642 (3,584 to 3,687). It needs `lib/grammar.shen` loaded first.
+  `grammar.parse-range` was added for it, to parse a range the library has already checked without making a view.
+- **HTTP fields, rejected.** `http.<field>`, a token, a colon, and a value without its outer whitespace, was 14
+  lines against 9, and slower: with the request line, 880 ns against 1,060 for the small head and 3,560 against 5,400
+  for the browser's, five rounds. A grammar walks every byte of a value to find where it ends, at about 5 ns a byte,
+  while `http.field` reads only the whitespace at either end, since `http.line-end` has checked the bytes between.
+  Tried again with byte tables and rules compiled in place, below: 924 ns (908 to 943) against 904 (873 to 919) for the
+  small head, and 4,033 (3,967 to 4,075) against 3,682 (3,602 to 3,809) for the browser's, six rounds. A byte of a value
+  now costs about a nanosecond, but the hand-written code reads none of them. Still rejected.
+- **Byte classes in place, kept.** A rule that is only `B where Guard` is now tested where a rule read after it
+  names it, instead of called: `(+ <tchar>)` is one loop with no call per byte. The token loop above went from
+  equal to faster than `http.token-range?`: 21 bytes 107 to 110 ns against 113 to 115, and 210 bytes 1,068 to 1,080
+  against 1,153 to 1,164, five rounds. The request line stayed where it was, 920 ns (905 to 961) against 905 (889 to
+  917) and 3,661 against 3,666, eight rounds: its parts are short.
+- **Chunk extensions, kept on the frequent case.** `http.<chunk-extensions>`, `;` and a name, perhaps `=` and a token
+  or a quoted string, with optional whitespace, in 13 lines, replaces `http.chunk-extensions`, `http.chunk-quoted` and
+  `http.token-end`, 37. The chunk size stays by hand, as its overflow check needs the body limit. A size line with no
+  extension, nearly every one, never reaches the grammar: 60 to 64 ns either way, and a body of 50 such chunks 56 to
+  59 µs either way, six rounds. **A line with an extension is slower:** `1fa0;name="value"` takes 210 to 214 ns
+  against 130 to 136, and a body with one on each of its 50 chunks 66 to 68 µs against 62 to 63. About 25 rule calls
+  per extension against 8 calls by hand, which neither defining the classes first nor scanning quoted text by runs
+  changed. Kept by Wirth's rule, as extensions are the exceptional case and the frequent one costs nothing, though
+  this is the one use outside "within noise" for some inputs: dropping it is reverting one commit.
+- **Helpers before the file's own functions.** A loop's helper was compiled as its grammar is read, before the
+  file's own definitions exist, so a guard calling one of them went through `fn`; the rule itself, compiled later,
+  calls directly. Returning `(package null [] ...)` from the macro would splice the
+  helpers into the file as ordinary definitions, compiled in order, and works for files, but `-e` and the REPL
+  evaluate only the first form a splice gives, which would drop the rule itself. Rejected.
+- **Loops compiled at their first call, kept.** `eval` curries a call to a function not defined yet, and a file's
+  definitions get their arities only once the whole file is read, after the macro has run, so a loop called a guard
+  written in its own file through `fn`, which also kept it from being inlined. A loop is now a stub that compiles the loop at its first call. JSON numbers below went from 70 to 65 µs,
+  a chunk extension from 210 to 200 ns, and the request line to 928 ns against 925 by hand, and 3,725 against
+  3,738, eight rounds. A loop saved in an image before its first call compiles in the loaded image.
+- **Fail evaluated only on failure, kept.** The parse forms tested the result in a function and so evaluated their
+  Fail argument on every call: a lambda, as the HTTP request line passes, was made each time. The test is now in
+  the expansion.
+- **JSON scalars, rejected.** Numbers as `json.<number>`, optional minus, a required integer, an optional fraction
+  and exponent with required digits, in 8 lines against 23, and literals as `"null" := null; "true" := true; "false"
+  := false;`, under the arrays, objects and strings written by hand, which carry the depth limit, which a rule cannot
+  take as an argument. 200 objects of six members took 141 to 150 µs against 137 to 139, 1,000 numbers 65 to 67
+  against 56 to 57, and 900 literals 35 to 37 against 41 to 42, four rounds, with the loops above. Each number pays for
+  a parse state and four or five rule calls where the scanner makes two or three. Literals gain from comparing bytes
+  where `json.scan-literal` takes the text apart with `pos` and `tlstr`, which the scanner could do by hand; three
+  lines saved would not pay for making every JSON user load `lib/grammar.shen`.
+- **Binary frame headers, rejected.** `(u16-be Tag) (u32-be N) := [Tag N]` read the header 4.4 times as fast as
+  `frame.uint`, 22.5 ns against 100, five rounds of a million. But it saves one line, and the gain comes from reading
+  the bytes after one check of the view, where `frame.uint` makes six checked `buffer.u8` calls, which it could avoid
+  by hand. Not worth making every framing user load `lib/grammar.shen`. `tools/buffer-parsers.shen` was left as it is:
+  it shows the cursor API, and its payload's length is counted by its header, which a rule cannot take as an argument.
+- **What those two rejections showed, done by hand, kept.** `json.scan-literal` compares bytes with a list of the
+  literal's bytes, where it took the text apart with `pos`, `tlstr` and `string->n` at each byte: 900 literals 31.5
+  to 32.0 µs against 39.4 to 40.0, and 200 objects 130 to 134 against 133 to 135, five rounds. `frame.next` keeps the
+  raw bytes of the header it makes, and `frame.uint` reads them without a view to check at each byte: reading 100
+  frames of 18 bytes from memory, 499 to 509 ns a frame against 595 to 600, five rounds.
+- **A parse state passed in, rejected.** A caller that parses often could make one state and pass it to each
+  parse, and a new state need not fill its first slot. Neither shows: a 21-byte token took 98 to 99 ns with a new
+  state or one passed in, and 99 to 102 with the fill, four rounds. The state is a bump allocation of four words.
+- **Small rules compiled in place, kept.** A rule of at most 12 items that does not name itself is compiled into the
+  rules read after it, up to three deep, instead of called, and a loop over a byte class tests its first byte in
+  place and is called only when it matches, as optional whitespace usually does not. 31 lines. Five rounds each: a
+  chunk extension 182 to 187 ns, from 196 to 203, against 131 to 138 by hand; the token loop 102 to 107 ns against 116
+  to 117 for 21 bytes, and 993 to 1,011 against 1,168 to 1,192 for 210; the request line level, 913 ns against 911,
+  and 3,678 against 3,680. The rejected JSON numbers, remeasured: 58.2 to 58.9 µs against 57.0 to 58.0, where they
+  were 17% slower, and 200 objects 139 to 140 against 136 to 139. Still left by hand, as a grammar would make every JSON
+  user load `lib/grammar.shen` and need an entry point for a match of a prefix. What remains of the chunk extension's
+  cost is its shape: nested optional parts and a recursive rule for quoted text.
+- **Byte tables for classes in loops, kept.** By a loop's first call, the functions its classes' guards call exist,
+  so it evaluates each guard for all 256 bytes and tests a table of them, embedded in its code. A guard that raises
+  stays a test. 15 lines. The token loop, whose guard searches a list for punctuation: 21 bytes 54 to 56 ns against
+  113 to 116 by hand, and 210 bytes 429 to 433 against 1,152 to 1,181, five rounds. A chunk extension 139 to 142 ns
+  against 130 to 131, and a body with one on each of 50 chunks 62.4 to 63.1 µs against 62.0 to 63.3, four rounds:
+  level, where it was 7% slower. Counter names, long, 106 to 108 ns against 116 to 118 before tables. A table cached
+  per class would go stale when the class is defined again; each loop makes its own, 256 bytes, once.
+- **Rules with parameters, kept.** `(defgrammar (<rule> P...) ...)`, called as the item `(<rule> Arguments...)` or
+  from an entry point, as `(grammar.parse (<list> 0) View Fail)`: what a JSON grammar needs for its depth limit, or a
+  quoted string for the quote it began with. A rule compiled in place has its parameters renamed and bound to the
+  arguments, which are evaluated first, and a loop's helper now takes the bound variables its body uses, which also
+  lets a loop's item use a value matched before it. A rule with parameters is not a byte class. 65 lines, which bring
+  the macro to 389. Nothing that does not use them changed: the grammar and HTTP suites pass as they were.
+- **JSON as a grammar, with parameters, kept.** `json.<value>` takes the depth and its limit, `json.<members>` the
+  dictionary of keys seen; arrays and objects are recursive rules, which ten million frames deep showed safe for any
+  input under the byte limit. A string without escapes is its own text, `(text json.<raw>)`; one with escapes is
+  checked by the grammar and decoded by the scanner's decoder, which now copies the runs between escapes. The escape
+  decoder and the UTF-8 width the encoder uses stay by hand. The part the grammar replaced, 97 lines of code, is 68;
+  the decoder as a whole 177 to 163. Four alternating rounds, against the scanner of the commit before, in µs:
+
+  | Document | By hand | Grammar |
+  | --- | ---: | ---: |
+  | 1,000 numbers | 58 to 59 | 49 to 51 |
+  | 200 objects of six members | 139 to 143 | 83 to 85 |
+  | 900 literals | 34.6 to 35.1 | 20.4 to 21.7 |
+  | 500 ASCII strings | 193 to 195 | 46 to 48 |
+  | 500 UTF-8 strings | 186 to 190 | 81 to 82 |
+  | 500 strings with escapes | 174 to 177 | 163 to 168 |
+
+  Part of this is the shape the grammar made easy, which the scanner could take by hand: strings without escapes
+  copied whole, and runs copied between escapes; before the second, strings with escapes took 228 to 230. Byte tables
+  and rules compiled in place do the rest. The JSON suites and both 256-case oracles pass unchanged, and 6,000 mutated
+  inputs from two seeds, decoded both ways, were accepted alike with equal values. Of the 3,591 rejections, 3.9% name
+  a different problem, as the grammar checks escapes before the decoder pairs surrogates, and 9.5% another offset,
+  as a require reports where it began: after a bracket for the nesting limit, after a key for a duplicate. Every JSON
+  user now loads `lib/grammar.shen` first, which earlier tipped the scalars alone towards rejection.
+- **Counter names in the SQLite example, kept.** `counter-app.<counter>`, `/counters/` and a name of letters,
+  digits, `-` and `_`, in 4 lines with its caller, replaces 17. Five rounds of a million calls: `/counters/hits` 49
+  to 52 ns against 51 to 53, a 25-byte name 98 to 99 against 148 to 150, `/counters/a/b` 44 to 46 against 34 to 36,
+  and `/health` 22 against 14 to 15, as each parse makes a state. A first version made a view of the target and took
+  78 ns for `/counters/hits` and 50 for `/health`; it parses the string's bytes as a range now. The difference on
+  other targets is under 1% of a request, which every request pays once.
+
+### Streaming input: framing against restarting (2026-11-08, M3 Max, macOS arm64)
+
+Before building a parser that can stop at the end of its input and resume, three ways to parse a value that arrives
+in pieces were to be compared: frame it, then parse it complete; parse all that has arrived after each piece, until
+it parses; or suspend and resume. The first two were timed with `tests/bench/json-streaming.shen`, the JSON grammar
+and the scanner it replaced, under a load average of 2.5 to 3.8. The third does not exist, and nothing here asks for it.
+
+| `["a…"]` of 64 KiB, chunks of | Restart: attempts | Bytes decoded | Scanner | Grammar | Frame, then decode |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 4,096 bytes | 17 | 0.6 M | 3.1 ms | 3.1 ms | 0.9 ms |
+| 256 | 257 | 8.5 M | 33 ms | 33 ms | 0.9 ms |
+| 16 | 4,097 | 134 M | 502 ms | 510 ms | 1.0 ms |
+| 1 | 65,540 | 2,148 M | 8,040 ms | 8,104 ms | 3.3 ms |
+
+- **Restarting is quadratic,** as expected: a 64 KiB value sent a byte at a time costs 8 s and 2 G bytes of scanning,
+  which a client can choose to cause. Framing, a newline here, scans each byte once and decodes once. A 2.9 KB
+  document of objects in 16-byte chunks took 4 ms by restarting against 1.2 by framing.
+- **Restarting needs "input ended" told from "invalid".** The scanner reports "unexpected end" whenever it reads past
+  the end. The grammar reports a require where it began, so a literal cut after `t`, or a `\u` escape cut after two
+  digits, reads as invalid, and the restart gave up on the 2.9 KB document fed a byte at a time. A grammar would need
+  the furthest position it read to tell them apart, a store on every read.
+- **A capture is built where it matches,** before what follows it is checked: each failed attempt built the text of
+  the unfinished string, 69 collections against 1 for the scanner, about 2 GB.
+- **Kept: framing, then a complete parse,** which every client here already does: HTTP heads and chunk lines, binary
+  frames and NDJSON. Suspension is left for a long unframed value, which no client has.
+- **Captures built at the end, kept,** as that third finding suggested. A `text` or `span` capture that no later item
+  names is bound at the rule's end, after its guard unless the guard names it, so an alternative that fails after it
+  does not build it. 24 lines, bringing the macro to 413. The restart above made 2 collections instead of 69, and in an
+  ordinary parse a JSON string with escapes no longer builds the text before its first escape, as the first
+  alternative did: 500 such strings 158 to 160 µs against 162 to 164, four rounds; the other documents did not move.
+
+### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
+
+A read of the libraries and the example found code that reads like Scheme or ML: index loops, records reached by slot
+number, and `[ok ...]`/`[error ...]` unpacked by hand. A feature was used only where it made the code shorter, safer
+or faster, starting with the example.
+
+- **Routes as pattern matching, kept.** `counter-app.<resource>` decodes a target into `[health]`, `[counters]`,
+  `[export]`, `[counter Name]` or `[]`, and `counter-app.serve` has one clause for each method on each resource, with
+  HEAD as GET. Routing was spread over `counter-app.route`, `counter-app.counter`, `counter-app.handle` and
+  `counter-app.name`; the API is now one table. 234 lines of code to 231, and a counter's target is decoded once per
+  request where it was decoded twice. Its test now asks `counter-app.resource` for the invalid names.
+- **A result binding, `let-ok`, not applied to the example:** it has no chain of results to bind; its `[ok]` and
+  `[error]` dispatch on what a wait or a cleanup gave, once each. The chains are in the HTTP and I/O libraries.
+- **`io.let-ok` in the libraries, kept** (later the same day). `(io.let-ok X Result ... Body)` binds each X to the value
+  of an `[ok X]` result and returns the first other result as it is. In the socket and file endpoints, the head reader,
+  response output, the connection driver and request bodies, 17 functions existed only to pass `[error Error]` on to
+  the step after; they fold into their callers. 2,233 lines of code to 2,171 across the seven files, with the macro 8 of
+  them. Steps that add progress to an error, or tell `[eof]` apart, keep their functions. Five alternating rounds: a 1
+  KiB response sent to memory 1,436 to 1,456 ns either way, and a chunked body of 50 chunks 56.0 to 57.7 µs against 56.3
+  to 57.0. The I/O and HTTP suites and their wire tests pass unchanged.
+- **A resource scope, `with`, not applied:** `counter-app.with-db` already is one, as a function that takes a lambda,
+  and a macro would add the same cleanup and more code. The export's database lives until its stream closes, which a
+  scope cannot express.
+- **Named record fields, not applied:** the example has one record, the export's four slots, which a comment names.
+  A macro would add more than it removed.
+- **Types for protocol state, not applied:** the order was to add them where a mistake they prevent had been made or
+  nearly made, and neither the log nor the history has one; the libraries refuse a body read twice, a read in
+  flight and a closed connection at run time.
+- **Datalog as a query layer and code from specifications, not applied:** the example has no recursive query, and
+  there is no schema to generate from.
+
 ### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
 
 Compared the existing one-row NDJSON source with a bounded batch producer, using the same executable,

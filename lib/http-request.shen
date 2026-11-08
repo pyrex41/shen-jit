@@ -1,5 +1,5 @@
 \\ Complete HTTP/1.1 request heads and bounded in-memory bodies over our I/O reader.
-\\ Load buffer.shen, io.shen and http-head.shen first. No socket or kernel I/O dependency.
+\\ Load buffer.shen, io.shen, grammar.shen and http-head.shen first. No socket or kernel I/O dependency.
 
 (define http.problem
   Status Message -> [error (io.native-error http-request http Status "HTTP request" Message)])
@@ -76,41 +76,30 @@
            (http.digit? B)
            (element? B [33 36 38 39 40 41 42 43 44 45 46 47 58 59 61 63 64 95 126])))
 
-(define http.target-range?
-  _ At At -> true
-  B At End ->
-    (if (= (shen-jit.u8 B At) 37)
-        (and (< (+ At 2) End)
-             (http.hex? (shen-jit.u8 B (+ At 1)))
-             (http.hex? (shen-jit.u8 B (+ At 2)))
-             (http.target-range? B (+ At 3) End))
-        (and (http.uri-byte? (shen-jit.u8 B At)) (http.target-range? B (+ At 1) End))))
+(defgrammar http.<tchar> B where (http.token-byte? B);)
+(defgrammar http.<token> (+ http.<tchar>);)
+(defgrammar http.<digit> B where (http.digit? B);)
+(defgrammar http.<hex> B where (http.hex? B);)
+(defgrammar http.<pchar> 37 http.<hex> http.<hex>; B where (http.uri-byte? B);)
+(defgrammar http.<origin> 47 (* http.<pchar>);)
+(defgrammar http.<not-space> B where (not (= B 32));)
+(defgrammar http.<authority> (+ http.<not-space>);)
+(defgrammar http.<version> "HTTP/" http.<digit> "." http.<digit>;)
+
+\\ The method decides the target: CONNECT names an authority, and OPTIONS may name the server.
+(defgrammar http.<request-line>
+  "CONNECT " (text http.<authority>) " " (text http.<version>) := ["CONNECT" http.<authority> http.<version>];
+  "OPTIONS * " (text http.<version>) := ["OPTIONS" "*" http.<version>];
+  (text http.<token>) (require " " "invalid request line")
+    (require (text http.<origin>) " " "unsupported or invalid request target")
+    (require (text http.<version>) "invalid HTTP version") := [http.<token> http.<origin> http.<version>];)
 
 (define http.request-line
   B At End ->
-    (let _ (if (<= (- End At) 8192) true (http.invalid "request line too long"))
-         First (http.find-byte B At End 32)
-         Second (http.find-byte B (+ First 1) End 32)
-         _ (if (and (> First At) (< First End) (> Second (+ First 1)) (< Second End))
-               true (http.invalid "invalid request line"))
-         _ (if (http.token-range? B At First) true (http.invalid "invalid method"))
-         Method (http.text B At First)
-         Target (http.text B (+ First 1) Second)
-         Version (http.text B (+ Second 1) End)
-         _ (if (= Method "CONNECT")
-               true
-               (if (or (and (= Method "OPTIONS") (= Target "*"))
-                       (and (= (shen-jit.u8 B (+ First 1)) 47)
-                            (http.target-range? B (+ First 1) Second)))
-                   true (http.invalid "unsupported or invalid request target")))
-         V (shen-jit.string->bytes Version)
-         _ (if (and (= (shen-jit.bytes-length V) 8)
-                    (= (http.text V 0 5) "HTTP/")
-                    (http.digit? (shen-jit.u8 V 5))
-                    (= (shen-jit.u8 V 6) 46)
-                    (http.digit? (shen-jit.u8 V 7)))
-               true (http.invalid "invalid HTTP version"))
-      [Method Target Version]))
+    (do (if (<= (- End At) 8192) true (http.invalid "request line too long"))
+        (grammar.parse-range http.<request-line> B At End
+          (/. Position Message (http.invalid (if (element? Message ["no match" "trailing input"])
+                                          "invalid request line" Message))))))
 
 (define http.field
   B At End ->
@@ -439,7 +428,7 @@
       (if (not (empty? Saved))
           Saved
           (do (address-> B 5 true)
-              (let Result (trap-error (http.body-ready B D (http.body-budget B D 0))
+              (let Result (trap-error (io.let-ok _ (http.body-budget B D 0) (http.body-ready B D))
                              (/. X (do (address-> B 5 false)
                                        (address-> B 6 [])
                                        (address-> B 4 (http.problem 400 "body read aborted"))
@@ -447,8 +436,7 @@
                 (do (address-> B 5 false) (address-> B 6 []) (address-> B 4 Result) Result))))))
 
 (define http.body-ready
-  _ _ [error Error] -> [error Error]
-  B D [ok] ->
+  B D ->
     (if (= (<-address B 3) chunked)
         (do (address-> B 6 (buffer.builder (<-address (<-address B 2) 7))) (http.chunk-next B D))
         (let V (buffer.new (<-address B 3))
@@ -458,11 +446,7 @@
   _ _ _ [eof N] ->
     [error (io.progress (io.native-error http-body http 400 "HTTP body" "incomplete request body") N)]
   _ _ _ [error Error N] -> [error (io.progress Error N)]
-  B D V [ok N] -> (http.body-complete B V (http.body-budget B D N)))
-
-(define http.body-complete
-  _ _ [error Error] -> [error Error]
-  B V [ok] -> [ok (http.complete-request (<-address B 2) V)])
+  B D V [ok N] -> (io.let-ok _ (http.body-budget B D N) [ok (http.complete-request (<-address B 2) V)]))
 
 (declare http.parse-request [buffer.view --> [number --> [io.result http.request]]])
 (declare http.method [http.request --> string])
@@ -514,28 +498,20 @@
   B [error Error] -> (http.chunk-error B (io.error-code Error) (io.error-message Error)))
 
 (define http.chunk-next
-  B D -> (http.chunk-next-ready B D (http.body-budget B D (<-address B 7))))
-
-(define http.chunk-next-ready
-  _ _ [error Error] -> [error Error]
-  B D [ok] ->
-    (if (>= (<-address B 9) (<-address (<-address B 10) 4))
-        (http.chunk-error B 413 "chunk count exceeds limit")
-        (do (address-> B 9 (+ 1 (<-address B 9)))
-            (http.chunk-size-line B D (http.chunk-line B D)))))
-
-(define http.chunk-size-line
-  _ _ [error Error] -> [error Error]
-  B D [ok V] ->
-    (let Size (trap-error [ok (http.chunk-size V (- (<-address (<-address B 2) 7) (<-address B 7)))]
-                 (/. X (http.chunk-syntax B X)))
-      (http.chunk-sized B D Size)))
+  B D ->
+    (io.let-ok _ (http.body-budget B D (<-address B 7))
+      (if (>= (<-address B 9) (<-address (<-address B 10) 4))
+          (http.chunk-error B 413 "chunk count exceeds limit")
+          (do (address-> B 9 (+ 1 (<-address B 9)))
+              (io.let-ok V (http.chunk-line B D)
+                N (trap-error [ok (http.chunk-size V (- (<-address (<-address B 2) 7) (<-address B 7)))]
+                    (/. X (http.chunk-syntax B X)))
+                (http.chunk-sized B D N))))))
 
 (define http.chunk-sized
-  _ _ [error Error] -> [error Error]
-  B D [ok too-large] -> (http.chunk-error B 413 "request body exceeds limit")
-  B D [ok 0] -> (http.chunk-trailers B D 0 0 [])
-  B D [ok N] ->
+  B D too-large -> (http.chunk-error B 413 "request body exceeds limit")
+  B D 0 -> (http.chunk-trailers B D 0 0 [])
+  B D N ->
     (if (= (http.method (<-address B 2)) "TRACE")
         (http.chunk-error B 400 "TRACE cannot have a body")
         (let V (buffer.new N)
@@ -548,15 +524,11 @@
   B D V [ok N] ->
     (do (buffer.append! (<-address B 6) V)
         (address-> B 7 (+ (<-address B 7) N))
-        (http.chunk-end-ready B D (http.body-budget B D (<-address B 7)))))
-
-(define http.chunk-end-ready
-  _ _ [error Error] -> [error Error]
-  B D [ok] ->
-    (if (> 2 (- (<-address (<-address B 10) 1) (<-address B 8)))
-        (http.chunk-error B 413 "chunk metadata exceeds limit")
-        (let End (buffer.new 2)
-          (http.chunk-end B D End (io.reader-exact (<-address B 1) End)))))
+        (io.let-ok _ (http.body-budget B D (<-address B 7))
+          (if (> 2 (- (<-address (<-address B 10) 1) (<-address B 8)))
+              (http.chunk-error B 413 "chunk metadata exceeds limit")
+              (let End (buffer.new 2)
+                (http.chunk-end B D End (io.reader-exact (<-address B 1) End)))))))
 
 (define http.chunk-end
   B _ _ [eof _] -> (http.chunk-error B 400 "incomplete chunk delimiter")
@@ -573,16 +545,12 @@
 
 (define http.chunk-line-more
   B D Out CR ->
-    (http.chunk-line-budget B D Out CR (http.body-budget B D (<-address B 7))))
-
-(define http.chunk-line-budget
-  _ _ _ _ [error Error] -> [error Error]
-  B D Out CR [ok] ->
-    (let Left (io.min (- (+ 2 (<-address (<-address B 10) 0)) (buffer.builder-length Out))
-                     (- (<-address (<-address B 10) 1) (<-address B 8)))
-      (if (= Left 0)
-          (http.chunk-error B 413 "chunk metadata exceeds limit")
-          (http.chunk-line-input B D Out CR (io.peek-up-to (<-address B 1) (io.min Left 64))))))
+    (io.let-ok _ (http.body-budget B D (<-address B 7))
+      (let Left (io.min (- (+ 2 (<-address (<-address B 10) 0)) (buffer.builder-length Out))
+                       (- (<-address (<-address B 10) 1) (<-address B 8)))
+        (if (= Left 0)
+            (http.chunk-error B 413 "chunk metadata exceeds limit")
+            (http.chunk-line-input B D Out CR (io.peek-up-to (<-address B 1) (io.min Left 64)))))))
 
 (define http.chunk-line-input
   B _ _ _ [eof] -> (http.chunk-error B 400 "incomplete chunked body line")
@@ -613,11 +581,7 @@
   B D Out V [done End] ->
     (let _ (http.chunk-line-copy B Out V (- End (buffer.offset V)))
          Line (buffer.finish Out)
-      (http.chunk-line-finished Line (http.body-budget B D (<-address B 7)))))
-
-(define http.chunk-line-finished
-  _ [error Error] -> [error Error]
-  V [ok] -> [ok (buffer.slice V 0 (- (buffer.length V) 2))])
+      (io.let-ok _ (http.body-budget B D (<-address B 7)) [ok (buffer.slice Line 0 (- (buffer.length Line) 2))])))
 
 (define http.chunk-hex-end
   Data At End ->
@@ -634,7 +598,11 @@
          End (buffer.end V)
          Stop (http.chunk-hex-end Data Start End)
          _ (if (> Stop Start) true (http.invalid "empty or invalid chunk size"))
-         _ (http.chunk-extensions Data Stop End)
+         _ (if (= Stop End)
+               true
+               (grammar.parse-range http.<chunk-extensions> Data Stop End
+                 (/. Position Message
+                   (http.invalid (if (= Message "trailing input") "invalid chunk extension separator" Message)))))
       (http.chunk-hex Data Start Stop 0 (shen-jit.shift-right Limit 4) (shen-jit.bit-and Limit 15))))
 
 (define http.chunk-hex
@@ -645,53 +613,29 @@
           too-large
           (http.chunk-hex Data (+ At 1) End (+ (* N 16) Digit) Tens Last))))
 
-(define http.token-end
-  Data At End ->
-    (if (and (< At End) (http.token-byte? (shen-jit.u8 Data At)))
-        (http.token-end Data (+ At 1) End) At))
+(define http.text-byte?
+  B -> (or (= B 9) (and (>= B 32) (not (= B 127)))))
 
-(define http.chunk-extensions
-  _ At At -> true
-  Data At End ->
-    (let Semi (http.trim-start Data At End)
-         _ (if (and (< Semi End) (= (shen-jit.u8 Data Semi) 59))
-               true (http.invalid "invalid chunk extension separator"))
-         Start (http.trim-start Data (+ Semi 1) End)
-         NameEnd (http.token-end Data Start End)
-         _ (if (> NameEnd Start) true (http.invalid "invalid chunk extension name"))
-         Equal (http.trim-start Data NameEnd End)
-      (if (and (< Equal End) (= (shen-jit.u8 Data Equal) 61))
-          (let Value (http.trim-start Data (+ Equal 1) End)
-               _ (if (< Value End) true (http.invalid "missing chunk extension value"))
-               Stop (if (= (shen-jit.u8 Data Value) 34)
-                        (http.chunk-quoted Data (+ Value 1) End)
-                        (http.token-end Data Value End))
-               _ (if (> Stop Value) true (http.invalid "invalid chunk extension value"))
-            (http.chunk-extensions Data Stop End))
-          (http.chunk-extensions Data NameEnd End))))
-
-(define http.chunk-quoted
-  _ At End -> (http.invalid "unterminated chunk extension string") where (>= At End)
-  Data At End ->
-    (let Byte (shen-jit.u8 Data At)
-      (cond ((= Byte 34) (+ At 1))
-            ((= Byte 92)
-              (if (and (< (+ At 1) End)
-                       (let Next (shen-jit.u8 Data (+ At 1))
-                         (or (= Next 9) (and (>= Next 32) (not (= Next 127))))))
-                  (http.chunk-quoted Data (+ At 2) End)
-                  (http.invalid "invalid quoted chunk extension")))
-            ((or (= Byte 9) (and (>= Byte 32) (not (= Byte 127))))
-              (http.chunk-quoted Data (+ At 1) End))
-            (true (http.invalid "invalid quoted chunk extension")))))
+\\ Extensions are named and ignored: ; name, or ; name = token or quoted string, with optional whitespace.
+(defgrammar http.<ws> B where (http.ows? B);)
+(defgrammar http.<ows> (* http.<ws>);)
+(defgrammar http.<text-byte> B where (http.text-byte? B);)
+(defgrammar http.<qdtext> B where (and (http.text-byte? B) (not (= B 34)) (not (= B 92)));)
+(defgrammar http.<quoted> 34 http.<quoted-rest>;)
+(defgrammar http.<quoted-rest>
+  (+ http.<qdtext>) http.<quoted-rest>; 92 http.<text-byte> http.<quoted-rest>;
+  (require 34 "unterminated chunk extension string");)
+(defgrammar http.<chunk-value-text> http.<token>; http.<quoted>;)
+(defgrammar http.<chunk-value>
+  http.<ows> "=" http.<ows> (require http.<chunk-value-text> "invalid chunk extension value");)
+(defgrammar http.<chunk-extension>
+  http.<ows> ";" http.<ows> (require http.<token> "invalid chunk extension name") (? http.<chunk-value>);)
+(defgrammar http.<chunk-extensions> (* http.<chunk-extension>);)
 
 (define http.chunk-trailers
-  B D Bytes Count Acc -> (http.chunk-trailer-line B D Bytes Count Acc (http.chunk-line B D)))
-
-(define http.chunk-trailer-line
-  _ _ _ _ _ [error Error] -> [error Error]
-  B D Bytes Count Acc [ok V] ->
-    (let Total (+ Bytes (buffer.length V) 2)
+  B D Bytes Count Acc ->
+    (io.let-ok V (http.chunk-line B D)
+     (let Total (+ Bytes (buffer.length V) 2)
       (cond ((> Total (<-address (<-address B 10) 2)) (http.chunk-error B 413 "trailers exceed byte limit"))
             ((= (buffer.length V) 0)
               [ok (http.completed-request (<-address B 2) (buffer.finish (<-address B 6)) (reverse Acc))])
@@ -703,11 +647,7 @@
                                      (http.token-list (http.header-values (<-address B 2) "connection")))
                               [ok Pair])
                             (/. X (http.chunk-syntax B X)))
-                (http.chunk-trailer-field B D Total Count Acc Field))))))
-
-(define http.chunk-trailer-field
-  _ _ _ _ _ [error Error] -> [error Error]
-  B D Total Count Acc [ok Field] -> (http.chunk-trailers B D Total (+ Count 1) [Field | Acc]))
+                (io.let-ok Pair Field (http.chunk-trailers B D Total (+ Count 1) [Pair | Acc]))))))))
 
 (datatype http-chunk-options
   N : number;

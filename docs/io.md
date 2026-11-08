@@ -148,6 +148,16 @@ Accumulated errors include progress in their result and error record. For `write
 input; for `flush`, it is delivered output. `read-all` records the consumed prefix. Secondary is a list of
 cleanup errors. Programming errors raise; expected transport failures return structured errors.
 
+`(io.let-ok X Result ... Body)` chains results: it binds each X to the value of an `[ok X]` result, in order, and
+gives Body, or the first result that is not ok, unchanged; `_` takes `[ok]` or `[ok X]` and binds nothing. It is a
+macro, so it applies to files read after `io.shen`:
+
+```shen
+(io.with-input-file "notes.txt"
+  (/. E (io.let-ok Text (io.read-all (io.reader E []) 4096)
+          [ok (buffer.string Text)])))
+```
+
 A scope callback must return `[ok Value]` or `[error Error]`. The scope catches exceptions, closes on
 every exit and returns the same result family. Callback failure stays primary; close/flush failure is
 appended to Secondary. A cleanup failure after callback success becomes the returned error. Repeated

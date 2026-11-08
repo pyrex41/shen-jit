@@ -1,5 +1,5 @@
 \\ Complete-buffer examples over buffer/cursor and the public JSON library.
-\\ Load buffer.shen, cursor.shen and json.shen first.
+\\ Load buffer.shen, cursor.shen, grammar.shen and json.shen first.
 
 (define buffer-example.json
   View -> (json.decode View [[byte-limit (buffer.length View)]]))

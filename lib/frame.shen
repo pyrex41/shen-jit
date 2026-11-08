@@ -25,9 +25,10 @@
     (do (buffer.u8! V (+ Start (- Count 1)) (shen-jit.bit-and N 255))
         (frame.put-uint V Start (- Count 1) (shen-jit.shift-right N 8))))
 
+\\ Over the header's own bytes, which frame.next made: no view to check at each byte.
 (define frame.uint
   _ _ 0 N -> N
-  V At Count N -> (frame.uint V (+ At 1) (- Count 1) (+ (* N 256) (buffer.u8 V At))))
+  B At Count N -> (frame.uint B (+ At 1) (- Count 1) (+ (* N 256) (shen-jit.u8 B At))))
 
 (define frame.encode
   Tag Payload Limit ->
@@ -71,9 +72,9 @@
          Terminal (<-address F 3)
       (if (not (empty? Terminal))
           Terminal
-          (let H (buffer.new 6)
+          (let B (shen-jit.bytes 6)
                _ (address-> F 4 true)
-               Result (trap-error (frame.read-header F H (io.reader-exact (<-address F 1) H))
+               Result (trap-error (frame.read-header F B (io.reader-exact (<-address F 1) (buffer.wrap B)))
                         (/. X (do (address-> F 4 false)
                                   (address-> F 3 (frame.error (error-to-string X) 0))
                                   (simple-error (error-to-string X)))))
@@ -83,9 +84,9 @@
   _ _ [eof 0] -> [eof]
   _ _ [eof N] -> (frame.error "incomplete header" N)
   _ _ [error Error N] -> [error (io.progress Error N)]
-  F H [ok 6] ->
-    (let Tag (frame.uint H 0 2 0)
-         N (frame.uint H 2 4 0)
+  F B [ok 6] ->
+    (let Tag (frame.uint B 0 2 0)
+         N (frame.uint B 2 4 0)
       (if (> N (<-address F 2))
           (frame.error "payload exceeds limit" 6)
           (let Payload (buffer.new N)

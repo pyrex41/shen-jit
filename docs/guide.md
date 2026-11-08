@@ -355,6 +355,12 @@ The optional buffer/cursor libraries provide checked ranges over managed bytes o
 logical equality and mutable positions. [Buffers and cursors](https://github.com/tizoc/shen-jit/blob/main/docs/buffers.md)
 covers loading, the API, ownership, typed clients and the JSON/binary examples.
 
+### Grammars over bytes
+
+The optional `lib/grammar.shen` adds `defgrammar`, Shen-YACC's notation for parsers over byte views, compiled to
+the loops a scanner written by hand would use. [Grammars over bytes](https://github.com/tizoc/shen-jit/blob/main/docs/grammar.md)
+covers the notation, values, errors and how to run one.
+
 ### Chunk I/O
 
 Optional `lib/io.shen` adds bounded readers and writers over byte views, with memory endpoints;
@@ -865,7 +871,7 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-thorn` | THORN, from the kernel, with no time limit: its inference counts and what goes unproved, as on Shen/Scheme |
 | `make test-native` | Native code written by hand: what runs, and what must be refused |
 | `make test-json` | JSON syntax/encoding, Unicode, exact numbers, builders, typing and images/GC |
-| `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples and images/GC |
+| `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples, grammars and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
 | `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator |

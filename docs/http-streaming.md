@@ -5,8 +5,8 @@
 whole body. The [connection driver](http.md#persistent-connections) and [listener](http-listener.md)
 accept both fixed and streaming descriptions. No runtime changes or C HTTP library are needed.
 
-Load `buffer.shen`, `io.shen`, `deadline.shen`, `http-head.shen`, `http-request.shen` and
-`http-response.shen` in that order. Managed endpoints and injected clocks work in static builds;
+Load `buffer.shen`, `io.shen`, `deadline.shen`, `grammar.shen`, `http-head.shen`, `http-request.shen`
+and `http-response.shen` in that order. Managed endpoints and injected clocks work in static builds;
 native socket servers also need the libraries listed in the [HTTP reference](http.md).
 
 ## Response sources

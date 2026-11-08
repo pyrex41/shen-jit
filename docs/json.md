@@ -1,8 +1,9 @@
 # JSON
 
 [lib/json.shen](../lib/json.shen) decodes and encodes complete UTF-8 JSON values over
-[buffers](buffers.md). Load `buffer.shen` and `json.shen` under `(tc -)` before checking clients with
-`(tc +)`. Both work in static builds and have no FFI, kernel-stream or I/O dependency. An application
+[buffers](buffers.md). Load `buffer.shen`, `grammar.shen` and `json.shen` under `(tc -)` before checking clients
+with `(tc +)`. They work in static builds and have no FFI, kernel-stream or I/O dependency. The decoder is a
+[grammar](grammar.md) of RFC 8259. An application
 can obtain its bounded input view from our [I/O readers](io.md) or [HTTP bodies](http.md).
 
 ```shen
@@ -76,7 +77,7 @@ size and builder capacity, not all memory occupied by an input/value graph or te
 Decoded lists, strings and object dictionaries occupy additional memory proportional to the input.
 
 Syntax errors report a byte offset in the input view's backing owner, matching the buffer scanner's
-owner-relative coordinates. Other invalid arguments, limits and encoding failures raise too. Results
+owner-relative coordinates, and what was expected there. Other invalid arguments, limits and encoding failures raise too. Results
 own their strings and bytes; they survive input mutation or release after the call. A caller must keep
 foreign input alive and stable during decoding. Builders and input readers belong to one task.
 

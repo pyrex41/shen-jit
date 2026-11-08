@@ -153,33 +153,26 @@
                         (freeze (io.file-close Token Path)))
       (do (address-> E 12 Token) E)))
 
-(define io.file-open-ready
-  _ _ _ [error Error] -> [error Error]
-  Path Mode Flags [ok Native] ->
-    (let Fd (io.file-c-open Native Flags (if (io.file-windows?) 384 438))
-         Code (shen-jit.c-errno)
-      (if (< Fd 0)
-          [error (io.file-error open Path Code)]
-          (trap-error [ok (io.file-make Path Mode Fd)]
-            (/. X (do (io.file-c-close Fd) (simple-error (error-to-string X))))))))
-
 (define io.open-file
   Path Mode ->
     (let Resolved (io.file-path Path)
          Flags (io.file-flags Mode)
-      (trap-error (io.file-open-ready Resolved Mode Flags (io.file-native-name Resolved))
+      (trap-error
+        (io.let-ok Native (io.file-native-name Resolved)
+          (let Fd (io.file-c-open Native Flags (if (io.file-windows?) 384 438))
+               Code (shen-jit.c-errno)
+            (if (< Fd 0)
+                [error (io.file-error open Resolved Code)]
+                (trap-error [ok (io.file-make Resolved Mode Fd)]
+                  (/. X (do (io.file-c-close Fd) (simple-error (error-to-string X))))))))
         (/. X [error (io.native-error open foreign 0 Resolved (error-to-string X))]))))
 
 \\ File scopes share the core's result and cleanup policy.
-(define io.file-scope
-  _ [error Error] -> [error Error]
-  F [ok E] -> (io.with-endpoint E F))
-
 (define io.with-input-file
-  Path F -> (io.file-scope F (io.open-file Path read)))
+  Path F -> (io.let-ok E (io.open-file Path read) (io.with-endpoint E F)))
 
 (define io.with-output-file
-  Path F -> (io.file-scope F (io.open-file Path write)))
+  Path F -> (io.let-ok E (io.open-file Path write) (io.with-endpoint E F)))
 
 (define io.read-file
   Path Limit ->

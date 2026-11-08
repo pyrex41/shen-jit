@@ -28,6 +28,15 @@ if ! grep -qxF 'foreign: buffer: storage is closed' "$dir/foreign-load.out"; the
   grep -qxF 'foreign: unavailable' "$dir/foreign-load.out" || { cat "$dir/foreign-load.out"; exit 1; }
 fi
 
+# A grammar's loop saved before its first call compiles in the loaded image.
+printf '(defgrammar <saved.digit> B where (saved.digit? B);)\n(defgrammar <saved.digits> (+ <saved.digit>);)\n(define saved.digit? B -> (and (>= B 48) (<= B 57)))\n' > "$dir/grammar.shen"
+"$SHEN" --save "$dir/grammar.img" eval -l lib/buffer.shen -l lib/grammar.shen -l "$dir/grammar.shen" \
+  > "$dir/grammar-save.out" 2>&1
+SHEN_JIT_IMAGE="$dir/grammar.img" "$SHEN" eval \
+  -e '(output "grammar: ~A ~A~%" (grammar.match? <saved.digits> (buffer.from-string "2026")) (grammar.match? <saved.digits> (buffer.from-string "20x")))' \
+  > "$dir/grammar-load.out" 2>&1
+grep -qxF 'grammar: true false' "$dir/grammar-load.out" || { cat "$dir/grammar-load.out"; exit 1; }
+
 printf '(define wrong-cursor {number --> number} N -> (cursor.peek N))\n' > "$dir/wrong.shen"
 if "$SHEN" eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l "$dir/wrong.shen" \
      > "$dir/wrong.out" 2>&1; then
@@ -35,4 +44,4 @@ if "$SHEN" eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l "$dir/wrong
   exit 1
 fi
 grep -q 'type error' "$dir/wrong.out" || { cat "$dir/wrong.out"; exit 1; }
-echo '4 passed, 0 failed'
+echo '5 passed, 0 failed'

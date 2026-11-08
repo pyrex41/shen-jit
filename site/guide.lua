@@ -9,6 +9,7 @@ local PAGES = {
   bytecode = 'Shen/JIT instructions and frames',
   ffi = 'Calling C',
   buffers = 'Buffers and cursors',
+  grammar = 'Grammars over bytes',
   io = 'Chunk I/O',
   framing = 'Binary framing',
   ['io-sockets'] = 'Socket I/O endpoints',

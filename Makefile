@@ -203,7 +203,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
+GUIDE_PAGES := design semantics bytecode ffi buffers grammar io framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -302,11 +302,13 @@ test-native: $(BUILD)/shen-jit
 	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l tests/native.shen | \
 	  grep '^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
 
-# Byte views and cursors, independent of native assembly or kernel streams.
+# Byte views and cursors, and grammars over them, independent of native assembly or kernel streams.
+# A macro applies only to files read after it, so the grammar tests load as a file of their own.
 test-buffer: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l tests/grammar.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
-	  -l lib/json.shen -l tools/buffer-parsers.shen -l tests/buffer_examples.shen | $(FFI_RESULT)
+	  -l lib/grammar.shen -l lib/json.shen -l tools/buffer-parsers.shen -l tests/buffer_examples.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l tests/buffer_typed.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/handle.shen \
 	  -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer_memory.shen | $(FFI_RESULT)
@@ -314,9 +316,9 @@ test-buffer: $(BUILD)/shen-jit
 
 # Complete UTF-8 JSON and bounded output, without FFI or kernel streams.
 test-json: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/json.shen -l tests/json.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/json.shen -e '(tc +)' -l tests/json_typed.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen -l lib/json.shen \
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen -l tests/json.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen -e '(tc +)' -l tests/json_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen -l lib/grammar.shen -l lib/json.shen \
 	  -l tests/json_memory.shen | $(FFI_RESULT)
 	sh tests/json_image.sh $(SHEN_JIT)
 
@@ -346,22 +348,22 @@ test-io: $(BUILD)/shen-jit
 
 # Complete request parsing, bounded bodies, response streams and persistent connections.
 test-http: $(BUILD)/shen-jit
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/http-head.shen \
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_stream.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/http-head.shen \
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_chunked.shen | $(FFI_RESULT)
-	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/http-head.shen \
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_request.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/http-head.shen \
+	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
 	  -e '(tc +)' -l tests/http_request_typed.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/http-head.shen \
+	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
 	  -e '(tc +)' -l tests/http_stream_typed.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/http-head.shen \
+	  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
 	  -l lib/memory.shen -l tests/http_server.shen | $(FFI_RESULT)
 	sh tests/http_request_image.sh $(SHEN_JIT)

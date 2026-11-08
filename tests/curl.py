@@ -224,7 +224,7 @@ def main():
                     streamed = '(let Sink (io.output-buffer (buffer.new 1024)) Result (web.stream '+shen_string(base+'/binary')+' Sink) '
                     streamed += '_ (io.close Sink) R (hd (tl Result)) (if (and (= (hd Result) ok) (= (curl.body-length R) 1024)) '
                     streamed += '(do (output "1 passed, 0 failed~%") true) (error "borrowed stream example failed")))'
-                    check_lines(run(args+['-l','lib/io-file.shen','-l','lib/json.shen','-l',str(examples),'-e',verify,'-e',saved,'-e',streamed]),3)
+                    check_lines(run(args+['-l','lib/io-file.shen','-l','lib/grammar.shen','-l','lib/json.shen','-l',str(examples),'-e',verify,'-e',saved,'-e',streamed]),3)
                     assert example_file.read_bytes()==BINARY
                 server.hold_started.clear()
                 server.hold_release.clear()

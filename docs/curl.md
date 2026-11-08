@@ -68,7 +68,7 @@ Load these libraries before an application. JSON is optional:
 
 ```sh
 build/shen-jit eval -l lib/ffi.shen -l lib/buffer.shen -l lib/io.shen -l lib/curl.shen \
-  -l lib/json.shen -l client.shen
+  -l lib/grammar.shen -l lib/json.shen -l client.shen
 ```
 
 Methods are case-sensitive ASCII tokens of at most 32 bytes. GET and HEAD require an empty body.
@@ -79,7 +79,7 @@ empty field. CR, LF, other control bytes and invalid names are rejected. libcurl
 framing: caller-supplied Content-Length and Transfer-Encoding are rejected.
 
 Non-GET/HEAD requests get `Content-Type: application/octet-stream` unless a Content-Type is supplied.
-For JSON, load `lib/json.shen` and encode explicitly:
+For JSON, load `lib/grammar.shen` and `lib/json.shen`, and encode explicitly:
 
 ```shen
 (define web.post-json

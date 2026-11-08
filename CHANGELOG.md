@@ -12,6 +12,17 @@ All notable changes to this project are documented in this file. The format is b
   stream into independent I/O sinks with backpressure, bounded chunks and exact partial-write progress.
   `tools/curl-fetch.shen` streams 2xx bodies to files; an error after writing begins can leave a partial file.
   See [the reference](docs/curl.md). Rebuild the adapter with `make curl` for ABI 2.
+- `lib/grammar.shen`: `defgrammar`, Shen-YACC's notation for parsers over byte views. Each rule compiles to a
+  function over a buffer, a position and an end, with parameters, repetition as loops, captures of the bytes matched
+  as strings or views, binary fields, and `require`, which stops a parse with a message and a position. See the guide.
+- `io.let-ok` in `lib/io.shen` binds the values of `[ok X]` results in order and returns the first other result, in
+  place of a function per step that passes errors on.
+
+### Changed
+
+- `lib/http-request.shen` parses the request line with a grammar, and `lib/json.shen` decodes with one, so
+  `lib/grammar.shen` must be loaded before either. JSON decoding is 1.2 to 4 times as fast, most for strings without
+  escapes. Some invalid inputs are reported with a different message or offset: what was expected where it failed.
 
 ## [0.5] - 2026-11-07
 

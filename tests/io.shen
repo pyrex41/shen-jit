@@ -218,4 +218,11 @@
         (freeze (<-address State 1)))
       (io.close E)))
 
+(io-test.check "let-ok binds each value in order" [ok 3]
+  (freeze (io.let-ok X [ok 1] Y [ok (+ X 1)] [ok (+ X Y)])))
+(io-test.check "let-ok gives the first result that is not ok" [error first]
+  (freeze (io.let-ok X [error first] Y [error second] [ok [X Y]])))
+(io-test.check "let-ok takes [ok] with _" [eof]
+  (freeze (io.let-ok _ [ok] _ [ok 2] Z [eof] [ok Z])))
+
 (output "~A passed, ~A failed~%" (value io-test.passed) (value io-test.failed))

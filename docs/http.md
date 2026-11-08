@@ -9,8 +9,8 @@ are involved.
 - [lib/http-response.shen](../lib/http-response.shen) encodes owned final-response bytes.
 - [lib/http-server.shen](../lib/http-server.shen) serves sequential requests on an owned connection under explicit bounds.
 
-Pure parsing, memory bodies and encoding need `buffer.shen`, `io.shen`, `http-head.shen`,
-`http-request.shen` and `http-response.shen`; they also work in static builds. Load libraries with
+Pure parsing, memory bodies and encoding need `buffer.shen`, `io.shen`, [`grammar.shen`](grammar.md),
+`http-head.shen`, `http-request.shen` and `http-response.shen`; they also work in static builds. Load libraries with
 `(tc -)` before checking clients with `(tc +)`. Native serving additionally needs `ffi.shen`,
 `socket.shen`, `deadline.shen`, `clock.shen`, `io-socket.shen` and `http-server.shen`.
 
@@ -239,8 +239,8 @@ methods, and lets the encoder implement HEAD. Load the native libraries and run 
 
 ```sh
 shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
-  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/http-head.shen \
-  -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
+  -l lib/deadline.shen -l lib/clock.shen -l lib/io-socket.shen -l lib/grammar.shen \
+  -l lib/http-head.shen -l lib/http-request.shen -l lib/http-response.shen -l lib/http-server.shen \
   -l tools/http-echo.shen -l one-request.shen
 ```
 

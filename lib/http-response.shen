@@ -203,21 +203,13 @@
   S Maximum D ->
     (let _ (http.source-check S)
          _ (if (= (<-address S 3) active) true (error "http: response source is not active"))
-      (http.source-ready S Maximum D (http.output-budget D))))
-
-(define http.source-ready
-  _ _ _ [error Error] -> [error Error]
-  S Maximum D [ok] ->
-    (let Next (<-address S 1)
-         _ (address-> S 4 true)
-         Result (trap-error (http.source-chunk (Next Maximum D) Maximum)
-                  (/. X [error (http.output-error (error-to-string X))]))
-         _ (address-> S 4 false)
-      (http.source-budget Result (http.output-budget D))))
-
-(define http.source-budget
-  Result [ok] -> Result
-  _ [error Error] -> [error Error])
+      (io.let-ok _ (http.output-budget D)
+        (let Next (<-address S 1)
+             _ (address-> S 4 true)
+             Result (trap-error (http.source-chunk (Next Maximum D) Maximum)
+                      (/. X [error (http.output-error (error-to-string X))]))
+             _ (address-> S 4 false)
+          (io.let-ok _ (http.output-budget D) Result)))))
 
 (define http.source-chunk
   [eof] _ -> [eof]
@@ -342,11 +334,7 @@
                      (http.prepare-response (http.method Request) Response (http.output-options Options) true D)
                      (/. X (http.finish-source [error (http.output-error (error-to-string X))]
                              (http.response-source Response))))
-      (http.send-prepared E D Prepared)))
-
-(define http.send-prepared
-  _ _ [error Error] -> [error Error]
-  E D [ok Plan] -> (http.send-plan E D Plan))
+      (io.let-ok Plan Prepared (http.send-plan E D Plan))))
 
 (define http.send-plan
   E D Plan ->
@@ -381,13 +369,8 @@
 (define http.output-start
   State ->
     (let Plan (<-address State 2)
-      (http.output-headed State (http.output-write State (<-address Plan 0)))))
-
-(define http.output-headed
-  _ [error Error] -> [error Error]
-  State [ok] ->
-    (let Plan (<-address State 2)
-      (http.output-step State (<-address Plan 3))))
+      (io.let-ok _ (http.output-write State (<-address Plan 0))
+        (http.output-step State (<-address Plan 3)))))
 
 (define http.output-step
   State [error Error] -> [error (io.progress Error (<-address State 3))]
@@ -395,27 +378,19 @@
   State [eof] ->
     (let Plan (<-address State 2)
       (if (= (<-address Plan 2) [chunked])
-          (http.output-ended State (http.output-write State (buffer.from-string "0c#13;c#10;c#13;c#10;")))
+          (io.let-ok _ (http.output-write State (buffer.from-string "0c#13;c#10;c#13;c#10;"))
+            (http.output-done State))
           (http.output-done State)))
   State [chunk V] ->
     (let Plan (<-address State 2)
          Frame (if (= (<-address Plan 2) [chunked]) (http.chunk-frame V) V)
-      (http.output-body State V (http.output-write State Frame))))
-
-(define http.output-body
-  _ _ [error Error] -> [error Error]
-  State V [ok] ->
-    (let Plan (<-address State 2)
-         Used (+ (<-address State 4) (buffer.length V))
-         Count (+ (<-address State 5) 1)
-         _ (address-> State 4 Used)
-         _ (address-> State 5 Count)
-      (http.output-step State (http.pull (<-address Plan 1) (<-address Plan 2)
-                                        (<-address Plan 4) Used Count (<-address State 1)))))
-
-(define http.output-ended
-  _ [error Error] -> [error Error]
-  State [ok] -> (http.output-done State))
+      (io.let-ok _ (http.output-write State Frame)
+        (let Used (+ (<-address State 4) (buffer.length V))
+             Count (+ (<-address State 5) 1)
+             _ (address-> State 4 Used)
+             _ (address-> State 5 Count)
+          (http.output-step State (http.pull (<-address Plan 1) (<-address Plan 2)
+                                            (<-address Plan 4) Used Count (<-address State 1)))))))
 
 (define http.output-done
   State ->

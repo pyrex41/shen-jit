@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 LIBRARIES = ["ffi", "socket", "buffer", "io", "deadline", "clock", "io-socket",
-             "http-head", "http-request", "http-response", "http-server", "http-listener"]
+             "grammar", "http-head", "http-request", "http-response", "http-server", "http-listener"]
 PROGRAM = '''
 (set persistent.closed 0)
 (define persistent.stream

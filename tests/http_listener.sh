@@ -5,7 +5,7 @@ dir=$(mktemp -d)
 trap 'listener_status=$?; if [ "$listener_status" -ne 0 ]; then cat "$dir"/*.out 2>/dev/null; fi; rm -rf "$dir"' EXIT
 if command -v cygpath > /dev/null; then dir=$(cygpath -m "$dir"); fi
 set --
-for name in ffi socket sqlite buffer io json deadline clock io-socket http-head http-request http-response http-server http-listener; do
+for name in ffi socket sqlite buffer io grammar json deadline clock io-socket http-head http-request http-response http-server http-listener; do
     set -- "$@" -l "lib/$name.shen"
 done
 if ! "$SHEN" eval "$@" -e '(clock.monotonic)' > "$dir/probe.out" 2>&1; then
