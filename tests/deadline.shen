@@ -41,4 +41,15 @@
      _ (shen-jit.pointer-kill (<-address D 4))
   (deadline-test.raises "saved/stale deadline" (freeze (deadline.remaining D))))
 
+(let Time (io.record [100])
+     Parent (deadline.after (freeze (<-address Time 0)) 200)
+     _ (address-> Time 0 250)
+     Short (deadline.within Parent 20)
+     Long (deadline.within Parent 100)
+  (do (deadline-test.check "short phase" 20 (freeze (deadline.remaining Short)))
+      (deadline-test.check "phase capped by parent" 50 (freeze (deadline.remaining Long)))
+      (address-> Time 0 310)
+      (deadline-test.check "expired parent cannot be renewed" 0
+        (freeze (deadline.remaining (deadline.within Parent 100))))))
+
 (output "~A passed, ~A failed~%" (value deadline-test.passed) (value deadline-test.failed))

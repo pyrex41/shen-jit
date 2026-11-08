@@ -1,4 +1,4 @@
-\\ One HTTP/1.1 request per owned socket. Load clock/deadline/socket I/O and HTTP modules first.
+\\ Sequential HTTP/1.1 requests per owned socket. Load clock/deadline/socket I/O and HTTP modules first.
 \\ The application receives a complete request and returns a response value, without writing bytes.
 
 (shen-jit.library http.time-lib ["libc.so.6" "libSystem.dylib" "ucrtbase.dll"])
@@ -63,7 +63,8 @@
           (let Date (trap-error (http.date-value (http.c-time [])) (/. X []))
             (if (empty? Date)
                 Response
-                (http.response (<-address Response 1) [["Date" Date] | Fields] (<-address Response 3)))))))
+                (http.response-copy-fields Response [["Date" Date] | Fields]
+                                           (http.response-closes? Response)))))))
 
 (define http.option-index
   head-limit -> 0
@@ -78,12 +79,17 @@
   trailer-limit -> 9
   trailer-fields-limit -> 10
   chunk-count-limit -> 11
+  response-chunk-size -> 12
+  response-chunk-count-limit -> 13
+  request-limit -> 14
+  idle-timeout -> 15
+  connection-timeout -> 16
   _ -> (error "http: unknown server option"))
 
 (define http.server-options
   Options ->
     (http.configure (io.record [16384 1048576 16384 1048576 5000 5000 5000
-                               8192 65536 16384 100 4096]) Options []))
+                               8192 65536 16384 100 4096 16384 4096 100 5000 60000]) Options []))
 
 (define http.configure
   Config [] _ -> Config
@@ -95,7 +101,10 @@
                (if (and (>= N (if (= I 2) 128 4)) (<= N 1048576))
                    true (error "http: invalid server head limit"))
                true)
-         _ (if (>= I 7) (http.chunk-options [[Name N]]) true)
+         _ (if (and (>= I 7) (<= I 11)) (http.chunk-options [[Name N]]) true)
+         _ (if (and (>= I 12) (<= I 14))
+               (if (and (> N 0) (<= N 1048576)) true
+                   (error "http: chunk size, chunk count and request limit must be 1..1048576")) true)
          _ (address-> Config I N)
       (http.configure Config Rest [Name | Seen]))
   _ _ _ -> (error "http: server options must be [Name Number] pairs"))
@@ -103,59 +112,123 @@
 (define http.serve-one
   E Handler Options ->
     (let Config (http.server-options Options)
-         _ (io.socket-check E)
-      (io.with-endpoint E (/. Connection (http.server-read Connection Handler Config)))))
+         _ (address-> Config 14 1)
+      (http.connection E Handler Config (freeze false))))
 
-(define http.server-read
-  E Handler Config ->
-    (let R (io.reader E [])
-         D (clock.deadline (<-address Config 4))
-         _ (io.socket-deadline E D)
-         F (http.head-reader R (<-address Config 0))
-      (http.server-head E R Handler Config (http.read-head-until F D))))
+(define http.serve-connection
+  E Handler Options -> (http.serve-controlled E Handler Options (freeze false)))
 
-(define http.server-head
-  _ _ _ _ [eof] -> [ok 0]
-  E _ _ Config [error Error] -> (http.server-fail E Config Error)
-  E R Handler Config [head V] ->
-    (http.server-parsed E R Handler Config (http.parse-request V (<-address Config 1))))
+(define http.serve-controlled
+  E Handler Options Stop -> (http.connection E Handler (http.server-options Options) Stop))
 
-(define http.server-parsed
-  E _ _ Config [error Error] -> (http.server-fail E Config Error)
-  E R Handler Config [ok Request] ->
-    (let D (clock.deadline (<-address Config 5))
-         _ (io.socket-deadline E D)
-         B (http.body-reader-with R Request (http.server-body-options Config))
-      (http.server-body E Handler Config (http.read-body-until B D))))
+\\ One task owns the socket, its single reader and every source returned by its handler.
+\\ Connection slots: endpoint, reader, handler, config, stop thunk, total deadline,
+\\ completed request count and acknowledged wire bytes.
+(define http.connection
+  E Handler Config Stop ->
+    (do (io.socket-check E)
+        (io.with-endpoint E
+          (/. Peer (let C (io.record [Peer (io.reader Peer []) Handler Config Stop
+                                     (clock.deadline (<-address Config 16)) 0 0])
+                    (http.connection-read C))))))
+
+(define http.connection-read
+  C ->
+    (if (thaw (<-address C 4))
+        [ok (<-address C 7)]
+        (let Config (<-address C 3)
+             D (deadline.within (<-address C 5) (<-address Config 4))
+             _ (io.socket-deadline (<-address C 0) D)
+             F (http.head-reader (<-address C 1) (<-address Config 0))
+          (http.connection-head C (http.read-head-until F D)))))
+
+(define http.connection-head
+  C [eof] -> [ok (<-address C 7)]
+  C [error Error] -> (http.connection-fail C Error)
+  C [head V] ->
+    (http.connection-parsed C (http.parse-request V (<-address (<-address C 3) 1))))
+
+(define http.connection-parsed
+  C [error Error] -> (http.connection-fail C Error)
+  C [ok Q] ->
+    (let Config (<-address C 3)
+         D (deadline.within (<-address C 5) (<-address Config 5))
+         _ (io.socket-deadline (<-address C 0) D)
+         B (http.body-reader-with (<-address C 1) Q (http.server-body-options Config))
+      (http.connection-body C (http.read-body-until B D))))
 
 (define http.server-body-options
   Config -> [[chunk-line-limit (<-address Config 7)] [chunk-metadata-limit (<-address Config 8)]
              [trailer-limit (<-address Config 9)] [trailer-fields-limit (<-address Config 10)]
              [chunk-count-limit (<-address Config 11)]])
 
-(define http.server-body
-  E _ Config [error Error] -> (http.server-fail E Config Error)
-  E Handler Config [ok Request] ->
-    (let Prepared (trap-error
-                     [ok (http.encode-response Request (http.server-response (Handler Request))
-                                               (<-address Config 2) (<-address Config 3))]
-                     (/. X [error (io.native-error http-response application 500 "HTTP response"
-                                                   (error-to-string X))]))
-      (http.server-prepared E Config Prepared)))
+(define http.server-output-limits
+  Config -> (io.record [(<-address Config 2) (<-address Config 3)
+                       (<-address Config 12) (<-address Config 13)]))
 
-(define http.server-prepared
-  E Config [error Error] -> (http.server-fail E Config Error)
-  E Config [ok Wire] -> (http.server-sent (http.server-send E Config Wire)))
+(define http.connection-body
+  C [error Error] -> (http.connection-fail C Error)
+  C [ok Q] ->
+    (let Handler (<-address C 2)
+         Result (trap-error [ok (Handler Q)]
+                  (/. X [error (http.output-error (error-to-string X))]))
+      (http.connection-handled C Q Result)))
 
-(define http.server-send
-  E Config Wire ->
-    (let D (clock.deadline (<-address Config 6))
-         _ (io.socket-deadline E D)
-      (io.write-all E Wire [])))
+(define http.connection-handled
+  C _ [error Error] -> (http.connection-fail C Error)
+  C Q [ok Response] ->
+    (let Config (<-address C 3)
+         D (deadline.within (<-address C 5) (<-address Config 6))
+         _ (io.socket-deadline (<-address C 0) D)
+         Prepared (trap-error
+                    (let R (http.server-response Response)
+                         Close (or (http.response-closes? R)
+                                   (element? "close" (http.token-list (http.header-values Q "connection")))
+                                   (>= (+ (<-address C 6) 1) (<-address Config 14))
+                                   (thaw (<-address C 4)))
+                         Plan (http.prepare-response (http.method Q) R
+                                (http.server-output-limits Config) Close D)
+                      (@p Close Plan))
+                    (/. X (@p true (http.finish-source
+                                     [error (http.output-error (error-to-string X))]
+                                     (http.response-source Response)))))
+      (http.connection-prepared C D (fst Prepared) (snd Prepared))))
 
-(define http.server-sent
-  [ok N] -> [ok N]
-  [error Error N] -> [error (io.progress Error N)])
+(define http.connection-prepared
+  C _ _ [error Error] -> (http.connection-fail C Error)
+  C D Close [ok Plan] ->
+    (http.connection-sent C Close (http.send-plan (<-address C 0) D Plan)))
+
+(define http.connection-sent
+  _ _ [error Error] -> [error Error]
+  C Close [ok N] ->
+    (let _ (address-> C 6 (+ (<-address C 6) 1))
+         _ (address-> C 7 (+ (<-address C 7) N))
+      (if (or Close (thaw (<-address C 4)) (deadline.expired? (<-address C 5)))
+          [ok (<-address C 7)]
+          (http.connection-idle C (deadline.within (<-address C 5) (<-address (<-address C 3) 15))))))
+
+\\ Idle time starts after the response. Short bounded waits observe shutdown without
+\\ cancelling an active request or renewing the idle/connection deadline.
+(define http.connection-idle
+  C D ->
+    (if (or (thaw (<-address C 4)) (deadline.expired? D))
+        [ok (<-address C 7)]
+        (let _ (io.socket-deadline (<-address C 0) (deadline.within D 50))
+          (http.connection-available C D (io.peek-up-to (<-address C 1) 1)))))
+
+(define http.connection-available
+  C _ [eof] -> [ok (<-address C 7)]
+  C _ [ok _] -> (http.connection-read C)
+  C D [error Error] ->
+    (if (= (io.error-domain Error) timeout)
+        (http.connection-idle C D)
+        [error Error]))
+
+(define http.connection-fail
+  C Error ->
+    (http.server-fail-until (<-address C 0) (<-address C 3) Error
+      (deadline.within (<-address C 5) (<-address (<-address C 3) 6))))
 
 (define http.server-status
   Error ->
@@ -167,20 +240,37 @@
               (if (= (io.error-message Error) "head exceeds byte limit") 431 400))
             (true 0))))
 
-(define http.server-fail
-  E Config Error ->
+(define http.server-fail-until
+  E Config Error D ->
     (let Status (http.server-status Error)
       (if (= Status 0)
           [error Error]
           (let Response (http.server-response (http.response Status [] (buffer.new 0)))
                Wire (http.encode-for "GET" Response (<-address Config 2) (<-address Config 3))
-            (http.server-rejected Error (http.server-send E Config Wire))))))
+               _ (io.socket-deadline E D)
+            (http.server-rejected Error (io.write-all E Wire []))))))
 
 (define http.server-rejected
   Error [ok _] -> [error Error]
   Error [error Other N] -> [error (io.secondary Error (io.progress Other N))])
 
 (datatype http-server-options
+  Option : http.response-option;
+  ===========================
+  Option : http.option;
+
+  N : number;
+  ===========================
+  [request-limit N] : http.option;
+
+  N : number;
+  ===========================
+  [idle-timeout N] : http.option;
+
+  N : number;
+  ===========================
+  [connection-timeout N] : http.option;
+
   Option : http.chunk-option;
   ===========================
   Option : http.option;
@@ -192,14 +282,6 @@
   N : number;
   ===========================
   [body-limit N] : http.option;
-
-  N : number;
-  ====================================
-  [response-head-limit N] : http.option;
-
-  N : number;
-  ====================================
-  [response-body-limit N] : http.option;
 
   N : number;
   =============================
@@ -214,4 +296,7 @@
   [write-timeout N] : http.option;)
 
 (declare http.serve-one
+  [io.endpoint --> [[http.request --> http.response] --> [[list http.option] --> [io.result number]]]])
+
+(declare http.serve-connection
   [io.endpoint --> [[http.request --> http.response] --> [[list http.option] --> [io.result number]]]])

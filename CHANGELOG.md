@@ -7,6 +7,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Bounded streaming HTTP responses with explicit lengths or chunked output, pull-based backpressure,
+  total write budgets and deterministic producer cleanup. Persistent connections retain one reader under
+  request-count, idle and total-lifetime limits; the SQLite example streams NDJSON exports.
 - Optional JSON decoding and encoding over byte views, with typed values, strict UTF-8, lossless number
   tokens, exact integer conversion and bounded output builders. The SQLite example accepts JSON PUT bodies.
 - Bounded chunked HTTP requests, validated extensions and separate trailers, with decoded/metadata limits,

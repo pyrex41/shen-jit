@@ -62,6 +62,51 @@
           (map (function counter-app.row-json)
                (sqlite.query Db "SELECT name, value FROM counters ORDER BY name LIMIT 100" []))))
 
+\\ The export owns its statement/database until the response source closes, including HEAD.
+(define counter-app.export
+  Path ->
+    (let Db (sqlite.open Path)
+         Stmt (trap-error (sqlite.prepare Db "SELECT name, value FROM counters ORDER BY name LIMIT 100")
+                (/. X (counter-app.db-result [error (error-to-string X)]
+                         (trap-error (do (sqlite.close Db) [ok])
+                           (/. Y [error (error-to-string Y)])))))
+         State (io.record [Stmt (buffer.new 0) 0])
+      (trap-error
+        (http.stream-response 200 [["Content-Type" "application/x-ndjson"]] [chunked]
+          (http.source (/. Maximum D (counter-app.export-next State Maximum D))
+                       (freeze (counter-app.export-close Db Stmt))))
+        (/. X (do (counter-app.export-close Db Stmt) (simple-error (error-to-string X)))))))
+
+(define counter-app.export-close
+  Db Stmt ->
+    (let Finalized (trap-error (do (sqlite.finalize Stmt) [ok 0])
+                      (/. X [error (io.error close "counter export statement" (error-to-string X)) 0]))
+         Closed (trap-error (do (sqlite.close Db) [ok])
+                   (/. X [error (io.error close "counter export database" (error-to-string X))]))
+      (io.close-combine Finalized Closed)))
+
+(define counter-app.export-next
+  State Maximum D ->
+    (do (deadline.check D)
+        (if (= (<-address State 2) (buffer.length (<-address State 1)))
+            (if (= (sqlite.step (<-address State 0)) done)
+                [eof]
+                (let Row (json.encode (counter-app.row-json (sqlite.row (<-address State 0))) [[byte-limit 4096]])
+                     Line (buffer.builder 4097)
+                     _ (buffer.append! Line Row)
+                     _ (buffer.append-byte! Line 10)
+                     _ (address-> State 1 (buffer.finish Line))
+                     _ (address-> State 2 0)
+                  (counter-app.export-span State Maximum)))
+            (counter-app.export-span State Maximum))))
+
+(define counter-app.export-span
+  State Maximum ->
+    (let At (<-address State 2)
+         N (io.min Maximum (- (buffer.length (<-address State 1)) At))
+         V (buffer.slice (<-address State 1) At N)
+      (do (address-> State 2 (+ At N)) [chunk V])))
+
 (define counter-app.found
   [] -> (counter-app.error 404 "counter not found")
   [[Value]] -> (counter-app.json 200 [object ["value" Value]]))
@@ -88,6 +133,10 @@
   _ "GET" "/health" -> (counter-app.json 200 [object ["status" "ok"]])
   _ "HEAD" "/health" -> (counter-app.json 200 [object ["status" "ok"]])
   _ _ "/health" -> (http.response 405 [["Allow" "GET, HEAD"]] (buffer.new 0))
+  Path Method "/counters.ndjson" ->
+    (if (element? Method ["GET" "HEAD"])
+        (counter-app.export Path)
+        (http.response 405 [["Allow" "GET, HEAD"]] (buffer.new 0)))
   Path Method "/counters" ->
     (if (element? Method ["GET" "HEAD"])
         (counter-app.with-db Path (function counter-app.list))
@@ -190,7 +239,7 @@
               ((> (http.content-length Request) 0)
                 (counter-app.error 400 "this API expects an empty body"))
               (true (do (address-> Stop 0 true)
-                        (counter-app.json 202 [object ["stopping" true]]))))
+                        (http.close-after (counter-app.json 202 [object ["stopping" true]])))))
         (counter-app.handle Path Request)))
 
 (define counter-app.run-until-stopped

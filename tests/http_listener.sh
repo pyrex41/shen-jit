@@ -20,6 +20,7 @@ run_case() {
     grep '^[0-9]* passed' "$dir/test.out" | awk '{ print } END { exit !/ 0 failed/ }'
 }
 run_case "$SHEN" eval "$@" -l tests/http_listener.shen
+run_case "$SHEN" eval "$@" -l tests/http_connection.shen
 run_case "$SHEN" eval "$@" -e '(tc +)' -l tests/http_listener_typed.shen
 run_case "$SHEN" eval "$@" -l example-apps/sqlite-http/main.shen \
     -s counter-test.path "\"$dir/counters.db\"" -l tests/sqlite_http.shen

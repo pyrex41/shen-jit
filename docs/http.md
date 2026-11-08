@@ -7,7 +7,7 @@ are involved.
 
 - [lib/http-request.shen](../lib/http-request.shen) parses complete request heads and reads bounded bodies.
 - [lib/http-response.shen](../lib/http-response.shen) encodes owned final-response bytes.
-- [lib/http-server.shen](../lib/http-server.shen) handles one request on an owned connection, then closes it.
+- [lib/http-server.shen](../lib/http-server.shen) serves sequential requests on an owned connection under explicit bounds.
 
 Pure parsing, memory bodies and encoding need `buffer.shen`, `io.shen`, `http-head.shen`,
 `http-request.shen` and `http-response.shen`; they also work in static builds. Load libraries with
@@ -75,7 +75,7 @@ and response semantics in [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html
   coding return 501. All Expect fields return 417 before waiting for a body. Upgrades/tunnels return 501.
   Trailer declarations require chunked framing and cannot name protected fields.
   Connection values are validated token lists and cannot nominate Host or body-framing fields. A peer's
-  keep-alive preference does not cause this driver to reuse a connection.
+  close token ends a persistent connection after the current response; `http.serve-one` always closes.
 
 Ordinary syntax errors return 400, line/field limits use 414/431, unsupported versions use 505, and body
 limits use 413. These policies are a documented subset, not a claim of complete HTTP/1.1 conformance.
@@ -212,10 +212,12 @@ Rejections remain `[error Error]` even when an error response was sent successfu
 | `head-timeout`, `body-timeout`, `write-timeout` | 5000 ms each |
 
 Options are `[Name Number]` pairs, for example `[[body-limit 65536] [body-timeout 2000]]`.
-Unknown, duplicate and invalid options raise before ownership transfers. A fresh absolute deadline is
-installed for each phase, spanning all short progress within it. Handler execution itself is not timed.
-The driver does not accept a second request, drain an unbounded body or add a thread/accept loop.
-The [bounded listener](http-listener.md) runs this driver with a connection cap and controlled shutdown.
+Unknown, duplicate and invalid options raise before ownership transfers. Each phase gets an absolute
+deadline spanning short progress, capped by the total connection budget. Handler execution cannot be
+interrupted; its elapsed time is charged to that total and checked before output. This convenience
+does not accept a second request or add an accept loop. The [bounded listener](http-listener.md) uses
+the persistent variant below with a connection cap and controlled shutdown.
+The [streaming response reference](http-streaming.md) covers source ownership and output chunk limits.
 
 Malformed/unsupported requests get an empty 400/413/414/417/431/501/505 response as appropriate; budget
 expiry gets 408. Application exceptions or invalid responses get an empty 500 before any application
@@ -246,9 +248,40 @@ shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.sh
 ```
 
 Send a request from another terminal, for example `curl --http1.1 --data-binary 'hello' http://127.0.0.1:9000/`.
-The process handles that connection and exits. TLS, proxy requests, persistent connections, streaming
-bodies/responses, routing policy and authentication are separate work. The bounded listener supplies
+The process handles that connection and exits. TLS, proxy requests, streaming request bodies, routing
+policy and authentication are separate work. Persistent connections and streaming responses are described below. The bounded listener supplies
 connection limits and shutdown.
+
+## Persistent connections
+
+`http.serve-connection Endpoint Handler Options` adopts an owned socket and serves requests in order.
+It retains one bounded reader across messages, so pipelined bytes survive without losing or guessing
+message boundaries. The full bounded request body is decoded before each handler call; there is no
+unread-body drain policy or concurrent dispatch within a connection. Fixed and
+[streaming responses](http-streaming.md) are both accepted. Clean EOF and successful connection completion
+return `[ok TotalWireBytes]`; any failure ends the connection and returns `[error Error]`.
+
+| Additional option | Default | Meaning |
+| --- | --- | --- |
+| `request-limit` | 100 | 1..1048576 completed requests per connection |
+| `idle-timeout` | 5000 ms | Wait for the first byte of the next request |
+| `connection-timeout` | 60000 ms | Total connection budget, starting on admission |
+
+Every head, body, idle and write deadline is capped by the original connection deadline using
+`deadline.within`. Progress and new requests never renew it. Once the next request starts, its complete
+head gets the head-timeout budget within that cap. Unused idle expiry/EOF closes cleanly without sending
+a speculative 408. Expiry within an active message is terminal; error delivery remains best effort.
+Application work is cooperative and can delay observing a budget.
+
+HTTP/1.1 connections stay open unless the peer sends a case-insensitive Connection close token, the
+request cap is reached, shutdown is requested, or the handler wraps its response in
+`http.close-after Response`. These decisions send Connection: close when known before the head is
+written. Other successful responses omit Connection and remain reusable. Every parse/body/producer/
+output/cleanup failure ends the connection and stops queued requests. No bytes are interpreted as a new
+request after a framing failure. `http.serve-one` remains a one-request, always-closing convenience.
+
+The [bounded listener](http-listener.md) uses this persistent driver and adds admission/shutdown.
+Its statistics count connections, including all requests handled on each connection.
 
 Public declarations cover `http.request`, `http.body-reader`, `http.response`, server options and I/O result
 families. `make test-http` checks syntax/smuggling cases, every small transport split, body ownership, exact

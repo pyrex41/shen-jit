@@ -22,6 +22,7 @@ writing a response.
 | `clock.monotonic` | Nondecreasing integer milliseconds with an unspecified system origin |
 | `clock.deadline Milliseconds` | A budget starting now, using that system clock |
 | `deadline.after FrozenClock Milliseconds` | The same policy over an injected clock returning milliseconds |
+| `deadline.within Parent Milliseconds` | A fresh phase budget using Parent's clock, capped by its remaining time |
 | `deadline.remaining D` | Milliseconds remaining, clamped to zero |
 | `deadline.expired? D` | True at or after the absolute endpoint |
 | `deadline.slice D Maximum` | The smaller of remaining time and a positive integer Maximum |
@@ -29,7 +30,8 @@ writing a response.
 Durations and clock results must be nonnegative fixnums; integral boxed reals are refused. Zero duration is
 immediately expired. Arithmetic overflow raises. Injected clocks must be nondecreasing; backwards movement
 raises. One task owns a deadline and its clock state, as it owns the I/O operation using them. The deadline
-contains the initial absolute endpoint and the last observed clock value, not a decrementing slice count.
+can derive a shorter phase without extending a total operation/connection budget. An expired parent
+produces an immediately expired phase. Each value contains the initial absolute endpoint and the last observed clock value, not a decrementing slice count.
 
 The managed policy works without the FFI, including static builds:
 

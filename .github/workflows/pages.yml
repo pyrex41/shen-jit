@@ -19,6 +19,7 @@ on:
       - docs/deadlines.md
       - docs/http-head.md
       - docs/http.md
+      - docs/http-streaming.md
       - docs/http-listener.md
       - docs/json.md
       - site/**

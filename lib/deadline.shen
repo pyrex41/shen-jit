@@ -17,6 +17,20 @@
                true)
       D))
 
+\\ Derive a phase budget from the same clock reading, without extending its parent.
+(define deadline.within
+  Parent Milliseconds ->
+    (let _ (deadline.check Parent)
+         Duration (buffer.index Milliseconds)
+         Clock (<-address Parent 1)
+         Now (buffer.index (thaw Clock))
+         _ (if (< Now (<-address Parent 3)) (error "deadline: clock moved backwards") true)
+         _ (address-> Parent 3 Now)
+         Left (- (<-address Parent 2) Now)
+         Span (if (< Left 0) 0 (if (< Left Duration) Left Duration))
+         Guard (shen-jit.bytes->pointer (shen-jit.u32! (shen-jit.bytes 8) 0 1) 0 deadline)
+      (io.record [deadline Clock (+ Now Span) Now Guard])))
+
 (define deadline.remaining
   D ->
     (let _ (deadline.check D)
@@ -38,6 +52,7 @@
       (if (< Left Max) Left Max)))
 
 (declare deadline.after [[lazy number] --> [number --> deadline]])
+(declare deadline.within [deadline --> [number --> deadline]])
 (declare deadline.remaining [deadline --> number])
 (declare deadline.expired? [deadline --> boolean])
 (declare deadline.slice [deadline --> [number --> number]])

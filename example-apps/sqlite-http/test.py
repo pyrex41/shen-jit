@@ -25,7 +25,7 @@ def shen_string(text):
 def request(port, method, target, body=None, status=200, headers=None, chunked=False):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     try:
-        connection.request(method, target, body, headers or {}, encode_chunked=chunked)
+        connection.request(method, target, body, {"Connection": "close", **(headers or {})}, encode_chunked=chunked)
         response = connection.getresponse()
         data = response.read()
         assert response.status == status, (target, response.status, data)
@@ -44,7 +44,7 @@ def server(executable, database):
     with socket.socket() as reservation:
         reservation.bind(("127.0.0.1", 0))
         port = reservation.getsockname()[1]
-    # Test-only control routes; the runnable application has no shutdown HTTP endpoint.
+    # Test-only routes let this harness observe listener statistics.
     program = f'''(counter-app.initialize {shen_string(database.as_posix())})
       (define counter-test.handle
         Q -> (cases (= (http.target Q) "/__test_stop")
@@ -140,6 +140,30 @@ def main():
             assert request(port, "GET", "/counters/shared") == {"value": 32}
             request(port, "DELETE", "/counters/hits", status=204)
             request(port, "GET", "/counters/hits", status=404)
+
+            # Fixed and streamed responses share one connection, including HEAD boundaries.
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=5)
+            try:
+                connection.request("GET", "/counters.ndjson")
+                response = connection.getresponse()
+                assert response.getheader("Transfer-Encoding") == "chunked"
+                assert response.getheader("Content-Type") == "application/x-ndjson"
+                assert response.getheader("Connection") is None
+                assert [json.loads(line) for line in response.read().splitlines()] == [
+                    {"name": "shared", "value": 32}]
+                first_socket = connection.sock
+                connection.request("HEAD", "/counters.ndjson")
+                response = connection.getresponse()
+                assert response.read() == b""
+                connection.request("GET", "/health")
+                response = connection.getresponse()
+                assert json.loads(response.read()) == {"status": "ok"}
+                assert connection.sock is first_socket, "client silently reconnected"
+                connection.request("GET", "/health", headers={"Connection": "close"})
+                assert json.loads(connection.getresponse().read()) == {"status": "ok"}
+                assert connection.sock is None
+            finally:
+                connection.close()
 
             # Native socket waits must not keep shutdown waiting for their full body timeout.
             with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled:

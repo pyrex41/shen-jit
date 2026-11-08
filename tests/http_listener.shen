@@ -45,7 +45,7 @@
   S Target ->
     (let C (listener-test.client S)
          _ (socket.closing-on-error C
-             (freeze (socket.send C (make-string "GET ~A HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;" Target))))
+             (freeze (socket.send C (make-string "GET ~A HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Connection: closec#13;c#10;c#13;c#10;" Target))))
          E (io.socket C "listener test client")
          Result (io.with-endpoint E (/. Peer (io.read-all (io.reader Peer []) 4096)))
       (listener-test.body Result)))

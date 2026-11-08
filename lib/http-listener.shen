@@ -123,9 +123,10 @@
   O [error _] -> (do (address-> O 4 (+ 1 (<-address O 4))) true))
 
 (define http.worker
-  W Handler Options ->
+  W Handler Options Stop ->
     (let E (<-address W 0)
-         Result (io.with-endpoint E (/. Connection (http.serve-one Connection Handler Options)))
+         Result (io.with-endpoint E
+                  (/. Connection (http.serve-controlled Connection Handler Options Stop)))
       (address-> W 1 Result)))
 
 (define http.admit
@@ -135,13 +136,13 @@
       (cond ((>= Peer 0)
               (if (<-address S 3)
                   (socket.close Peer)
-                  (http.launch O (socket.closing-on-error Peer (freeze (socket.set-up Peer)))
+                  (http.launch S O (socket.closing-on-error Peer (freeze (socket.set-up Peer)))
                                Handler Options)))
             ((io.socket-again? Code) true)
             (true (http.note-error O (io.socket-error accept "HTTP listener" Code))))))
 
 (define http.launch
-  O Peer Handler Options ->
+  S O Peer Handler Options ->
     (let E (io.socket Peer "HTTP peer")
          W (io.record [E []])
          Workers [W | (<-address O 1)]
@@ -149,7 +150,7 @@
          _ (address-> O 2 (+ 1 (<-address O 2)))
          N (length Workers)
          _ (if (> N (<-address O 6)) (address-> O 6 N) true)
-      (trap-error (thread (freeze (http.worker W Handler Options)))
+      (trap-error (thread (freeze (http.worker W Handler Options (freeze (<-address S 3)))))
         (/. X (address-> W 1
                 (io.finish [error (io.error thread "HTTP worker" (error-to-string X))] (io.close E)))))))
 

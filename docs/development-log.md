@@ -1125,6 +1125,37 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### Streaming responses and persistent HTTP connections (2026-11-07, M3 Max, macOS arm64)
+
+Compared with the preceding complete-body, one-response connection path, responses can now pull bounded
+chunks from a single-use Shen source. Explicit lengths require exact completion; unknown lengths use
+chunked framing and emit the terminal chunk only on successful EOF. Header validation and one primed
+chunk precede output. Short writes drain before another producer call, and one write deadline covers
+production and output. Sources close exactly once on every path; cleanup failures retain prior errors.
+HEAD/bodyless responses close without pulling, and saved sources never replay captured resources.
+
+The listener retains one input reader per connection and dispatches complete requests sequentially,
+including pipelined bytes. Request count, idle time and total lifetime are bounded. `deadline.within`
+caps phase budgets without renewing the connection budget. The one-request helper remains available.
+Any malformed body or failed output ends reuse; idle expiry sends no speculative response. Shutdown
+observes idle workers in bounded waits, lets active responses finish during grace and cancels remaining
+socket work. Statistics still count connections. All code stays in optional Shen libraries, over our
+own I/O and existing threads/FFI; no runtime or native parser adapter was added.
+
+The counter application streams up to 100 SQLite rows as NDJSON, retaining one encoded row and closing
+its statement/database on HEAD, completion and failure. Slow exports can hold a read lock until their
+write budget is observed; this example does not introduce WAL or pagination. An independent HTTP/SQLite
+run verified streamed exports, repeated fixed/HEAD/chunked replies on one socket, 32 atomic increments,
+persistence and shutdown with stalled request bodies. A separate wire client checked pipeline boundaries,
+request/idle caps, application close policy, producer failure, timeout truncation and exactly-once cleanup.
+These are correctness checks, not throughput or allocation comparisons.
+
+The required fast tier passes, including 596 HTTP checks and injected-clock phase-cap cases. Coverage
+includes managed short writes, early/late length errors, byte/chunk limits, cleanup errors, typed clients,
+stale images, every-allocation GC, native pipelines and controlled shutdown. The guide, dedicated
+streaming reference, server references and runnable examples were rendered and checked. Cross-platform
+execution remains CI's responsibility; no new platform ABI or instruction was introduced.
+
 ### JSON values and chunked HTTP bodies (2026-11-07, M3 Max, macOS arm64)
 
 - Promoted the complete-input JSON decoder to `lib/json.shen` and made the earlier example delegate to

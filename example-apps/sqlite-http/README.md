@@ -23,6 +23,7 @@ curl -X POST http://127.0.0.1:9000/counters/hits
 curl http://127.0.0.1:9000/counters/hits
 curl -X PUT -H 'Content-Type: application/json' --data-binary '{"value":42}' http://127.0.0.1:9000/counters/hits
 curl http://127.0.0.1:9000/counters
+curl http://127.0.0.1:9000/counters.ndjson
 curl -I http://127.0.0.1:9000/counters/hits
 curl -X DELETE http://127.0.0.1:9000/counters/hits
 curl -X POST http://127.0.0.1:9000/shutdown
@@ -32,13 +33,15 @@ curl -X POST http://127.0.0.1:9000/shutdown
 | --- | --- |
 | `GET /health` | `{"status":"ok"}` |
 | `GET /counters` | Up to 100 counters ordered by name, such as `[{"name":"hits","value":1}]` |
+| `GET /counters.ndjson` | Stream up to 100 ordered counters as newline-delimited JSON using chunked framing |
 | `GET /counters/NAME` | `{"value":1}`, or 404 when absent |
 | `POST /counters/NAME` | Create at zero if absent, then increment atomically and return the value |
 | `PUT /counters/NAME` | Set/create from `{"value":42}` with Content-Type application/json |
 | `DELETE /counters/NAME` | Delete and return 204, or 404 when absent |
-| `POST /shutdown` | Return 202 with `{"stopping":true}`, then stop accepting and drain the server |
+| `POST /shutdown` | Return 202 with `{"stopping":true}`, close that connection, then stop accepting and drain the server |
 
-HEAD follows the GET routes with representation length and no response body. Other methods on known
+HEAD follows GET routes without response bytes. Fixed responses advertise representation length;
+NDJSON advertises chunked framing and closes its source without stepping the query. Other methods on known
 routes return 405 and Allow. PUT accepts a bounded JSON object with exactly one `value` member. Other request bodies must be empty.
 Responses and PUT input use the public [JSON library](../../docs/json.md). Content-Length and chunked
 request bodies both work, with the same decoded-size bound and total deadline. Duplicate JSON keys,
@@ -50,6 +53,13 @@ Names are 1..64 ASCII letters, digits, underscores or hyphens. Targets are not p
 parameters are unsupported. Values are integers bounded by the database constraint at 1000000000000;
 a constraint or other database failure produces the HTTP driver's empty 500 response and rolls back.
 The list limit is fixed; this example does not implement pagination.
+
+HTTP/1.1 connections can serve up to 100 sequential requests, with a 5-second idle limit and a
+60-second total lifetime. Each request still opens its own database connection. The NDJSON source owns
+its prepared SELECT and database until completion/disconnect; it holds one encoded row at a time,
+honors the configured chunk bound and uses the total 5-second write budget. A slow export can hold a
+SQLite read lock until that budget is observed; this small example does not enable WAL or implement
+pagination. Streaming storage and database lifetimes remain bounded by the row/output/time limits.
 
 ## Shutdown
 
@@ -77,6 +87,7 @@ make test-http
 
 The independent Python test uses temporary files, HTTP clients and SQLite to check routes, HEAD,
 malformed input, parameter handling, JSON PUT bodies, 32 concurrent increments, persistence across restart
+streaming NDJSON and repeated requests on the same socket,
 and shutdown with stalled fixed-body and chunk-extension input. It also launches `run.shen` and exercises its shutdown command. `make test-http`
 runs the Shen regression tests on supported platforms, including static-build skips for native parts.
 

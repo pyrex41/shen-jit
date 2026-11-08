@@ -15,6 +15,7 @@ local PAGES = {
   deadlines = 'Operation deadlines',
   ['http-head'] = 'HTTP head framing',
   http = 'HTTP requests and responses',
+  ['http-streaming'] = 'Streaming HTTP responses',
   ['http-listener'] = 'Bounded HTTP servers',
   json = 'JSON',
 }

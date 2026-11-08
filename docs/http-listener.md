@@ -23,12 +23,13 @@ Native libraries are required, so this module is unavailable in static builds.
 before opening the listener. Bind or thread-start failure raises and closes any acquired socket.
 
 The supervisor admits a connection only when a slot is free. Each admitted connection gets one worker
-running `http.serve-one`, with its existing body/head/output limits, deadlines and cleanup. The connection
-handles one request and closes. At capacity, new connections wait in the OS listener backlog; the server
+running `http.serve-connection`, with its body/head/output limits, deadlines and cleanup. It handles
+requests sequentially under request-count, idle and total-connection bounds. At capacity, new connections wait in the OS listener backlog; the server
 does not allocate more worker state or send a speculative 503. Request deadlines start on admission.
 
 `http.stop S` requests shutdown and returns true. It is idempotent and can be called from another task.
 The supervisor stops accepting and closes the listener, then gives active requests their grace period.
+Idle persistent connections observe the stop flag within bounded 50 ms waits; after an active response, the worker closes instead of dispatching queued requests.
 After grace expires, it cancels the remaining socket operations and waits for worker cleanup. Already
 completed workers are collected before deciding which connections remain active.
 
@@ -50,7 +51,8 @@ stale; recreate them rather than trying to stop or resume a saved descriptor.
 
 ## Limits and observations
 
-Options are `[Name Number]` pairs. They accept all the [one-request handler options](http.md#one-request-per-connection), plus:
+Options are `[Name Number]` pairs. They accept all the [request/response options](http.md#one-request-per-connection) and
+[persistence options](http.md#persistent-connections), plus:
 
 | Option | Default | Range |
 | --- | --- | --- |
@@ -58,8 +60,9 @@ Options are `[Name Number]` pairs. They accept all the [one-request handler opti
 | `shutdown-grace` | 1000 ms | 0..600000 ms |
 
 Unknown, malformed and duplicate options raise. The connection cap bounds worker count; multiply the
-configured body and response limits by that cap when choosing an application memory budget. Responses
-and request metadata also occupy memory. This is concurrent I/O: ordinary Shen computation still shares
+configured body and response limits by that cap when choosing an application memory budget. Fixed responses
+and request metadata also occupy memory. [Streaming responses](http-streaming.md) retain a bounded
+head/chunk instead of copying the whole response. Producer-owned resources need their own bounds. This is concurrent I/O: ordinary Shen computation still shares
 one runtime lock. No worker pool, general scheduler, channels or multicore execution are added.
 
 `http.state S` reports `listening`, `draining`, `cancelling` or `stopped`. `http.stats S` returns one
@@ -103,5 +106,5 @@ README gives launch commands, routes and the independent Python HTTP/SQLite test
 
 `make test-http` includes connection-cap, backlog, graceful response, partial cancellation, handler and
 supervisor failure, typed-option, image and every-allocation GC cases, plus the counter application's
-database tests. Native cases skip explicitly on static builds. Streaming request/response APIs,
-connection reuse, TLS and signal handling are separate work.
+database tests and persistent pipelines. Native cases skip explicitly on static builds. Streaming
+request delivery, TLS and signal handling remain separate work.
