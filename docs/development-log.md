@@ -1174,6 +1174,9 @@ the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, 
   lines against 9, and slower: with the request line, 880 ns against 1,060 for the small head and 3,560 against 5,400
   for the browser's, five rounds. A grammar walks every byte of a value to find where it ends, at about 5 ns a byte,
   while `http.field` reads only the whitespace at either end, since `http.line-end` has checked the bytes between.
+  Tried again with byte tables and rules compiled in place, below: 924 ns (908 to 943) against 904 (873 to 919) for the
+  small head, and 4,033 (3,967 to 4,075) against 3,682 (3,602 to 3,809) for the browser's, six rounds. A byte of a value
+  now costs about a nanosecond, but the hand-written code reads none of them. Still rejected.
 - **Byte classes in place, kept.** A rule that is only `B where Guard` is now tested where a rule read after it
   names it, instead of called: `(+ <tchar>)` is one loop with no call per byte. The token loop above went from
   equal to faster than `http.token-range?`: 21 bytes 107 to 110 ns against 113 to 115, and 210 bytes 1,068 to 1,080
