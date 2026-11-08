@@ -86,6 +86,8 @@ All notable changes to this project are documented in this file. The format is b
   that works on values it has just taken apart.
 - Compiling a long literal list takes far less, and with constant elements the list uses one frame slot instead of one
   per element.
+  Contributed by @pyrex41 in [#10](https://github.com/tizoc/shen-jit/pull/10) and
+  [#11](https://github.com/tizoc/shen-jit/pull/11).
 
 ### Fixed
 
@@ -117,6 +119,9 @@ All notable changes to this project are documented in this file. The format is b
 - Word registers there too: `word`, `jump-unless-word`, `return-word`, `word-box`, and `u8!` to `u64!` keep 64-bit
   integers that wrap, for hashes and random numbers, and as indices with no tag to check.
 - `make bench-numeric` runs numeric programs and a path tracer in C and in Shen.
+- `make test-thorn` runs THORN, from the kernel, with no time limit, and checks its inference counts and what it leaves
+  unproved, which Shen/Scheme also gives.
+  Contributed by @pyrex41 in [#9](https://github.com/tizoc/shen-jit/pull/9).
 - The rendered guide now has how Shen/JIT works, its semantics, its instructions and calling C as pages of
   their own.
 
@@ -131,14 +136,19 @@ All notable changes to this project are documented in this file. The format is b
 - On x86-64 outside Windows, a loop that calls nothing keeps up to four values in registers, where it was two.
 - The heap grows with what is live, not by doubling, so a program holding a lot of data no longer slows down as it
   nears the next doubling. Such a program can use more memory than before, at most about 1.7 times.
+- `get-time` takes about half as long, as it no longer looks up the symbols `run` and `unix` at each call. THORN asks
+  for the time at every predicate call.
+  Contributed by @pyrex41 in [#8](https://github.com/tizoc/shen-jit/pull/8).
 
 ### Fixed
 
 - `=`, `<`, `>`, `<=` and `>=` now compare an integer with a real exactly. From 2^53 up the integer was rounded to a
   double first, so `=` was not transitive, unification could depend on the order of its arguments, and two keys that
   were `=` could have different hashes.
+  Contributed by @pyrex41 in [#6](https://github.com/tizoc/shen-jit/pull/6).
 - `=` no longer crashes on terms nested deeper than the C stack, in the head of a pair or in an absvector. A cyclic
   term still ends the process, now with a message.
+  Contributed by @pyrex41 in [#7](https://github.com/tizoc/shen-jit/pull/7).
 - An integer literal too big for a fixnum, and one with a large exponent such as `1e300`, now reads as the
   nearest real. They could land slightly off it, as `1e100` read as `1.0000000000000006e100`.
 - A burst of new symbols, such as from `gensym` in a loop, no longer slows every later collection for as long as
