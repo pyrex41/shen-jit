@@ -394,8 +394,9 @@ differential-scheme: $(BUILD)/shen-jit
 
 # C functions called from Shen (lib/ffi.shen), against a library made for it, then from
 # typed code, which needs (tc +) before the file is read, and C written for Shen, and the
-# libraries over them.
-FFI_RESULT := grep '^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
+# libraries over them. A suite's result is its failures and its count: -a, as a failure may
+# print raw bytes, which would make grep hide the count.
+FFI_RESULT := grep -a '^FAIL \|^[0-9]* passed' | awk '{ print } END { exit !/ 0 failed/ }'
 # The tests that any kind of build runs, given how to run the executable.
 FFI_SUITES = $(1) eval -l ../lib/ffi.shen -l ../tests/ffi.shen | $(FFI_RESULT) && \
 	  $(1) eval -l ../lib/ffi.shen -l ../tests/ffi_c.shen | $(FFI_RESULT) && \

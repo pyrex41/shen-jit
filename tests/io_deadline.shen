@@ -33,6 +33,18 @@
     (let Time (io.record [-1])
       (deadline.after (freeze (let N (+ 1 (<-address Time 0)) _ (address-> Time 0 N) N)) 5)))
 
+\\ Waits, on the real clock, until N bytes can be read from E at once, peeking with MSG_PEEK (2 on
+\\ every system). On macOS loopback data can arrive a moment after the peer's send returns, and a
+\\ wait then would spend ticks of a clock that counts its calls.
+(define timed-test.buffered
+  E N -> (timed-test.buffered-by (io.socket-id (<-address E 12)) N (+ (clock.monotonic) 2000)))
+
+(define timed-test.buffered-by
+  S N End -> (cond ((>= (socket.c-recv S (shen-jit.bytes N) N 2) N) true)
+                   ((> (clock.monotonic) End) (error "timed test: input did not arrive"))
+                   (true (do (socket.poll S (socket.readable-event) 10)
+                             (timed-test.buffered-by S N End)))))
+
 (if (trap-error (do (clock.monotonic) false)
                 (/. X (= (error-to-string X) "foreign: this static build cannot load libraries")))
     (do (output "1 passed, 0 failed (a static build)~%") (shen-jit.exit 0))
@@ -67,6 +79,7 @@
      S (hd (tl Pair))
      _ (address-> C 3 1)
      _ (io.write-all S (buffer.from-string "abcdef") [])
+     _ (timed-test.buffered C 6)
      _ (io.socket-deadline C (timed-test.advancing))
      V (buffer.new 6)
      Result (io.read-exact C V [])
