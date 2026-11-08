@@ -27,6 +27,26 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.do_GET()
 
     def do_GET(self):
+        if self.path == '/sink-hold':
+            self.server.sink_blocked.set()
+            assert self.server.sink_release.wait(15)
+        if self.path.startswith('/bulk/') or self.path == '/backpressure':
+            held = self.path == '/backpressure'
+            total = 67108864 if held else int(self.path.removeprefix('/bulk/'))
+            if held:
+                self.connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 8192)
+            self.send_response(200)
+            self.send_header('Content-Length', str(total))
+            self.end_headers()
+            block = bytes(range(256))*64
+            try:
+                for at in range(0, total, len(block)):
+                    self.wfile.write(block[:min(len(block), total-at)])
+                    if held:
+                        self.server.produced = at + min(len(block), total-at)
+            except (BrokenPipeError, ConnectionResetError):
+                pass
+            return
         if self.path == '/hold':
             self.server.hold_started.set()
             assert self.server.hold_release.wait(15)
@@ -42,6 +62,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(b'abc')
             self.wfile.flush()
+            self.close_connection = True
+            return
+        if self.path == '/stall-body':
+            self.send_response(200)
+            self.send_header('Content-Length', '1024')
+            self.end_headers()
+            self.wfile.write(b'abc')
+            self.wfile.flush()
+            time.sleep(.3)
             self.close_connection = True
             return
         if self.path == '/interim':
@@ -125,6 +154,9 @@ def main():
     server = Server(('127.0.0.1', 0), Handler)
     server.hold_started = threading.Event()
     server.hold_release = threading.Event()
+    server.sink_blocked = threading.Event()
+    server.sink_release = threading.Event()
+    server.produced = 0
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     base = f'http://127.0.0.1:{server.server_port}'
@@ -148,9 +180,35 @@ def main():
                             '-s','curl-test.ca',shen_string(cert),
                             '-s','curl-test.wrong-host',shen_string(f'https://localhost:{tls.server_port}/binary'),
                             '-s','curl-test.downgrade',shen_string(f'https://127.0.0.1:{tls.server_port}/downgrade')]
-                check_lines(run(args+base_args+['-l','tests/curl.shen']+tls_args+['-l','tests/curl_tls.shen']),2)
-                typed = '(do (output "~A~%" (if (curl-typed.run '+shen_string(base)+') "1 passed, 0 failed" "0 passed, 1 failed")) true)'
+                check_lines(run(args+base_args+['-l','tests/curl.shen','-l','tests/curl_stream.shen']
+                                +tls_args+['-l','tests/curl_tls.shen']),3)
+                typed = '(do (output "~A~%" (if (curl-typed.run '+shen_string(base)+') "3 passed, 0 failed" "0 passed, 1 failed")) true)'
                 check_lines(run(args+['-e','(tc +)','-l','tests/curl_typed.shen','-e',typed]),1)
+                # A blocked sink cannot cause the server's entire response to be drained/queued.
+                pressure = subprocess.Popen(args+base_args+['-l','tests/curl_stream_pressure.shen'],
+                    cwd=ROOT,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,
+                    env={**os.environ,'SHEN_JIT_SEMISPACE':'4M','SHEN_JIT_MAX_HEAP':'16M','SHEN_JIT_STATS':'1'})
+                try:
+                    assert server.sink_blocked.wait(10), 'stream never reached the sink'
+                    time.sleep(.2)
+                    produced = server.produced
+                    assert produced < 67108864//4, f'slow sink allowed {produced} bytes to be produced'
+                finally:
+                    server.sink_release.set()
+                    out,err = pressure.communicate(timeout=40)
+                assert pressure.returncode == 0 and 'stream pressure ok' in out and 'uncaught error' not in err,(out[-1000:],err)
+                assert 'C roots still registered' not in err,err
+                print(f'curl backpressure: {produced} of 67108864 bytes produced while the sink was blocked',flush=True)
+                print('2 passed, 0 failed',flush=True)
+                for size in [8388608,67108864]:
+                    memory = run(args+base_args+['-s','curl-memory.size',str(size),'-l','tests/curl_stream_memory.shen'],
+                        env={**os.environ,'SHEN_JIT_SEMISPACE':'4M','SHEN_JIT_MAX_HEAP':'16M','SHEN_JIT_STATS':'1'})
+                    assert f'stream memory ok {size} ' in memory.stdout,memory.stdout[-1000:]
+                    assert 'C roots still registered' not in memory.stderr,memory.stderr
+                    live = re.search(r'live heap (\d+) KB',memory.stderr).group(1)
+                    assert int(re.search(r'semispace (\d+) KB',memory.stderr).group(1)) <= 16384,memory.stderr
+                    print(f'curl stream: {size} bytes with a 16 MiB heap cap; live heap {live} KiB',flush=True)
+                print('2 passed, 0 failed',flush=True)
                 reference = ROOT/'docs/curl.md'
                 if reference.exists():
                     examples = directory/'client.shen'
@@ -159,34 +217,50 @@ def main():
                     verify += '(= (web.decode-json (web.get '+shen_string(base+'/json')+')) [object ["ok" true]]) '
                     verify += '(= (web.decode-json (web.post-json '+shen_string(base+'/echo')+' [object ["ok" true]])) [object ["ok" true]])) '
                     verify += '(do (output "3 passed, 0 failed~%") true) (error "documentation examples failed"))'
-                    check_lines(run(args+['-l','lib/json.shen','-l',str(examples),'-e',verify]),1)
+                    example_file = directory/'example.bin'
+                    saved = '(let Result (web.save '+shen_string(base+'/binary')+' '+shen_string(example_file)+') '
+                    saved += 'R (hd (tl Result)) (if (and (= (hd Result) ok) (= (curl.body-length R) 1024)) '
+                    saved += '(do (output "1 passed, 0 failed~%") true) (error "stream example failed")))'
+                    streamed = '(let Sink (io.output-buffer (buffer.new 1024)) Result (web.stream '+shen_string(base+'/binary')+' Sink) '
+                    streamed += '_ (io.close Sink) R (hd (tl Result)) (if (and (= (hd Result) ok) (= (curl.body-length R) 1024)) '
+                    streamed += '(do (output "1 passed, 0 failed~%") true) (error "borrowed stream example failed")))'
+                    check_lines(run(args+['-l','lib/io-file.shen','-l','lib/json.shen','-l',str(examples),'-e',verify,'-e',saved,'-e',streamed]),3)
+                    assert example_file.read_bytes()==BINARY
                 server.hold_started.clear()
                 server.hold_release.clear()
-                check_lines(run(args+base_args+['-l','tests/curl_thread.shen']),1)
+                check_lines(run(args+base_args+['-l','tests/curl_wait.shen','-l','tests/curl_stream_thread.shen']),1)
+                check_lines(run(args+base_args+['-l','tests/curl_wait.shen','-l','tests/curl_thread.shen']),1)
                 image = directory/'curl.img'
-                save = [str(executable),'--save',str(image)]+args[1:]+base_args+['-l','tests/curl_thread.shen',
+                save = [str(executable),'--save',str(image)]+args[1:]+base_args+['-l','tests/curl_wait.shen','-l','tests/curl_thread.shen',
                     '-e','(set curl-image.client (curl.open))',
+                    '-e','(set curl-image.streamed (let Sink (io.output-buffer (buffer.new 5)) '
+                         'Result (curl.get-to (cn (value curl-test.base) "/chunked") Sink [[proxy ""]]) '
+                         '_ (io.close Sink) (hd (tl Result))))',
                     '-e','(set curl-image.response (hd (tl (curl.get (cn (value curl-test.base) "/binary") [[proxy ""]]))))']
                 server.hold_started.clear()
                 server.hold_release.clear()
                 run(save)
                 env = {**os.environ,'SHEN_JIT_IMAGE':str(image)}
                 restored = run([str(executable),'eval','-e',
-                    '(output "saved: ~A ~A~%" (buffer.length (curl.body (value curl-image.response))) '
-                    '(trap-error (do (curl.request (value curl-image.client) "GET" (value curl-test.base) [] (buffer.new 0) []) false) (/. X true)))'],env=env)
-                assert 'saved: 1024 true' in restored.stdout,restored.stdout[-1000:]
+                    '(output "saved: ~A ~A ~A ~A ~A~%" (buffer.length (curl.body (value curl-image.response))) '
+                    '(trap-error (do (curl.request (value curl-image.client) "GET" (value curl-test.base) [] (buffer.new 0) []) false) (/. X true)) '
+                    '(curl.streamed? (value curl-image.streamed)) (curl.body-length (value curl-image.streamed)) '
+                    '(= (curl.trailers (value curl-image.streamed)) [["x-trail" "yes"]]))'],env=env)
+                assert 'saved: 1024 true true 5 true' in restored.stdout,restored.stdout[-1000:]
                 gc = run([str(executable),'eval','-l','tests/curl_gc.shen'],
                          env={**env,'SHEN_JIT_GC_STRESS':'1'})
-                assert 'curl gc ok' in gc.stdout,gc.stdout[-1000:]
-                print('3 passed, 0 failed',flush=True)
+                assert 'curl gc ok' in gc.stdout and 'curl stream gc ok' in gc.stdout,gc.stdout[-1000:]
+                print('8 passed, 0 failed',flush=True)
                 destination = directory/'download.bin'
-                for path,success in [('/binary',True),('/error',False)]:
+                for path,success in [('/bulk/20971520',True),('/binary',True),('/error',False),('/redirect',False),('/partial',False)]:
                     argv='['+' '.join(map(shen_string,['tools/curl-fetch.shen',base+path,destination]))+']'
                     completed=subprocess.run(args+['-s','*argv*',argv,'-l','tools/curl-fetch.shen'],
-                                             cwd=ROOT,capture_output=True,text=True,timeout=15)
+                        cwd=ROOT,capture_output=True,text=True,timeout=30,
+                        env={**os.environ,'SHEN_JIT_SEMISPACE':'4M','SHEN_JIT_MAX_HEAP':'16M'})
                     assert (completed.returncode==0 and 'uncaught error' not in completed.stderr)==success,completed.stderr
-                    assert destination.read_bytes()==BINARY,'download corrupted or failure overwrote an existing file'
-                print('2 passed, 0 failed',flush=True)
+                    expected = BINARY*20480 if path.startswith('/bulk/') else b'abc' if path=='/partial' else BINARY
+                    assert destination.read_bytes()==expected,'downloaded bytes or partial failure differ'
+                print('5 passed, 0 failed',flush=True)
             finally:
                 tls.shutdown();tls.server_close();tls_worker.join()
     finally:

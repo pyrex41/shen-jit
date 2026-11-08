@@ -8,8 +8,10 @@ All notable changes to this project are documented in this file. The format is b
 ### Added
 
 - Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,
-  binary bodies, headers and trailers, timeouts, TLS verification and explicit redirect limits. The downloader
-  `tools/curl-fetch.shen` saves successful responses through the independent file I/O library. See [the reference](docs/curl.md).
+  binary bodies, headers and trailers, timeouts, TLS verification and explicit redirect limits. Responses can
+  stream into independent I/O sinks with backpressure, bounded chunks and exact partial-write progress.
+  `tools/curl-fetch.shen` streams 2xx bodies to files; an error after writing begins can leave a partial file.
+  See [the reference](docs/curl.md). Rebuild the adapter with `make curl` for ABI 2.
 
 ## [0.5] - 2026-11-07
 

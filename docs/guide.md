@@ -375,7 +375,7 @@ lossless number tokens and typed values. HTTP request bodies can use Content-Len
 ### HTTP clients with libcurl
 
 Optional `lib/curl.shen` provides bounded HTTP(S) requests, reusable clients, binary bodies, TLS verification
-and transport errors. It needs the small C adapter built by `make curl`, plus libcurl's shared library.
+and streaming downloads into our I/O sinks with backpressure. It needs the small C adapter built by `make curl`, plus libcurl's shared library.
 [HTTP clients with libcurl](https://github.com/tizoc/shen-jit/blob/main/docs/curl.md) covers installation,
 the API and `tools/curl-fetch.shen`, a downloader using our file I/O library.
 

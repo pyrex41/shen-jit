@@ -32,4 +32,12 @@
   [[[timeout 0]] [[connect-timeout 0]] [[body-limit -1]] [[request-limit 268435457]]
    [[header-limit 1048577]] [[redirect-limit 21]] [[timeout (+ 0.5 0.5)]]
    [[proxy "ac#0;b"]] [[ca-file ""]] [[unknown 1]] [[body-limit 1] [body-limit 2]]])
+(curl-pure.check "large streaming limit does not imply a large buffer" 1073741824
+  (freeze (<-address (curl.stream-options [[body-limit 1073741824]]) 1)))
+(map (/. Options
+       (curl-pure.check "invalid streaming chunk size rejected" true
+         (freeze (trap-error (do (curl.stream-options Options) false) (/. X true)))))
+  [[[chunk-size 0]] [[chunk-size 65537]] [[chunk-size -1]] [[chunk-size 1] [chunk-size 2]]])
+(curl-pure.check "buffered API rejects streaming-only option" true
+  (freeze (trap-error (do (curl.options [[chunk-size 1]]) false) (/. X true))))
 (output "~A passed, ~A failed~%" (value curl-pure.passed) (value curl-pure.failed))

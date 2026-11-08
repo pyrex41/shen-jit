@@ -10,9 +10,10 @@
 (define-foreign-procedure curl.c-open curl.adapter "shen_curl_open" 0)
 (define-foreign-procedure curl.c-close curl.adapter "shen_curl_close" 2)
 (define-foreign-procedure curl.c-request curl.adapter "shen_curl_request" 6)
+(define-foreign-procedure curl.c-stream curl.adapter "shen_curl_stream" 3)
 
 (define curl.abi-check
-  -> (if (= (curl.c-abi) 1) true (error "curl: incompatible adapter ABI")))
+  -> (if (= (curl.c-abi) 2) true (error "curl: incompatible adapter ABI; rebuild with make curl")))
 
 (define curl.version
   -> (do (curl.abi-check) (curl.c-version)))
@@ -65,29 +66,36 @@
   redirect-limit -> 5
   ca-file -> 6
   proxy -> 7
+  chunk-size -> 8
   _ -> (error "curl: unknown option"))
 
 (define curl.options
-  Options -> (curl.configure (io.record [1048576 1048576 65536 30000 5000 0 [] []]) Options []))
+  Options -> (curl.configure (io.record [1048576 1048576 65536 30000 5000 0 [] []]) Options [] false))
+
+(define curl.stream-options
+  Options -> (curl.configure (io.record [1048576 1048576 65536 30000 5000 0 [] [] 16384]) Options [] true))
 
 (define curl.configure
-  Config [] _ -> Config
-  Config [[Name Value] | Rest] Seen ->
+  Config [] _ _ -> Config
+  Config [[Name Value] | Rest] Seen Stream ->
     (let I (curl.option-index Name)
+         _ (if (and (= I 8) (not Stream)) (error "curl: chunk-size requires a streaming request") true)
          _ (if (element? Name Seen) (error "curl: duplicate option") true)
-         V (if (>= I 6)
+         V (if (element? I [6 7])
                (curl.text Value (if (= I 6) 4096 8192))
-               (curl.numeric-option I Value))
+               (curl.numeric-option I Value Stream))
          _ (if (and (= I 6) (= V "")) (error "curl: empty CA file") true)
          _ (address-> Config I V)
-      (curl.configure Config Rest [Name | Seen]))
-  _ _ _ -> (error "curl: options must be [Name Value] pairs"))
+      (curl.configure Config Rest [Name | Seen] Stream))
+  _ _ _ _ -> (error "curl: options must be [Name Value] pairs"))
 
 (define curl.numeric-option
-  I Value ->
+  I Value Stream ->
     (let N (buffer.index Value)
-         Maximum (cond ((< I 2) 268435456) ((= I 2) 1048576) ((< I 5) 2147483647) (true 20))
-      (if (and (<= N Maximum) (or (not (element? I [3 4])) (> N 0)))
+         Maximum (cond ((and (= I 1) Stream) 2305843009213693951)
+                       ((< I 2) 268435456) ((= I 2) 1048576) ((< I 5) 2147483647)
+                       ((= I 8) 65536) (true 20))
+      (if (and (<= N Maximum) (or (not (element? I [3 4 8])) (> N 0)))
           N (error "curl: invalid numeric option"))))
 
 (define curl.no-nul
@@ -172,9 +180,12 @@
 
 (define curl.request-input
   Method URL Fields Body Options ->
+    (curl.input Method URL Fields Body (curl.options Options)))
+
+(define curl.input
+  Method URL Fields Body Config ->
     (let _ (curl.token Method 32)
          Target (curl.url-check URL)
-         Config (curl.options Options)
          N (buffer.length Body)
          _ (if (<= N (<-address Config 0)) true (error "curl: request body exceeds limit"))
          _ (if (and (element? Method ["GET" "HEAD"]) (> N 0)) (error "curl: GET/HEAD require an empty body") true)
@@ -207,7 +218,8 @@
           [ok (io.record [curl.response-state (<-address Native 4) (<-address Native 5)
                           (buffer.wrap (<-address Native 6)) (curl.parse-fields Head true)
                           (curl.parse-fields Trailers false) Head Trailers
-                          (<-address Native 9) (<-address Native 10)])])
+                          (<-address Native 9) (<-address Native 10)
+                          (shen-jit.bytes-length (<-address Native 6))])])
         [error (io.progress (io.native-error request
                              (cond ((element? (<-address Native 1) [2 3]) limit)
                                    ((= (<-address Native 0) 28) timeout)
@@ -221,6 +233,92 @@
 
 (define curl.get
   URL Options -> (curl.fetch "GET" URL [] (buffer.new 0) Options))
+
+\\ Streaming state: current sink, bytes accepted by it, first error. Only one chunk is live here.
+(define curl.stream-mark
+  R Count -> (do (address-> R 3 []) (address-> R 10 Count) R))
+
+(define curl.sink-result
+  [ok Sink] -> [ok (io.endpoint-check Sink)]
+  [error Error] -> (if (io.error? Error) [error Error] (error "curl: invalid sink error"))
+  _ -> (error "curl: sink opener must return [ok Endpoint] or [error Error]"))
+
+(define curl.stream-opened
+  State [ok Sink] ->
+    (do (address-> State 0 Sink) (io.check Sink write []) true)
+  State [error Error] -> (do (address-> State 2 Error) false))
+
+(define curl.stream-write
+  State Bytes ->
+    (curl.stream-write-loop State (buffer.wrap Bytes) 0 (shen-jit.bytes-length Bytes)))
+
+(define curl.stream-write-loop
+  _ _ End End -> true
+  State View At End ->
+    (let Sink (<-address State 0)
+         Result (trap-error (io.write-some Sink (buffer.slice View At (- End At)) [])
+                  (/. X [error (io.error write (<-address Sink 1) (error-to-string X))]))
+      (curl.stream-written State View At End Result)))
+
+(define curl.stream-written
+  State View At End [written N] ->
+    (do (address-> State 1 (+ (<-address State 1) N))
+        (curl.stream-write-loop State View (+ At N) End))
+  State _ _ _ [error Error] -> (do (address-> State 2 Error) false))
+
+(define curl.stream-event
+  State _ _ [] Bytes -> (curl.stream-write State Bytes)
+  State Open URL Native _ ->
+    (curl.stream-opened State
+      (curl.sink-result (Open (curl.stream-mark (curl.stream-head (curl.result URL Native)) 0)))))
+
+(define curl.stream-head
+  [ok R] -> R)
+
+(define curl.stream-deliver
+  State Open URL Native Bytes ->
+    (trap-error (curl.stream-event State Open URL Native Bytes)
+      (/. X (do (address-> State 2 (io.error callback URL (error-to-string X))) false))))
+
+(define curl.stream-completed
+  State [ok R] -> [ok (curl.stream-mark R (<-address State 1))]
+  State [error Error] -> [error (io.progress Error (<-address State 1))])
+
+(define curl.stream-perform
+  Client Input Open State ->
+    (let P (curl.live Client)
+         URL (<-address Input 1)
+         Native (trap-error
+                  (curl.result URL (curl.c-stream P Input (/. Head Bytes (curl.stream-deliver State Open URL Head Bytes))))
+                  (/. X [error (io.error request URL (error-to-string X))]))
+         Error (<-address State 2)
+      (curl.stream-completed State (if (empty? Error) Native [error Error]))))
+
+(define curl.request-to
+  Client Method URL Fields Body Sink Options ->
+    (do (curl.live Client) (io.check Sink write [])
+        (curl.stream-perform Client (curl.input Method URL Fields Body (curl.stream-options Options))
+          (/. Head [ok Sink]) (io.record [[] 0 []]))))
+
+(define curl.stream-close
+  [] -> [ok]
+  Sink -> (trap-error (io.close Sink)
+            (/. X [error (io.error close "curl sink" (error-to-string X))])))
+
+(define curl.request-with-sink
+  Client Method URL Fields Body Open Options ->
+    (let _ (curl.live Client)
+         Input (curl.input Method URL Fields Body (curl.stream-options Options))
+         State (io.record [[] 0 []])
+         Result (curl.stream-perform Client Input Open State)
+      (curl.stream-completed State (io.finish Result (curl.stream-close (<-address State 0))))))
+
+(define curl.get-to
+  URL Sink Options ->
+    (let _ (io.check Sink write [])
+         Input (curl.input "GET" URL [] (buffer.new 0) (curl.stream-options Options))
+      (curl.with-client
+        (/. Client (curl.stream-perform Client Input (/. Head [ok Sink]) (io.record [[] 0 []]))))))
 
 \\ Parse only the final status block; native callbacks retain trailers separately.
 (define curl.find-byte
@@ -281,7 +379,12 @@
 (define curl.url
   R -> (<-address (curl.response-check R) 2))
 (define curl.body
-  R -> (<-address (curl.response-check R) 3))
+  R -> (let Body (<-address (curl.response-check R) 3)
+         (if (empty? Body) (error "curl: response body was streamed") Body)))
+(define curl.streamed?
+  R -> (empty? (<-address (curl.response-check R) 3)))
+(define curl.body-length
+  R -> (<-address (curl.response-check R) 10))
 (define curl.headers
   R -> (<-address (curl.response-check R) 4))
 (define curl.trailers
@@ -327,7 +430,10 @@
   [ca-file S] : curl.option;
   S : string;
   =============================
-  [proxy S] : curl.option;)
+  [proxy S] : curl.option;
+  N : number;
+  =============================
+  [chunk-size N] : curl.option;)
 
 (declare curl.version [--> string])
 (declare curl.open [--> curl.client])
@@ -339,9 +445,18 @@
 (declare curl.fetch
   [string --> [string --> [[list [list string]] --> [buffer.view --> [[list curl.option] --> [io.result curl.response]]]]]])
 (declare curl.get [string --> [[list curl.option] --> [io.result curl.response]]])
+(declare curl.request-to
+  [curl.client --> [string --> [string --> [[list [list string]] --> [buffer.view -->
+    [io.endpoint --> [[list curl.option] --> [io.result curl.response]]]]]]]])
+(declare curl.request-with-sink
+  [curl.client --> [string --> [string --> [[list [list string]] --> [buffer.view -->
+    [[curl.response --> [io.result io.endpoint]] --> [[list curl.option] --> [io.result curl.response]]]]]]]])
+(declare curl.get-to [string --> [io.endpoint --> [[list curl.option] --> [io.result curl.response]]]])
 (declare curl.status [curl.response --> number])
 (declare curl.url [curl.response --> string])
 (declare curl.body [curl.response --> buffer.view])
+(declare curl.streamed? [curl.response --> boolean])
+(declare curl.body-length [curl.response --> number])
 (declare curl.headers [curl.response --> [list [list string]]])
 (declare curl.trailers [curl.response --> [list [list string]]])
 (declare curl.raw-headers [curl.response --> buffer.view])

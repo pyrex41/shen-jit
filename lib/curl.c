@@ -1,4 +1,4 @@
-/* Optional libcurl adapter over the public Shen C API. Callbacks never touch Shen values. */
+/* Optional libcurl adapter over the public Shen C API. No Shen access without the VM lock. */
 #include "shen.h"
 #include <curl/curl.h>
 #include <stdbool.h>
@@ -25,6 +25,12 @@ typedef struct {
     struct curl_slist *fields;
     Buffer body, head, trailers;
     bool headers_done;
+    bool streaming, started, locked, callback_error;
+    size_t chunk_size;
+    CURL *easy;
+    shen_vm *vm;             /* Only for this synchronous foreign call, on its calling thread. */
+    shen_value handler;      /* Rooted throughout the transfer. */
+    void *token;
     int reason;
     char error[CURL_ERROR_SIZE];
 } Transfer;
@@ -39,7 +45,7 @@ static CURLcode initialize(void)
     return rc;
 }
 
-EXPORT int shen_curl_abi(void) { return 1; }
+EXPORT int shen_curl_abi(void) { return 2; }
 
 EXPORT shen_value shen_curl_version(shen_vm *vm, shen_value *args)
 {
@@ -112,12 +118,46 @@ static bool append(Buffer *b, const void *data, size_t n, size_t limit, Transfer
     return true;
 }
 
+static shen_value result(shen_vm *vm, Transfer *t, CURLcode rc, CURL *easy);
+
+/* Called with the lock held. Callback roots must leave before this C frame does. */
+static bool stream_event(Transfer *t, bool head, const char *data, size_t n)
+{
+    shen_value args[2] = {SHEN_NIL, SHEN_NIL};
+    shen_root(t->vm, &args[0]);
+    shen_root(t->vm, &args[1]);
+    args[head ? 0 : 1] = head ? result(t->vm, t, CURLE_OK, t->easy) : shen_make_bytes(t->vm, data, n);
+    shen_value out = SHEN_ERROR;
+    if (args[head ? 0 : 1] != SHEN_ERROR)
+        out = shen_call(t->vm, t->handler, 2, args);
+    shen_unroot(t->vm, 2);
+    if (out == SHEN_ERROR) t->callback_error = true;
+    if (out != SHEN_TRUE) { t->reason = 5; return false; }
+    if (head) t->started = true;
+    return true;
+}
+
 static size_t body_callback(char *data, size_t size, size_t count, void *context)
 {
     Transfer *t = context;
     if (size && count > SIZE_MAX / size) { t->reason = 2; return 0; }
     size_t n = size * count;
     if (n > t->body_limit - t->body_total) { t->reason = 2; return 0; }
+    if (t->streaming && n) {
+        shen_acquire(t->vm, t->token);
+        t->locked = true;
+        if (!t->started && !stream_event(t, true, NULL, 0)) return 0;
+        for (size_t at = 0; at < n;) {
+            size_t part = n - at < t->chunk_size ? n - at : t->chunk_size;
+            if (!stream_event(t, false, data + at, part)) return 0;
+            t->body_total += part;
+            at += part;
+        }
+        /* The sink accepted everything before libcurl can read again. No queue or body buffer. */
+        t->token = shen_release(t->vm);
+        t->locked = false;
+        return n;
+    }
     if (!append(&t->body, data, n, t->body_limit, t)) return 0;
     t->body_total += n;
     return n;
@@ -174,12 +214,18 @@ static bool prepare(shen_vm *vm, shen_value *args, Transfer *t)
 {
     shen_value config = args[5];
     int64_t limits[6];
-    if (shen_vector_length(vm, config) != 8) return false;
+    if (shen_vector_length(vm, config) != (t->streaming ? 9 : 8)) return false;
     for (int i = 0; i < 6; i++) {
-        int64_t max = i < 2 ? 268435456 : i == 2 ? 1048576 : i < 5 ? 2147483647 : 20;
+        int64_t max = i == 1 && t->streaming ? (INT64_C(1) << 61) - 1 :
+                      i < 2 ? 268435456 : i == 2 ? 1048576 : i < 5 ? 2147483647 : 20;
         if (!number_option(vm, config, i, max, &limits[i])) return false;
     }
     if (!limits[3] || !limits[4]) return false;
+    if (t->streaming) {
+        int64_t chunk;
+        if (!number_option(vm, config, 8, 65536, &chunk) || !chunk) return false;
+        t->chunk_size = (size_t)chunk;
+    }
     t->body_limit = (size_t)limits[1]; t->header_limit = (size_t)limits[2];
     t->timeout = (long)limits[3]; t->connect_timeout = (long)limits[4]; t->redirects = (long)limits[5];
     t->method = copy_text(vm, args[1], 32);
@@ -233,7 +279,7 @@ static CURLcode configure(CURL *easy, Transfer *t)
     SET(CURLOPT_HTTP_CONTENT_DECODING, 0L);
     SET(CURLOPT_TIMEOUT_MS, t->timeout); SET(CURLOPT_CONNECTTIMEOUT_MS, t->connect_timeout);
     SET(CURLOPT_PROTOCOLS, (long)(CURLPROTO_HTTP | CURLPROTO_HTTPS));
-    bool https = !strncmp(t->url, "https://", 8) || !strncmp(t->url, "HTTPS://", 8);
+    bool https = curl_strnequal(t->url, "https://", 8);
     SET(CURLOPT_REDIR_PROTOCOLS, (long)(https ? CURLPROTO_HTTPS : CURLPROTO_HTTP | CURLPROTO_HTTPS));
     SET(CURLOPT_FOLLOWLOCATION, t->redirects ? 1L : 0L); SET(CURLOPT_MAXREDIRS, t->redirects);
     if (t->ca) SET(CURLOPT_CAINFO, t->ca);
@@ -261,6 +307,7 @@ static shen_value result(shen_vm *vm, Transfer *t, CURLcode rc, CURL *easy)
     const char *message = t->reason == 2 ? "response body exceeds limit" :
                           t->reason == 3 ? "response headers exceed limit" :
                           t->reason == 4 ? "cannot allocate transfer buffer" :
+                          t->reason == 5 ? "response sink rejected data" :
                           t->error[0] ? t->error : curl_easy_strerror(rc);
     shen_value out = shen_make_vector(vm, 11, SHEN_NIL);
     if (out == SHEN_ERROR) return out;
@@ -272,43 +319,68 @@ static shen_value result(shen_vm *vm, Transfer *t, CURLcode rc, CURL *easy)
     shen_vector_set(vm, out, 9, shen_make_fixnum((int64_t)(elapsed / 1000)));
     shen_vector_set(vm, out, 10, shen_make_fixnum(redirects));
     shen_value value = shen_make_string(vm, message, strlen(message));
-    if (value == SHEN_ERROR) return value;
+    if (value == SHEN_ERROR) goto failed;
     shen_vector_set(vm, out, 2, value);
-    if (rc) return out;
+    if (rc) goto done;
     value = shen_make_string(vm, url ? url : t->url, strlen(url ? url : t->url));
-    if (value == SHEN_ERROR) return value;
+    if (value == SHEN_ERROR) goto failed;
     shen_vector_set(vm, out, 5, value);
     Buffer *buffers[] = {&t->body, &t->head, &t->trailers};
     for (int i = 0; i < 3; i++) {
         value = shen_make_bytes(vm, buffers[i]->data, buffers[i]->used);
-        if (value == SHEN_ERROR) return value;
+        if (value == SHEN_ERROR) goto failed;
         shen_vector_set(vm, out, 6 + i, value);
     }
+done:
+    shen_unroot(vm, 1);
     return out;
+failed:
+    shen_unroot(vm, 1);
+    return SHEN_ERROR;
 }
 
-EXPORT shen_value shen_curl_request(shen_vm *vm, shen_value *args)
+static shen_value request(shen_vm *vm, shen_value *args, shen_value handler)
 {
     Client *c = shen_pointer(vm, args[0], "curl.client");
     if (!c) return shen_raise(vm, "curl: client is closed or stale");
     if (c->busy) return shen_raise(vm, "curl: client is already in use");
-    Transfer t = {0};
+    Transfer t = {.vm = vm, .easy = c->easy, .handler = handler, .streaming = handler != SHEN_NIL};
+    shen_root(vm, &t.handler);
     c->busy = true;
     if (!prepare(vm, args, &t)) {
         clear_transfer(&t); c->busy = false;
+        shen_unroot(vm, 1);
         return shen_raise(vm, "curl: invalid native request or cannot allocate request data");
     }
     curl_easy_reset(c->easy);
     CURLcode rc = configure(c->easy, &t);
     if (!rc) {
-        void *token = shen_release(vm);
+        t.token = shen_release(vm);
         rc = curl_easy_perform(c->easy);
-        shen_acquire(vm, token);
+        /* A failed callback keeps the lock, preserving a pending Shen exception until return. */
+        if (!t.locked) shen_acquire(vm, t.token);
     }
-    shen_value out = result(vm, &t, rc, c->easy);
+    if (!rc && t.streaming && !t.started && !stream_event(&t, true, NULL, 0)) rc = CURLE_WRITE_ERROR;
+    shen_value out = t.callback_error ? SHEN_ERROR : result(vm, &t, rc, c->easy);
     /* Reset callbacks and borrowed C pointers before disposing of their storage. Connections survive. */
     curl_easy_reset(c->easy);
     clear_transfer(&t);
     c->busy = false;
+    shen_unroot(vm, 1);
     return out;
+}
+
+EXPORT shen_value shen_curl_request(shen_vm *vm, shen_value *args)
+{
+    return request(vm, args, SHEN_NIL);
+}
+
+EXPORT shen_value shen_curl_stream(shen_vm *vm, shen_value *args)
+{
+    if (shen_vector_length(vm, args[1]) != 5 || !shen_is_procedure(vm, args[2]))
+        return shen_raise(vm, "curl: invalid streaming request");
+    /* prepare only reads these values, before any allocating Shen call. */
+    shen_value input[6] = {args[0]};
+    for (int i = 0; i < 5; i++) input[i + 1] = shen_vector_ref(vm, args[1], i);
+    return request(vm, input, args[2]);
 }

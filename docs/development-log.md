@@ -1655,6 +1655,40 @@ about 30 elsewhere and a 140-line header for C written for Shen. Timings are fro
 - **Linux releases are dynamic on an old glibc; static ones stay beside them without the FFI** while they pay for their
   two archives, 2026-11-05. A call there raises `foreign: this static build cannot load libraries`.
 
+### Streamed libcurl downloads (2026-11-08, Apple M3 Max, macOS arm64)
+
+- Added `curl.request-to`, `curl.get-to` and `curl.request-with-sink` over our own I/O endpoints.
+  The first two borrow a sink; the third opens one from the final response head and closes it on
+  success or failure. Short writes retry before the next delivery, and a later error or exception
+  keeps their exact cumulative progress. Close failures remain secondary to a transfer/write error.
+  Streamed responses retain fields/trailers and a written count, with no collected body.
+- Used synchronous same-thread callbacks, supported by the existing C API: acquire the VM lock,
+  create a bounded owned chunk, write it completely, unroot callback values, and release before
+  libcurl continues. This needs no multi loop, pause queue or worker. The request remains busy
+  across reentrant Shen calls, preventing request/close on the active client. A raw callback error
+  keeps the lock until returning to Shen so its pending exception survives native cleanup. The
+  result builder now unroots its local before returning, since callbacks allocate again afterward.
+- Payload storage no longer scales with response length: there is no native response-body buffer
+  in this path. Delivery defaults to 16 KiB, independently of the total body quota. Stream quotas
+  may exceed the buffered API's 256 MiB cap. Network timeouts cannot interrupt arbitrary sink code;
+  blocking endpoints need their own write deadlines. The adapter ABI is now 2 and must be rebuilt.
+- Independent loopback fixtures passed 8 and 64 MiB streams with 4 KiB delivery chunks, a 4 MiB
+  initial semispace and a 16 MiB heap cap. Both retained 1761 KiB after collection. In four fresh
+  processes alternating 8/64/8/64 MiB, sampled peak RSS was 30.17/32.02/31.88/30.70 MiB, using `ps`
+  with 20 ms sleeps between samples. These include loading/compiling the libraries and allocator retention; they
+  are memory observations, not throughput measurements or a universal process-memory cap.
+- With the first sink write blocked for 200 ms and the server's send buffer set to 8 KiB, the
+  64 MiB source produced about 192–320 KiB before backpressure stopped it. The remainder completed
+  after release. The queued network prefix is outside the application chunk bound. Tests also
+  create the first Shen worker from a sink, collect during callbacks, catch a raw callback exception,
+  reject reentrant request/close, retain partial timeout/write progress, and check verified TLS.
+- `tools/curl-fetch.shen` now streams up to 1 GiB in 16 KiB chunks. Its opener requires 2xx before
+  touching the destination; failures after writing starts can leave a partial file and report the
+  accepted count. A 20 MiB file passes under the 16 MiB heap cap; rejected statuses preserve the
+  existing file and truncated responses leave the expected partial bytes. The reference examples
+  execute against the fixture. All 191 libcurl checks, the fast tier and ASan/UBSan pass on macOS,
+  with both adapter and runtime instrumented. Linux/Windows evidence remains for CI.
+
 ### Bounded libcurl client (2026-11-08, Apple M3 Max, macOS arm64)
 
 - Added optional `lib/curl.shen` and a small adapter, `lib/curl.c`, over the public C API.

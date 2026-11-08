@@ -1,7 +1,8 @@
 # HTTP clients with libcurl
 
 `lib/curl.shen` provides synchronous HTTP and HTTPS requests with reusable clients, binary request
-and response bodies, ordered response fields, timeouts and collection limits. It uses `buffer.view`
+and response bodies, ordered response fields, timeouts, collection limits and streamed downloads with
+backpressure. It uses `buffer.view`
 and the error/result types from our own [I/O library](io.md). It does not use Shen's kernel streams.
 
 ## Building and loading
@@ -41,6 +42,7 @@ The facade searches `./build/`, `./lib/` and the current directory for `shen-cur
 `shen-curl.dll`. For another location, set `curl.*adapter-files*` to a list of absolute file names
 before loading `lib/curl.shen`. Saved executables retain that declaration and need the adapter and
 libcurl at runtime too. The adapter checks its own ABI and uses only the public `include/shen.h` API.
+Streaming requires adapter ABI 2; rebuild with `make curl` when updating from the initial binding.
 
 ## Requests
 
@@ -95,6 +97,78 @@ DNS, connection, TLS, timeout and incomplete-body failures return `[error Error]
 closed-client misuse, a missing adapter or failure to create a client raise. JSON decoding has its
 own validation and limits; it is not implied by the Content-Type.
 
+## Streaming into I/O sinks
+
+`curl.request-to` writes a response into a caller-owned `io.endpoint`. `curl.get-to` opens and closes
+a client for one streamed GET. They leave the sink open, and do not flush or close it. The sink
+must be writable and have no attached buffered writer; our file, socket and memory endpoints work
+directly. The request body is still a bounded complete view, rather than a streaming upload.
+
+```shen
+(define web.stream
+  URL Sink ->
+    (curl.get-to URL Sink [[body-limit 1073741824] [chunk-size 16384] [timeout 30000]]))
+```
+
+| Function | Ownership |
+| --- | --- |
+| `(curl.request-to Client Method URL Fields Body Sink Options)` | Borrows client and sink |
+| `(curl.get-to URL Sink Options)` | Scopes a client and borrows the sink |
+| `(curl.request-with-sink Client Method URL Fields Body OpenSink Options)` | Borrows client; opens and closes a sink for the transfer |
+
+All return `[ok Response]` or `[error Error]`. A streamed response retains status, fields, trailers
+and transfer metadata. `curl.streamed?` is true and `curl.body-length` is the number of bytes
+accepted by the sink. `curl.body` raises because the response has no collected body.
+
+`OpenSink` receives the final response head and must return `[ok Endpoint]` or `[error Error]`.
+It runs once, before the first payload write, or after a successful transfer with no body. This
+allows checking status or fields before opening a destination. Its head has no trailers yet,
+`curl.streamed?` is true and `curl.body-length` is zero; use response fields for an advertised length.
+The completed response contains the final trailers and actual written count. The library closes
+an opened sink after success, transport failure, a sink error or an exception. Transport failures
+before body delivery leave the opener uncalled.
+
+For example, load `lib/io-file.shen` and accept only 2xx before opening a file:
+
+```shen
+(define web.open-download
+  Path Head ->
+    (if (and (>= (curl.status Head) 200) (< (curl.status Head) 300))
+        (io.open-file Path write)
+        [error (io.native-error download http (curl.status Head) (curl.url Head) "expected a 2xx response")]))
+
+(define web.save
+  URL Path ->
+    (curl.with-client
+      (/. Client
+        (curl.request-with-sink Client "GET" URL [] (buffer.new 0)
+          (/. Head (web.open-download Path Head))
+          [[body-limit 1073741824] [chunk-size 16384] [timeout 30000]]))))
+```
+
+The sink's short writes are retried before taking another chunk. A zero-progress write, malformed
+backend result, I/O error or exception aborts the transfer. Sink errors retain their operation,
+domain, code and resource. All streaming failures report the total bytes accepted by the sink in
+`io.error-progress`, including short writes before a later exception; this is not a durability
+guarantee. Cleanup failures accompany a primary error as secondary errors. If only close fails,
+its error still reports the total accepted body bytes. The client remains reusable after failure.
+
+Backpressure is synchronous: the native write callback reacquires the VM lock, copies at most
+`chunk-size` bytes into an owned managed chunk, and fully writes it through our I/O API before
+returning to libcurl. There is no background producer, body queue or native whole-response buffer.
+Other Shen threads can run during network waits and blocking sink operations. The callback always
+runs on the thread that initiated the request and releases its temporary roots before returning.
+
+Live payload storage depends on the bounded request copy, header budget, one delivery chunk and I/O
+scratch, rather than the response's total size. Unreachable scratch awaits collection; allocator,
+libcurl/TLS and OS socket buffers also use memory. A sink that deliberately retains chunks adds its
+own storage. The body limit is a total transfer quota, independent of this memory bound.
+
+`timeout` cannot interrupt arbitrary Shen code or a blocked sink backend. libcurl observes its
+network timer as control returns to it. Configure the sink's own deadlines, such as a socket I/O
+deadline, when its writes can block. Slow sinks can therefore outlast a network timeout before
+returning an error; no worker thread is left downloading in the background.
+
 ## Options and limits
 
 Options are `[Name Value]` pairs. Unknown names, duplicates and malformed pairs raise. Numeric
@@ -103,13 +177,14 @@ values must be nonnegative fixnums in the ranges below; timeouts must be positiv
 | Option | Default | Range and meaning |
 | --- | --- | --- |
 | `request-limit` | 1048576 | 0–268435456 bytes copied from the request body |
-| `body-limit` | 1048576 | 0–268435456 response bytes accepted by body callbacks |
+| `body-limit` | 1048576 | 0–268435456 buffered response bytes; streaming allows up to the maximum fixnum, 2305843009213693951, as a transfer quota |
 | `header-limit` | 65536 | 0–1048576 bytes accepted by header callbacks, including status lines, separators and trailers |
 | `timeout` | 30000 | 1–2147483647 ms for the entire transfer, including redirects |
 | `connect-timeout` | 5000 | 1–2147483647 ms for connection setup, within the total timeout |
 | `redirect-limit` | 0 | 0 disables automatic redirects; 1–20 follows at most that many, for GET/HEAD only |
 | `ca-file` | libcurl's default | Nonempty CA file path, at most 4096 bytes |
 | `proxy` | libcurl's environment/defaults | Proxy URL, at most 8192 bytes; `""` disables proxies |
+| `chunk-size` | 16384 | Streaming only: 1–65536 bytes per managed delivery chunk; libcurl may deliver smaller pieces |
 
 URLs must use HTTP or HTTPS, contain no NUL, and fit 8192 bytes. Outgoing headers have limits of
 100 fields, 8192 bytes per encoded field and 65536 bytes in total, including the default Content-Type.
@@ -128,7 +203,7 @@ may outlast the configured timeout; a threaded resolver or c-ares avoids that li
 
 ## Response values and errors
 
-Response bytes are owned managed buffers. They survive later requests, client closure, collection
+Collected response bytes are owned managed buffers. They survive later requests, client closure, collection
 and image saving. Header names are ASCII lowercase; values are trimmed and repeated fields preserve
 their order. Interim responses and redirect heads are excluded from the final field list. Trailers
 have their own list and raw view.
@@ -137,7 +212,9 @@ have their own list and raw view.
 | --- | --- |
 | `(curl.status Response)` | Numeric HTTP status |
 | `(curl.url Response)` | Effective URL after redirects |
-| `(curl.body Response)` | Owned `buffer.view` |
+| `(curl.body Response)` | Owned `buffer.view`; raises for streamed responses |
+| `(curl.streamed? Response)` | Whether the body went to a sink |
+| `(curl.body-length Response)` | Collected body length or streamed bytes accepted by the sink |
 | `(curl.headers Response)` | Ordered list of `[Name Value]` fields |
 | `(curl.header-values Response Name)` | All matching ordinary field values, case-insensitively |
 | `(curl.trailers Response)` | Ordered trailer fields, separate from ordinary fields |
@@ -155,7 +232,8 @@ unbounded content-decoding step.
 retain the numeric CURLcode and libcurl's message. `io.error-domain` is `timeout` for CURLcode 28,
 `limit` for a collection budget failure, otherwise `curl`. `io.error-progress` counts body bytes
 accepted by callbacks before failure, across the transfer. It is not bytes durably saved and does
-not include a rejected callback chunk. Failed transfers return no partial response body.
+not include a rejected callback chunk. Streaming errors instead count actual sink progress, including
+partial chunks. Failed transfers return no partial response body; a sink retains bytes already written.
 
 ## TLS and redirects
 
@@ -181,7 +259,8 @@ discarding it does not install a GC finalizer. Saved clients are stale and must 
 Use one client per simultaneous transfer. An overlapping request or close returns an error without
 freeing or invalidating the active client. A completed transfer leaves it reusable after success or
 failure. The VM lock is released during the network operation and native cleanup, allowing other
-Shen threads to run. libcurl callbacks touch only native storage; Shen code runs after reacquisition.
+Shen threads to run. Buffered callbacks touch native storage. Streaming body callbacks reacquire the
+VM lock before calling the sink and do not resume network reads until the write completes.
 
 The adapter initializes libcurl once and leaves global cleanup to process exit. With libcurl older
 than 7.84.0, or a build without thread-safe global initialization, call `curl.version` or `curl.open`
@@ -195,17 +274,19 @@ build/shen-jit script tools/curl-fetch.shen https://example.com/ page.html
 make test-curl
 ```
 
-The downloader collects at most 16 MiB, accepts only 2xx responses, then opens the destination through
-`io.open-file` and writes with `io.write-all`. A network failure or non-2xx status leaves an existing
-destination untouched. File write failures retain the I/O error and progress; writing is not atomic.
-It is a bounded whole-response example, rather than a streaming sink.
+The downloader streams at most 1 GiB in 16 KiB chunks. It accepts only 2xx responses before opening
+the destination through `io.open-file`, and owns its closure. A rejected status or failure before
+opening leaves an existing destination untouched. Once writing begins, a network or file error can
+leave a partial destination; writing is not atomic. The error retains total accepted progress.
 
 Tests use an independent Python HTTP/TLS server on loopback and a temporary test CA generated with
 the `openssl` command. They check binary bodies, connection reuse and option reset, redirects,
 interim fields, trailers, partial responses, budgets, TLS rejection/trust, concurrent ownership,
-typed clients, saved images, GC during transfers and the downloader. Static builds run the pure
+typed clients, saved images, GC inside streaming callbacks and the downloader. A blocked sink holds
+back a 64 MiB source; 8 and 64 MiB streams finish with a 16 MiB Shen heap cap and 4 KiB delivery
+chunks. Static builds run the pure
 validation checks and explicitly skip native transfers. `make test-san` also instruments the adapter
 with AddressSanitizer and UBSan on shared-capable builds.
 
-Streaming upload/download sinks, the multi interface, transfer cancellation, authentication helpers,
+Streaming uploads, the multi interface, transfer cancellation, authentication helpers,
 cookie persistence and multipart construction remain future work.
