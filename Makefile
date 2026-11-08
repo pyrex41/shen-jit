@@ -56,7 +56,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -192,7 +192,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-streaming http-listener json
+GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-streaming http-listener json datalog
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -374,6 +374,20 @@ test-overrides: $(BUILD)/shen-jit
 	$(call OVERRIDES_TEST,)
 	$(call OVERRIDES_TEST,SHEN_JIT_SLOW_PRIMS=1)
 
+# Datalog (lib/datalog.shen): fixtures by hand, its kernels, and generated programs against its reference. A macro
+# applies only to files read after it, so the tests load as a file of their own.
+test-datalog: $(BUILD)/shen-jit
+	SHEN_JIT_GC_STRESS=$(GC_STRESS) $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/datalog-generate.shen -l tests/datalog.shen < /dev/null | \
+	  grep -a 'FAIL\|uncaught\| checks, ' | awk '{ print } END { exit !/ 0 failed$$/ }'
+
+# The workloads against Soufflé, if souffle and a C++ compiler are there: results, then time.
+bench-datalog-souffle: $(BUILD)/shen-jit
+	sh tests/bench/datalog-souffle.sh $(BUILD)/shen-jit
+
+# The same programs against SWI-Prolog's tabling, an engine that shares nothing with it, if swipl is there.
+test-datalog-swipl: $(BUILD)/shen-jit
+	sh tests/datalog-swipl.sh $(BUILD)/shen-jit
+
 # What differs from Shen/Scheme, to read: either may be wrong, so it checks nothing.
 differential-scheme: $(BUILD)/shen-jit
 	python3 tests/differential_scheme.py $(BUILD)/shen-jit $(SHEN_SCHEME) $(BUILD)/differential-scheme
@@ -440,6 +454,14 @@ bench-independent: all
 
 # Numeric programs in C, in Shen with boxed reals, and in Shen with real registers.
 NUMERIC_RESULT := grep -a '^[a-z]* [0-9.e-]* s check'
+# Datalog's workloads: a generated graph of each shape, and the call graph of the kernel's KL, closed and analysed.
+bench-datalog: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -e '(db.main "$(KERNEL_DIR)/klambda")' < /dev/null | \
+	  grep -a ' | \|^facts\|uncaught'
+	for c in chain-a chain-b small-a small-b large-a large-b; do for a in false true; do \
+	  $(BUILD)/shen-jit eval -l lib/native.shen -l lib/datalog.shen -l tests/bench/datalog.shen -l tests/bench/datalog-orders.shen -e "(do.run $$c $$a)" < /dev/null | grep -a ' | ' | head -1; \
+	done; done
+
 bench-numeric: $(BUILD)/shen-jit
 	$(CC) -O2 -ffp-contract=off -o $(BUILD)/numeric-c tests/bench/numeric.c -lm
 	$(BUILD)/numeric-c

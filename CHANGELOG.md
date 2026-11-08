@@ -22,6 +22,9 @@ All notable changes to this project are documented in this file. The format is b
   is rejected; HEAD/bodyless responses, partial output failure and owned body bytes have explicit rules.
 - `lib/native.shen` writes loops and branches without labels: `if`, `when`, `unless`, `while`, `for`, `block`, `exit`
   and `next`, which become the same instructions. `shen-jit.expand-native` shows what they become.
+- `lib/datalog.shen`: relations, facts, recursive rules, stratified negation, arithmetic on 32-bit integers and
+  aggregates (`count`, `sum`, `min` and `max`), evaluated bottom up to a fixed point, with each rule compiled to
+  native code with `lib/native.shen`, facts added to a database incrementally, and facts removed. See the guide.
 - Optional HTTP head framing preserves unread body bytes under an explicit byte limit. Monotonic
   operation deadlines cover socket transfers across short progress and retries, with typed results,
   injected clocks and transient reader timeout recovery.

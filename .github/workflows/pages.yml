@@ -22,6 +22,7 @@ on:
       - docs/http-streaming.md
       - docs/http-listener.md
       - docs/json.md
+      - docs/datalog.md
       - site/**
       - assets/**
       - .github/workflows/pages.yml

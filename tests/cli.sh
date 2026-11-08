@@ -438,6 +438,25 @@ SHEN
     contains write-failed "$dir/full.out" "write-byte: No space left on device"
     contains close-failed "$dir/full.out" "close: No space left on device"
 fi
+# A Datalog program in a saved image, with what it compiled and what it compiles there.
+cat > "$dir/dl.shen" <<'EOF'
+(defdatalog dl.kept
+  (relation e [symbol symbol])
+  (relation t [symbol symbol])
+  (rule (t X Y) <-- (e X Y))
+  (rule (t X Z) <-- (t X Y) (e Y Z)))
+(defdatalog dl.later
+  (relation e [symbol])
+  (rule (e b) <-- (e a)))
+(output "compiled ~R~%" (datalog.sorted (datalog.run dl.kept [[e a b] [e b c]]) t))
+EOF
+SHEN_JIT_GC_STRESS= "$SHEN" --save "$dir/dl.img" eval -l lib/native.shen -l lib/datalog.shen -l "$dir/dl.shen" > "$dir/dl.out" 2>&1 < /dev/null
+check datalog-before-saving "$dir/dl.out" "compiled ((a b) (a c) (b c))"
+SHEN_JIT_GC_STRESS= SHEN_JIT_IMAGE="$dir/dl.img" "$SHEN" eval \
+    -e '(output "saved ~R~%" (datalog.sorted (datalog.run dl.kept [[e x y] [e y z]]) t))' \
+    -e '(output "later ~R~%" (datalog.sorted (datalog.run dl.later [[e a]]) e))' > "$dir/dl2.out" 2>&1 < /dev/null
+check datalog-saved "$dir/dl2.out" "saved ((x y) (x z) (y z))"
+check datalog-compiled-after-saving "$dir/dl2.out" "later ((a) (b))"
 # A write to a pipe that nobody reads raises, where SIGPIPE would end the process. Windows has no such signal.
 if [ "$posix" = yes ]; then
     cat > "$dir/pipe.shen" <<EOF

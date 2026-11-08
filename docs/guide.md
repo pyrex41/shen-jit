@@ -306,6 +306,12 @@ With `--seal`, `SHEN_JIT_SEAL=1` or `(shen-jit.seal +)`, new definitions are sea
 direct, and they cannot be redefined. `(shen-jit.seal -)` turns that off. This gains little, as open calls are
 inlined too, and patched when a function is redefined.
 
+### Datalog
+
+The optional `lib/datalog.shen` evaluates relations, facts and recursive rules bottom up, to a fixed point, with each
+rule compiled through the JIT and its join order chosen from the sizes of the relations as it runs.
+[Datalog](https://github.com/tizoc/shen-jit/blob/main/docs/datalog.md) covers loading, the language, the API and an example.
+
 ## Close to the machine
 
 ### Bytes and bits
@@ -838,7 +844,7 @@ its sources.
 The fast tier takes about 20 s, and catches nearly everything:
 
 ```sh
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-ffi test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-overrides
 ```
 
 | Target | What it does |
@@ -854,6 +860,8 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-buffer` | Buffer/cursor bounds, copying, foreign lifetime, typed clients, format examples and images/GC |
 | `make test-io` | Bounded chunk I/O, binary files and framing, socket endpoints/echo, native lifetimes, typed results and images/GC |
 | `make test-http` | Request/response framing, streaming, persistent connections, shutdown, SQLite example, typing and images/GC |
+| `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator |
+| `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
 | `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
@@ -878,7 +886,7 @@ To run the test suites from a source tarball, point `KERNEL_DIR` at a directory 
 
 ```sh
 make stlib
-make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-ffi test-overrides
+make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-overrides
 ```
 
 On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that

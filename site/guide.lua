@@ -18,6 +18,7 @@ local PAGES = {
   ['http-streaming'] = 'Streaming HTTP responses',
   ['http-listener'] = 'Bounded HTTP servers',
   json = 'JSON',
+  datalog = 'Datalog',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 

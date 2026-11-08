@@ -271,6 +271,52 @@ Memory outside the heap is a pointer with a length, and the byte primitives take
 is unchanged. A loop that calls nothing and reads through a parameter it never changes works these out once on the way in ([bytecode.md](bytecode.md), "Byte buffers and bit operations"). Otherwise, what is not a buffer leaves through an out-of-line block that tests for a pointer, loads its length and address into the registers the buffer's length and base would be in, and comes back for the
 same bounds check and access. A pointer that is dead or has no length has length 0, so nothing else needs to test for that.
 
+## Datalog
+
+`lib/datalog.shen` is Shen, loaded on request, and the JIT knows nothing of it. A program is checked into relations and rules, and planned: relations
+by strongly connected components in dependency order, and each rule as an order of joins, the atom with the most columns known going next. In a
+recursive component a rule has one variant for each of its atoms in that component, which reads that relation's new tuples and goes first, as a new
+derivation must use a new tuple somewhere. Join order is chosen as a run goes, from the sizes of the relations, and again when one has doubled: the next atom is the one expected to give the fewest tuples for what is known, from
+an index's tuples per key if it has one, and otherwise as if the columns were alike and independent. Each order becomes code, described below, kept with the program, as a rule has only so many orders.
+
+A negated atom counts as a dependency too, so its relation's component comes first, and the checker refuses a program where a relation depends
+on the negation of one in its own component. A negated atom is then a condition, like a comparison, placed as soon as its variables are bound:
+it probes the relation's own table for a whole tuple, an index for some columns, and asks only whether the relation is empty for none.
+The reference evaluator does not use the components: it numbers strata from the rules and runs each to a fixed point in turn.
+
+`(= V E)` whose `V` nothing has bound yet, once everything in `E` is, becomes a step that binds `V`, which may make other conditions ready and lets the
+atoms after it look `V` up. In a kernel, each operation of an expression goes to a word register and is checked to be 32 bits, the second operand
+of each in the register after the first's, so that a few registers serve any depth; a bound variable keeps its register. A result outside 32 bits
+returns a code above any place to start again from, and the KL around the kernel raises.
+
+The checker turns an aggregate into a condition that records its keys: the variables of its atom that appear elsewhere in the body. Its relation
+is a dependency that must be complete, as a negated one is. Once its keys are bound it is a fold step, which binds its variable, or compares when
+that is bound already. A kernel keeps its value in a register: a loop over the relation for no keys, a probe of its table for a whole tuple, and a
+probe of an index and a walk along its chain for some columns. `min` and `max` start just outside 32 bits, where they stay over no tuples, and
+a sum is checked once at the end, so that the order of the tuples cannot change whether it raises. KL folds in a loop function that returns the
+value.
+
+`datalog.add` notes each relation's size, its mark, adds the facts, and goes through the components in order. One that reads only relations that
+grew, positively, goes on semi-naively: each relation that grew reads what is past its mark as new, every rule runs once with one variant for each
+atom of such a relation, and the component's own rounds follow. One that negates or aggregates a relation that changed, or reads one that was
+evaluated again, could lose tuples, so its relations are emptied, given their facts again, kept with the database for this, and the component runs
+as in `datalog.run`. Plans and kernels are the same ones, kept with the program.
+
+`datalog.remove` never deletes a tuple from storage, whose buffers, tables and index chains only grow. It takes the facts out of those the
+database keeps, and goes through the components in order: one that holds a relation that lost a fact, or reads one evaluated again, is emptied to
+its facts and evaluated again, and the rest stay. Deleting and rederiving would be faster for a small removal from a large recursive relation, but
+would need storage that can delete, and so a check of each tuple in every kernel, or compacting after each removal.
+
+Symbols and strings are interned, the program's own constants first, so that generated code can hold their numbers, and an integer is its own 32 bits, so that arithmetic and comparisons need no table. A relation's tuples are u32 columns one after another in a byte buffer, which the collector does not scan, with the
+new tuples and those for the next round as ranges of it. A round reads only what was there when it began, so a loop can keep the buffer it started with while growing replaces the relation's. A table of 64-bit entries, open addressed, deduplicates: each holds the top half of its hash, which
+also says where it goes when the table grows, and the tuple's position plus one. An index is such a table by key, for the first tuple with that key, and a chain of u32s for the rest, made for each set of columns this run's plans look up, when first needed. Keys that are a whole tuple use
+the relation's own table. Inserting, finding, indexing and growing are kernels of word registers from `lib/native.shen`'s assembler, one for each shape of tuple or key.
+
+Each join order is a kernel too, written with that library's structured control: a `for` over a scanned range, a probe and a `while` along an index's chain for a lookup, and the head's insert inline, so that it calls nothing. A variable costs no register,
+as it is read from its tuple's column where it is used. When the relation it adds to has no room, the kernel returns where its outermost scan stood, plus one, and a KL function around it grows the relation and calls it again from there, which is sound as deriving a
+tuple twice does no harm; below a first step that is not a scan, it starts again from the beginning. A plan that needs more registers than the assembler has, or that it refuses for any other reason, is compiled as KL through `eval-kl` instead, with a function for each atom's loop.
+`datalog.run-naive` works from the definition, over lists, and shares only the checker.
+
 ## Left out on purpose
 
 - **An interpreter.** A target without an SLJIT backend could add one: the slot layout and instructions do not depend on the JIT. It would be

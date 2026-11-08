@@ -1574,6 +1574,255 @@ First libraries, to test whether declarations cover real use: 128 and 206 lines 
 Not run as of 2026-11-05: static musl, upstream clang's function sanitizer on the casts (Apple clang 17 does not check),
 the old-glibc container on GitHub's runners, and sockets beyond loopback.
 
+## Datalog
+
+### The first version (2026-11-07, Apple M3 Max, against SWI-Prolog 10.0.2)
+
+`lib/datalog.shen`, about 900 lines of code with its plain evaluator, needing no other library. Chosen as the first application library because it depends on nothing else and has
+independent oracles.
+
+- **Shen forms, no textual syntax.** Variables are already Shen's, and a program stays data. Soufflé's notation would have
+  needed a parser for no gain yet.
+- **Generated KL only, no plan interpreter.** Two execution paths would be more code, and compiling is cheap: for the program behind the kernel call
+  graph, 20 functions, 0.008 ms to check and plan and 0.11 ms to generate and install, each over 500 rounds, and its first run takes 0.36 ms more than the next, which is the JIT.
+  So a one-shot query pays nothing to speak of, and no interpreter was built to compare.
+- **Functions, not closures, for loops.** Each atom's loop is a named function, a self tail call taking what it passes on as parameters. They are named per
+  program and layout, so they are bounded and show in a backtrace. Closures were not measured.
+- **Packed tuples, kept.** Against vectors, in ms, packed then vector: closure over 3000 random edges (1,388,324 tuples) 287 to 348, 386 to 642;
+  dense closure 14, 21.5; nonlinear closure 785, 1465; same generation 26, 40; a skewed join (2,222,705 tuples) 329, 560; the call graph 18, 24. A vector must
+  stay for wide relations, so both exist; the cost is a form for each of tuples, columns and keys. Rounding the bits to 12, 20 or 30 lets shifts and masks be immediates
+  and bounds the layouts a program meets to four.
+- **Retained tuples did not call for a byte-buffer engine.** 177 MB resident at 1,388,324 tuples, with one index. Not needed for anything measured.
+- **Not tried:** telling new from old tuples in the atoms around the one read as new. Nonlinear closure makes 41,142,395 derivations for 88,803 tuples, which is where it would help,
+  and is the slowest row even so.
+- **The bug tests found:** a relation could appear several times in its component, and merging it again wiped its new tuples, losing results. All layouts agreed and the fixtures
+  by hand passed; only generated programs against the reference showed it, in about 3% of them.
+- **Does it notice?** 13 planted bugs, one at a time, each failed `make test-datalog`, from a missing second round to a dropped filter. It takes 0.23 s, and 62 s under `SHEN_JIT_GC_STRESS=1000`, which passes.
+- **Against an engine sharing nothing:** SWI-Prolog's tabling agrees on 300 generated programs (3,787 tuples), and on the larger workloads. Soufflé was not available.
+- **Its speed, as a reference.** Evaluation alone, with the same programs and facts, in ms, ours then SWI-Prolog's: skewed join (2,230,489 tuples) 357, 517; mutual recursion (3,032) 0.8, 1.8; sparse closure (1,391,323) 280, 1,002;
+  dense closure (90,292) 16, 84; nonlinear closure (90,292) 806, 7,695; same generation (52,332) 28, 262; triangles (1,506) 0.4, 13.6; the call graph (132,214) 20, 701. Ours is `datalog.run` and reading every tuple back, best of 3, by wall clock, with interning the facts included.
+  Theirs is every table and every answer enumerated with printing removed, the middle of 3 fresh processes, by CPU time, leaving out 14 to 44 ms of startup and loading. Not like for like: tabling is a general mechanism working top-down inside a full Prolog, the rules ran as written
+  there while ours reorders joins, and hand-ordered Prolog was not tried. The call graph's gap may come from one table for each bound first argument, which was not measured. The rows closest together spend their time hashing and allocating tuples.
+- **The call graph:** 731 functions and 4,730 calls from the kernel's KL give 125,617 pairs reached in 48 rounds, in 18 ms.
+
+### Choosing join order while running (2026-11-07, Apple M3 Max, against the fixed plans before)
+
+The idea is Carac's (Adaptive Recursive Query Optimization, ICDE 2024): sizes change round by round in a recursive query, so no fixed order stays right, and regenerating code during a run costs little here, at 0.11 ms a program. It needs rules with many atoms, as a transitive closure has nothing to reorder. Tried on Andersen's points-to analysis over generated statements, with the rules' atoms in two orders.
+
+| ms, order a / order b | Small: 75,267 `vpt` | Large: 177,585 `vpt`, 681,172 `hpt` |
+| --- | --- | --- |
+| Fixed, most columns known next | 853 / 334 | 12,448 / 1,438 |
+| Sizes, planned once at the start | 849 / 1,070 | 12,278 / 14,776 |
+| Sizes, planned again when one doubles | 281 / 340 | 1,218 / 1,606 |
+
+- **Kept.** Re-planning takes a written order that costs 2.6 to 8.7 times as much down to about what the better one costs: on the large row 15% faster than the better fixed order on one row and 12% slower on the other. Planning once from the sizes at the start does not help, since most tuples do not exist yet: it is what happens as the relations grow that matters.
+- **The written orders were a surprise:** the one first written as the good order, by hand, was the bad one, 2.6 and 8.7 times worse. That is the case for not asking.
+- **Nothing lost elsewhere.** Closures, same generation, the call graph and the skewed join are within about 5% of before. Mutual recursion makes 15 plans, one each round, in under a millisecond.
+- **Rejected:** counting an index not yet built as dearer, which favours indexes already there, took the large row from 136 ms to 275 and 1,460 ms at factors 2 and 4 on an earlier form of this workload. Re-planning only on a factor of 4 or 8 instead of 2 did no better, from 135 to 158 and 179 ms.
+- **What is left:** indexes stay once started, so a plan change can leave one maintained and unused. The tuple counts show what storage work remains: 13,391,521 derivations for 177,585 `vpt` tuples.
+- **Checked** against a separate evaluator in Python, written from the analysis's definition, on the large row in both orders, and against the reference on 300 generated programs under both kinds of plan. SWI-Prolog's tabling ran out of its default table space on this analysis after 75 s, in order b; a larger space was not tried.
+
+### Flat storage (2026-11-07, Apple M3 Max, against the dictionaries and lists before)
+
+A profile of the first version put 60 to 64% of the time in `sj_dict_put`, 13 to 17% in the insert path around it, 10 to 13% in the collector copying tuples, and 1 to 3% in the generated joins, so that a better code generator could have gained almost nothing. A prototype first: deduplicating in a flat table written as a native kernel cost 10 to 32 ns per derivation, the loop aside, against 17 to 159 ns for the dictionary, with the table sized in advance.
+
+Now a tuple is u32 columns in a byte buffer, new tuples are a range of it, and tables are open addressed with their hash's top half in each entry. Packing tuples into one integer, kept above, is gone with its layouts: every arity is the same code, and a column is read straight from the buffer. Generated kernels need `lib/native.shen`, which adds about 31 ms to a program's load.
+
+| ms | Before | Flat |
+| --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 277 to 333 | 154 to 177 |
+| Closure, dense (88,803) | 15.5 | 9.4 |
+| Nonlinear closure (88,803) | 820 to 858 | 483 to 491 |
+| Same generation (46,678) | 27 | 20.5 |
+| Skewed join (2,222,705) | 331 to 566 | 131 to 134 |
+| The kernel's call graph (125,617) | 20 | 10 |
+| Points-to, small, orders a and b | 281, 340 | 192, 219 |
+| Points-to, large, orders a and b | 1,218, 1,606 | 742, 807 |
+| Mutual recursion (15), triangles (17) | 0.7, 0.4 | 0.8, 0.4 |
+
+- **The collector has nothing left to do:** 0.3% of CPU on the closure against 7 to 13%. 140 MB resident at 1,388,324 tuples against 177 MB. This reverses the note above that retained tuples did not call for a byte-buffer engine: true if fast enough is the goal.
+- **Where the time goes now:** on the closure and the join, the insert kernel 50 to 55% and rehashing 13 to 25%, with allocating and zeroing buffers about 10%. On points-to, insert 50%, find 14%, the generated loops about 20%.
+- **Fingerprints hide bugs from small tests.** Values in a run are small and dense, and a multiplicative hash spreads them without collisions, so a kernel that trusted its fingerprint passed everything. It takes 300,000 random tuples, over the kernels directly, and an index on a column of full 32-bit values. Three planted bugs of that kind are what showed this; with those tests, each is caught, as are 8 others planted in growth, chains, merging and starting indexes. A ninth other, a scan reading what its round adds, changes no result, as derivations are monotonic.
+- **Not tried:** sorted arrays merged each round, in place of the tables; Free Join; keeping the two columns of a small tuple in the table entry, which would avoid reading the buffer on a repeat; native join loops; growing tables by more than double, which would trade memory for rehashing.
+- **Checked** against SWI-Prolog on 300 generated programs and on three larger workloads (51,834 to 132,214 tuples), against the Python evaluator on points-to, and under `SHEN_JIT_GC_STRESS=1000` in 57 s without the kernel test, whose allocation is too much there.
+
+### Kernels with structured control (2026-11-07, Apple M3 Max, against the same kernels with labels)
+
+Insert, find, index and rehash are written with `while`, `for`, `when`, `unless`, `exit` and `and`, from `lib/native.shen`, in place of labels and jumps: 65 lines where there were 99, and no label left. Five runs each, in alternation: closure 115 to 124 ms against 123 to 131, the skewed join 121 to 126 against 120 to 128, small points-to 160 to 163 against 158 to 164, within noise. Fingerprint bugs planted in the structured kernels are caught as before.
+
+### Native joins (2026-11-07, Apple M3 Max, against the same joins as KL)
+
+The first real use of `lib/native.shen`'s structured control from a generator rather than by hand. Each join order is one kernel: a `for` for a scan, a probe and a `while` along the chain for a lookup, the head's insert inline, and a KL function around it that grows the head relation when the kernel says it is full and calls it again. 206 lines of code, beside the KL generator, which stays for what does not fit.
+
+| ms, two runs each, later runs | KL joins | Native |
+| --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 117 to 122 | 82 to 101 |
+| Closure, dense | 9.0 to 9.3 | 5.9 to 6.8 |
+| Nonlinear closure | 464 to 467 | 207 to 230 |
+| Same generation | 19.2 to 19.7 | 11.8 to 12.6 |
+| Skewed join (2,222,705) | 121 to 124 | 88 to 100 |
+| The kernel's call graph | 9.7 to 10 | 7.3 to 8.1 |
+| Mutual recursion, triangles | 0.7, 0.3 | 0.7 to 1.1, 0.3 |
+| Points-to small, orders a / b | 177 / 264 | 115 / 171 |
+| Points-to large, orders a / b / c | 780 / 1,027 / 1,032 | 506 to 536 / 717 to 720 / 670 to 728 |
+| Chain of four joins, orders a / b | 17.4 / 17.4 | 16.7 to 18.4 / 16.9 to 18.4 |
+
+- **Kept.** 1.2 to 2.2 times as fast where joins do the work, and the same where loading facts does. Nonlinear closure gains most, as it is 41 million derivations of which almost all are repeats, each now a probe without a call.
+- **Compiling costs more:** a four-rule program run over three facts, compiling every plan each time, took 0.90 ms against 0.25 with KL joins, 200 runs each. A run that makes 46 to 66 plans, points-to, shows no difference in its first run.
+- **A variable costs no register,** being read from its column at each use, and nothing showed a cost in that: a column read is one load from a buffer the kernel holds.
+- **Restarting.** A kernel cannot call to grow a relation, so it returns where its outermost scan stood, plus one. A first version resumed an inner scan's position when the plan began with a lookup, and so skipped tuples: 1 generated program in 300 found it. Only a scan at the first level resumes now; anything else starts again from the beginning, which repeats derivations and nothing else.
+- **Register limits.** Every name is a register, live for the whole kernel, and 16 word registers is the most: a four-atom chain needed 17 and fell back to KL, until the insert's offset temporary went, recomputed instead. Temporaries used only within one step share names across steps, which the generator must know is safe. With that, no plan in the tests or workloads falls back; a wider one would, correctly, and `datalog.*fallbacks*` counts them.
+- **What the structured forms did well:** a step's statements nest inside the previous step's loop, so the generator is a fold over the plan with no label bookkeeping; named loops let a probe or an insert exit itself inside any depth; the expander drops joins that cannot be reached, so the checker's refusal of unreachable code never came up.
+- **What they lacked:** reuse of registers by liveness, the one limit hit. An empty `and` is true, which let a scan with no checks generate a needless `when` until the generator left it out. Neither called for a change to `lib/native.shen` yet.
+- **Checked** against the reference and against the same programs with KL joins on 300 generated programs, against SWI-Prolog on 300, and on a plan that begins with a lookup and grows its head partway through an inner scan. Results on every workload match the KL joins' tuple counts.
+
+### Stratified negation (2026-11-07, Apple M3 Max)
+
+`(not (edge X _))`, with every variable in it bound by a positive atom. A relation cannot depend on the negation of one that depends on it, which the checker refuses, naming the rule; so what is negated is in an earlier component and complete when read.
+
+- **No new machinery for order:** a negated relation is a dependency like any other, so the components already put it first. A negated atom is a condition like a comparison, placed as soon as its variables are bound, and a probe of the relation's table, of an index for some columns, or of its size for none. The probe loop that lookups had became one function that member, chain and negation share.
+- **The reference stays apart:** it numbers strata from the rules, by a fixed point of its own, and runs each in turn, where the engine uses its components.
+- **Generated programs** sometimes add a negated atom of bound variables, constants and `_`, and drop negations from the last rules until the program is stratified: 59 of 300 keep one, all with two strata or more. They agree with the reference, with KL joins and with SWI-Prolog, which reads it as `\+` since the relation is complete.
+- **Planted bugs:** a negation that ignores a match fails 13 checks, and an empty test inverted fails 4. Dropping one key's equality from the probe passes everything, as no fingerprints collide among small interned ids: the blind spot noted for the table kernels, which a test with full 32-bit values would close.
+- **Nothing lost:** the workloads, which have no negation, are within noise of before.
+
+### Arithmetic, and integers as themselves (2026-11-07, Apple M3 Max, against the negation commit)
+
+`(+ A B)`, `(- A B)` and `(* A B)` on either side of a comparison, and `(= D (+ D0 W))` binding `D` when nothing else has. A binding is a condition that becomes ready once what it reads is bound, and may make others ready, so the planner looks again until nothing more is; atoms after it can look the variable up. Division was left out, as a kernel would have to check for zero, and nothing asked for it.
+
+- **Integers stopped being interned.** Arithmetic makes values no table holds, and a kernel cannot intern. An integer column now holds its own 32 bits, as Soufflé's does, and only symbols and strings are interned. This removed the table of integers that native comparisons read, and limits integers to 32 bits, signed, which the checker enforces on facts and constants.
+- **Overflow raises everywhere alike.** Each operation is checked to be 32 bits, by the reference too, so that a 64-bit intermediate can never wrap unseen. In a kernel each result goes to a word register, the second operand of each in the register after the first's, so a few registers serve any depth; outside 32 bits, it returns a code above any place to start again from, and the KL around it raises. Which of a rule's conditions runs first is the planner's choice, so a rule whose filter would have failed may still raise.
+- **Fingerprints, again.** With full 32-bit values, a test of 150,000 random tuples, most keys absent, compares native joins with KL joins on lookups, members and negations. Dropping the key check is now caught in each probe: 11, 14 and 6 wrong tuples. It needs keys of two columns: for one, the fingerprint of a 32-bit value almost determines it, so no collision showed and the check matters little there.
+- **Generated programs** sometimes bind `K` to arithmetic on what the body binds, kept between -4 and 4 so that recursion ends, and sometimes compare an expression: of 300, 131 bind and 64 compare. They agree with the reference, KL joins and SWI-Prolog, which reads a binding as `is`.
+- **Speed:** facts load faster, with no integers to intern: the four-join chain 12.3 ms against 17, mutual recursion 0.4 against 0.7. Points-to, three alternating pairs on a loaded machine, 546, 544, 579 ms before against 533, 620, 614 after on the large row, which is within the noise there. The other workloads are within noise.
+- **The suite** takes 1.5 s with the larger test.
+
+### Aggregates (2026-11-07, Apple M3 Max, against the arithmetic commit)
+
+`(= N (count (edge X _)))`, `(sum W Atom)`, `(min W Atom)` and `(max W Atom)`. The keys are the atom's variables that appear elsewhere in the body, decided by the checker from the rule as written, so that no plan can change what is grouped. Over no tuples, count and sum give 0, and min and max give nothing, so the rule does not hold: Soufflé's choice, and SWI-Prolog's `aggregate_all`.
+
+- **The same shape as negation:** the relation aggregated must be complete, so it is a dependency in an earlier stratum, refused in a cycle. An aggregate is then `=` with a fold for its right side: it binds its variable once its keys are bound, or compares when that is bound already.
+- **Native, no fallback:** a kernel folds into a register of its own, over a loop for no keys, a probe of the relation's table for a whole tuple, and an index's probe and chain for some columns; the probe loop is the one lookups and negation share. min and max start just outside 32 bits, where nothing leaves them. A sum is checked once, at the end, as a check of each partial sum would raise or not by the order of the tuples. Six aggregate rules of the tests compile to six kernels.
+- **Grouping by free variables was left out:** Soufflé's and SWI-Prolog's `aggregate_all` count every match of the atom, which a relation of sets makes each tuple once; grouping is by what the rest of the body binds.
+- **Generated programs** sometimes add an aggregate with keys, constants, `_` and variables of its own, which may repeat; a rule with one is dropped whole when the program would not be stratified. Of 300, 44 keep one, 5 of them comparing. They agree with the reference, KL joins and SWI-Prolog. Planted, a min that keeps the larger fails 5 checks and a chain that skips its update 19.
+- **Nothing lost:** the workloads, with no aggregates, are within noise of before.
+
+### An analysis of the kernel's call graph (2026-11-07, Apple M3 Max)
+
+A workload that uses what the last three entries added, on the same 731 functions and 4,730 calls as the call graph: what is dead (negation), what calls nothing and what is called but never defined (negation with `_`), fan-in and fan-out (count), the hubs with 20 callers or more, each function's call depth from a root bounded at 12 (arithmetic), and the shallowest (min). Eleven rules, 27 rounds, 25 plans.
+
+- **Agreed** with the reference on the whole graph, in 1.3 s, with KL joins, and with a version written by hand for SWI-Prolog, on all 4,332 tuples of its nine relations.
+- **Its time is loading:** 1.9 ms a run, of which 1.3 ms is interning and storing the facts, which a program with no rules takes alone; the rules take about 0.6 ms. KL joins take 1.9 to 2.0 ms, so native kernels gain little here, where the relations are small. Its first run takes 4.3 ms against 2.9 with KL, which is compiling 25 kernels.
+- **So what would help such an analysis** is loading, not joins: interning symbols through a dictionary, one fact at a time. Not tried.
+- **Under GC stress,** with negation, arithmetic, aggregates and native joins, `make test-datalog` passes all 3,943 checks under `SHEN_JIT_GC_STRESS=1000` in about six minutes, with the fingerprint test cut to 3,000 tuples. At 150,000 it did not finish in 15 minutes: each collection copies the facts it holds.
+
+### Against Soufflé (2026-11-07, Apple M3 Max, Soufflé 2.5 from Homebrew)
+
+The same rules and facts, written out for Soufflé; every result it finished matches ours. Its compiled programs are built from the C++ it generates with the flags of its own compile script, as that script's include paths fail in Homebrew's bottle. That bottle has no OpenMP, so Soufflé ran on one thread, as we do, and it keeps 64-bit values where we keep 32. Times in ms, best of three: ours is `datalog.run` with facts as a list, and Soufflé's its process less the same with no facts, which is its startup, about 15 ms. Building took it 3.0 to 3.7 s a program.
+
+| ms | Ours | Soufflé compiled | Soufflé interpreted |
+| --- | --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 129 | 429 | 551 |
+| Closure, dense | 9.6 | 36 | 49 |
+| Nonlinear closure | 501 | 673 | 1,373 |
+| Same generation | 21 | 53 | 77 |
+| Mutual recursion | 0.8 | 0.2 | 1.1 |
+| Triangles | 0.3 | 0.1 | 0.3 |
+| Skewed join (2,222,705) | 160 | 104 | 192 |
+| The kernel's call graph | 11 | 44 | 57 |
+| Points-to small, order a / b / c | 191 / 215 / 189 | 1,394 / over 100 s / 211 | 2,945 / over 100 s / 363 |
+| Points-to large, order a / b / c | 704 / 804 / 665 | 16,525 / over 100 s / 860 | 35,200 / over 100 s / 1,403 |
+
+- **Soufflé joins in the order written,** and orders a and b, made up for testing our planner, are bad for it. Order c is how points-to analyses are written. Its profile-guided schedule, statistics taken on the small case and applied to the large one, gave about 1,090 ms from order a and from order c, against 860 for order c as written.
+- **So on one thread:** ours is ahead on the closures, same generation, the call graph and points-to, 1.3 times Soufflé's best schedule there, and behind on the skewed join, at 1.5 times its time, and on runs under a millisecond.
+- **In parallel,** with Soufflé 2.5 built from its release source with OpenMP from Homebrew's libomp and 32-bit values, as ours. Its parallel code is generated only when `-j` is given then, so programs are generated with `-j auto` and run with each count. Compiled, its startup taken away, ms, on a machine whose load was 3 to 4 from other work:
+
+  | ms | Ours | 1 thread | 4 | 8 | 12 |
+  | --- | --- | --- | --- | --- | --- |
+  | Closure, sparse | 125 | 389 | 170 | 159 | 157 |
+  | Closure, dense | 10.6 | 34.5 | 13.6 | 11.2 | 10.6 |
+  | Nonlinear closure | 514 | 585 | 163 | 87 | 62 |
+  | Same generation | 21.6 | 47.4 | 15.9 | 11.2 | 9.2 |
+  | Skewed join | 132 | 102 | 26.7 | 19.7 | 16.6 |
+  | The call graph | 11.9 | 42.9 | 23.4 | 29.9 | 29.2 |
+  | Points-to small, order c | 193 | 197 | 63.6 | 45.4 | 40.5 |
+  | Points-to large, order a | 691 | 15,238 | 4,045 | 2,126 | 1,491 |
+  | Points-to large, order c | 685 | 770 | 257 | 193 | 168 |
+
+  On 12 threads it is 2.3 to 8.3 times our time on nonlinear closure, same generation, the skewed join and points-to as written, about even on the dense closure, and behind us on the sparse closure, the call graph, whose recursion goes deep and narrow, and a badly ordered rule. Its build with 32-bit values is also a little faster on one thread than the bottle's with 64. One thread runs Shen at a time here, so this is the gap that stays.
+- **Not measured:** its magic sets.
+
+### Loading facts (2026-11-07, Apple M3 Max, against the commit before)
+
+The call-graph analysis spent 1.3 of its 1.9 ms loading 5,463 facts, and timing the parts showed interning was not most of it. Each fact looked its adder up by a name built from its arity and interned, 482 µs in all; its relation's slot by position in a list, 120 µs; and checked itself apart from encoding, 112 µs. Interning and encoding took about 420 µs.
+
+- **Done:** a dictionary per run gives each relation's record, types and adder, and values are checked as they are encoded, with `datalog.check-fact` called only to say what is wrong. Loading takes 736 µs against 1,310.
+- **Measured:** the analysis 1.1 to 1.2 ms against 1.8, and the four-join chain, 60,000 facts, 5.9 to 6.0 ms against 12.3. Points-to is joins, and did not move.
+- **Left:** interning, about 40 ns a value through `shen.dict`. A table of its own would take more code than this is worth now.
+
+### Adding facts (2026-11-07, Apple M3 Max, against full runs)
+
+`datalog.add` gives what a run of every fact would, going on from the database it is given, which it changes. Each relation's size before the facts is its mark. A component that reads only relations that grew goes on semi-naively, with one variant of each rule for each atom of such a relation, reading what is past its mark; one that negates or aggregates a relation that changed, or reads one that was evaluated again, is emptied to its facts and evaluated again; the rest stay. The database keeps every fact for this.
+
+| ms, best of five | Full run | Adding 10 | Adding 1 |
+| --- | --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 82 to 84 | 5.0 | 4.0 |
+| The kernel's call graph | 7.0 | 1.7 | |
+| The kernel analysis | 1.06 | 0.30 | 0.17 |
+
+- **The first add can build an index** the full run never needed: the closure's new edges look `path` up by its second column. A second add of 1 to the same database took 2.4 ms and of 10 1.9 ms, with new paths derived over 33 more rounds.
+- **Not done:** removing facts, which would need counting or deleting and rederiving; a new run does it. Recomputing only the part of a component that a change reaches.
+- **Checked:** every fixture and generated program also runs with its facts in three parts, a run and two adds, against the reference: 4,943 checks. Planted, a delta of only the last round fails 89, a negated change treated as growth 20, facts not given back to a component evaluated again 102, and growth not passed on 4. A sum that passes 32 bits on the way between adds raises then, as the database it would be does.
+
+### Removing facts (2026-11-07, Apple M3 Max, against full runs)
+
+`datalog.remove` takes facts out of those the database keeps and evaluates again, in order, each component that holds a relation that lost one or reads one evaluated again. Storage never deletes. This was chosen over deleting and rederiving, which would be faster for a small removal from a large recursive relation but needs storage that can delete: tombstones, with a check of each tuple in every native scan and probe even for programs that never remove, or compacting each relation after a removal. Neither is built; compacting would keep the kernels as they are.
+
+| ms, best of five | Full run of what is left | Removing 10 | Removing 1 |
+| --- | --- | --- | --- |
+| Closure, sparse (1,361,567 tuples left) | 88 | 84 | |
+| The kernel's call graph | 6.0 | 6.6 | |
+| The kernel analysis | 1.09 | 1.49 | 0.66 |
+
+- **About a full run of what it reaches:** a removal from a relation everything reads costs a run, and up to 1.4 times one on the small analysis, where finding the facts that go, about 250 µs with a dictionary keyed by fact, and loading each component's facts again show. A removal that reaches less costs less.
+- **Checked:** every fixture and generated program also removes its middle third and adds it back, against the whole result, and every generated program compares the removal alone with the reference over the facts left: 6,839 checks. Planted, readers not evaluated again fail 10, removed facts given back 609, and no relation counted as losing one 609.
+
+### Against Soufflé again, with native joins (2026-11-07, Apple M3 Max, the same builds of Soufflé 2.5)
+
+The same comparison after native joins and arithmetic, the same builds and settings, so that only our side changed; load 2 to 2.4, and 6 by the end of the parallel run. Every result Soufflé finished matches ours. Ms, best of three.
+
+| ms | Ours | Ours before | Soufflé compiled | Soufflé interpreted |
+| --- | --- | --- | --- | --- |
+| Closure, sparse (1,388,324 tuples) | 99 | 129 | 429 | 562 |
+| Closure, dense | 6.2 | 9.6 | 37.5 | 50 |
+| Nonlinear closure | 239 | 501 | 673 | 1,376 |
+| Same generation | 11.7 | 21 | 54 | 76 |
+| Mutual recursion | 0.5 | 0.8 | 0.2 | 0.3 |
+| Triangles | 0.2 | 0.3 | 0.0 | below its startup |
+| Skewed join (2,222,705) | 110 | 160 | 103 | 189 |
+| The kernel's call graph | 8.3 | 11 | 44 | 56 |
+| Points-to small, order a / b / c | 131 / 155 / 136 | 191 / 215 / 189 | 1,398 / over 100 s / 224 | 2,956 / over 100 s / 370 |
+| Points-to large, order a / b / c | 475 / 545 / 449 | 704 / 804 / 665 | 16,512 / over 100 s / 946 | 35,618 / over 100 s / 1,487 |
+
+- **On one thread** we are now ahead everywhere but the skewed join, at 1.07 times Soufflé's time where it was 1.5, and the runs under a millisecond. Points-to as analyses write it, order c, is 2.1 times as fast as Soufflé's compiled program.
+
+In parallel, the OpenMP build with 32-bit values:
+
+| ms | Ours | 1 thread | 4 | 8 | 12 |
+| --- | --- | --- | --- | --- | --- |
+| Closure, sparse | 95 | 403 | 179 | 161 | 156 |
+| Closure, dense | 6.3 | 36.5 | 13.1 | 11.2 | 10.3 |
+| Nonlinear closure | 243 | 601 | 162 | 86 | 64 |
+| Same generation | 11.7 | 48.1 | 15.2 | 11.1 | 9.3 |
+| Skewed join | 103 | 100 | 26.7 | 16.5 | 15.6 |
+| The call graph | 8.4 | 40.7 | 24.6 | 29.9 | 30.8 |
+| Points-to small, order c | 132 | 195 | 65.4 | 45.8 | 40.5 |
+| Points-to large, order a | 493 | 15,355 | 4,054 | 2,132 | 1,494 |
+| Points-to large, order c | 536 | 792 | 260 | 192 | 165 |
+
+- **On 12 threads** Soufflé is now 1.3 times our time on same generation, 3.3 on points-to as written, 3.8 on nonlinear closure and 6.6 on the skewed join, against 2.3 to 8.3 before. We are ahead on both closures now, the dense one included, on the call graph and on the badly ordered rule. Our points-to large, order c, read 536 ms here and 449 on the one-thread run, as the load rose during this one.
+- **What is left is threads:** at one thread each, only the skewed join is behind, and the gap on 12 is what Soufflé's parallel joins give it.
+
 ## Benchmark results
 
 Ratios are geometric means of Shen/JIT's time over the other implementation's, so below 1 means Shen/JIT is faster.
