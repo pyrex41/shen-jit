@@ -47,6 +47,15 @@
 (defgrammar <g.upper> B where (and (>= B 65) (<= B 90));)
 (defgrammar <g.late> (+ <g.upper>) := late;)
 (defgrammar <g.capture> B <g.upper> := B;)
+(defgrammar <g.uppers> "[" (* <g.upper>) "]" := ok;)
+(defgrammar <g.nest> "(" <g.nest-body> ")" := [<g.nest-body>]; "x" := x;)
+(defgrammar <g.nest-body> <g.nest> := <g.nest>;)
+(defgrammar <g.d1> "a" (? <g.d0>);)
+(defgrammar <g.d0> "z";)
+(defgrammar <g.d2> <g.d1> "b";)
+(defgrammar <g.d3> <g.d2> "c";)
+(defgrammar <g.d4> <g.d3> "d";)
+(defgrammar <g.d5> <g.d4> "e" := deep;)
 (defgrammar <g.vowel> B where (grammar-test.vowel? B);)
 (defgrammar <g.vowels> (+ <g.vowel>);)
 (define grammar-test.vowel?
@@ -136,6 +145,15 @@
   (freeze (grammar.parse <g.capture> (grammar-test.view "bC") (function grammar-test.fail))))
 (grammar-test.check "a loop over a function its file defines later" [true false]
   (freeze [(grammar.match? <g.vowels> (grammar-test.view "aeiou")) (grammar.match? <g.vowels> (grammar-test.view "aex"))]))
+(grammar-test.check "mutual recursion through a rule compiled in place" [[x]]
+  (freeze (grammar.parse <g.nest> (grammar-test.view "((x))") (function grammar-test.fail))))
+(grammar-test.check "and from the other side" [x]
+  (freeze (grammar.parse <g.nest-body> (grammar-test.view "(x)") (function grammar-test.fail))))
+(grammar-test.check "a chain deeper than rules are compiled in place" deep
+  (freeze (grammar.parse <g.d5> (grammar-test.view "abcde") (function grammar-test.fail))))
+(grammar-test.check "a class loop, empty, one and several" [ok ok ok [error 0 "no match"]]
+  (freeze (map (/. T (grammar.parse <g.uppers> (grammar-test.view T) (function grammar-test.fail)))
+               ["[]" "[A]" "[ABC]" "[a]"])))
 (grammar-test.raises "not a view" (freeze (grammar.parse <g.digits> "42" (function grammar-test.fail))))
 
 (define grammar-test.fill

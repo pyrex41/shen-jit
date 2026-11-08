@@ -115,7 +115,10 @@ its own, `<rule>/1` and so on, which loops by calling itself, and is compiled at
 functions its file defines exist. Since a file is read whole before any of it runs, `defgrammar` records
 each rule's arity as it is read, so that rules can call each other in any order.
 A byte class, a rule that is only `B where Guard`, is not called by the rules read after it: they test the
-byte in place, so that `(+ <tchar>)` is one loop with no call per byte. Define classes first.
+byte in place, so that `(+ <tchar>)` is one loop with no call per byte, and a loop over a class is called only
+if its first byte matches. Other small rules that do not name themselves are compiled in place too, up to three
+deep. So define a grammar's parts before the rules that use them; a rule redefined later is not seen where an
+earlier definition was compiled in place.
 
 ## Compared with defcc
 

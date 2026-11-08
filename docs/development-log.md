@@ -1219,6 +1219,18 @@ the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, 
   to 32.0 µs against 39.4 to 40.0, and 200 objects 130 to 134 against 133 to 135, five rounds. `frame.next` keeps the
   raw bytes of the header it makes, and `frame.uint` reads them without a view to check at each byte: reading 100
   frames of 18 bytes from memory, 499 to 509 ns a frame against 595 to 600, five rounds.
+- **A parse state passed in, rejected.** A caller that parses often could make one state and pass it to each
+  parse, and a new state need not fill its first slot. Neither shows: a 21-byte token took 98 to 99 ns with a new
+  state or one passed in, and 99 to 102 with the fill, four rounds. The state is a bump allocation of four words.
+- **Small rules compiled in place, kept.** A rule of at most 12 items that does not name itself is compiled into the
+  rules read after it, up to three deep, instead of called, and a loop over a byte class tests its first byte in
+  place and is called only when it matches, as optional whitespace usually does not. 31 lines. Five rounds each: a
+  chunk extension 182 to 187 ns, from 196 to 203, against 131 to 138 by hand; the token loop 102 to 107 ns against 116
+  to 117 for 21 bytes, and 993 to 1,011 against 1,168 to 1,192 for 210; the request line level, 913 ns against 911,
+  and 3,678 against 3,680. The rejected JSON numbers, remeasured: 58.2 to 58.9 µs against 57.0 to 58.0, where they
+  were 17% slower, and 200 objects 139 to 140 against 136 to 139. Still left by hand, as a grammar would make every JSON
+  user load `lib/grammar.shen` and need an entry point for a match of a prefix. What remains of the chunk extension's
+  cost is its shape: nested optional parts and a recursive rule for quoted text.
 - **Counter names in the SQLite example, kept.** `counter-app.<counter>`, `/counters/` and a name of letters,
   digits, `-` and `_`, in 4 lines with its caller, replaces 17. Five rounds of a million calls: `/counters/hits` 49
   to 52 ns against 51 to 53, a 25-byte name 98 to 99 against 148 to 150, `/counters/a/b` 44 to 46 against 34 to 36,
