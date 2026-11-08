@@ -1238,6 +1238,12 @@ the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, 
   against 130 to 131, and a body with one on each of 50 chunks 62.4 to 63.1 µs against 62.0 to 63.3, four rounds:
   level, where it was 7% slower. Counter names, long, 106 to 108 ns against 116 to 118 before tables. A table cached
   per class would go stale when the class is defined again; each loop makes its own, 256 bytes, once.
+- **Rules with parameters, kept.** `(defgrammar (<rule> P...) ...)`, called as the item `(<rule> Arguments...)` or
+  from an entry point, as `(grammar.parse (<list> 0) View Fail)`: what a JSON grammar needs for its depth limit, or a
+  quoted string for the quote it began with. A rule compiled in place has its parameters renamed and bound to the
+  arguments, which are evaluated first, and a loop's helper now takes the bound variables its body uses, which also
+  lets a loop's item use a value matched before it. A rule with parameters is not a byte class. 65 lines, which bring
+  the macro to 389. Nothing that does not use them changed: the grammar and HTTP suites pass as they were.
 - **Counter names in the SQLite example, kept.** `counter-app.<counter>`, `/counters/` and a name of letters,
   digits, `-` and `_`, in 4 lines with its caller, replaces 17. Five rounds of a million calls: `/counters/hits` 49
   to 52 ns against 51 to 53, a 25-byte name 98 to 99 against 148 to 150, `/counters/a/b` 44 to 46 against 34 to 36,

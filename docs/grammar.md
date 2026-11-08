@@ -42,6 +42,7 @@ and a value, then perhaps `where` and a guard:
 | `B`, a variable | Any byte, bound to B for what follows |
 | `_` | Any byte |
 | `<rule>` | That rule |
+| `(<rule> Arguments...)` | That rule, given arguments for its parameters |
 | `<e>` | Nothing: an empty alternative |
 | `(* Item)`, `(+ Item)` | Item as many times as it matches, or at least once |
 | `(? Item)` | Item, or nothing |
@@ -54,6 +55,19 @@ Alternatives are tried in order, and the first that matches wins: a later failur
 try the next one. `(*` and `(+` take as many as they can, and never give any back, so `(* <letter>) <letter>`
 never matches. They take one item each: to repeat a sequence, give it a rule of its own. A repetition
 runs as a loop, in constant stack, however long the input, and stops at an item that matches nothing.
+
+A rule can take parameters, named after it in parentheses. They can be used in guards, values, messages and the
+arguments of other calls, so a grammar can carry a limit or a byte it found:
+
+```shen
+(defgrammar (<list> Depth)
+  "[" (require (where (< Depth 64)) "nesting too deep") (* (<list> (+ Depth 1))) "]";)
+(defgrammar (<not> Q) B where (not (= B Q));)
+(defgrammar <quoted> Q (* (<not> Q)) Q2 := Q where (= Q Q2);)
+```
+
+The rule's value is named by its name, as for any other, and an entry point gives the first arguments, as in
+`(grammar.match? (<list> 0) View)`.
 
 ## Values
 
@@ -99,7 +113,7 @@ that fails because the span ended reports the span's end as its position.
 
 | Function | What it does |
 | --- | --- |
-| `(grammar.parse <rule> View Fail)` | The rule's value, if it matches the whole view. Otherwise `(Fail Position Message)` |
+| `(grammar.parse <rule> View Fail)` | The rule's value, if it matches the whole view. Otherwise `(Fail Position Message)`. The rule can be `(<rule> Arguments...)` |
 | `(grammar.match? <rule> View)` | Whether the rule matches the whole view |
 | `(grammar.parse-range <rule> Storage Start End Fail)` | The same as `grammar.parse`, over bytes from Start to End in a buffer's storage, for a library that has already checked them |
 
@@ -126,4 +140,4 @@ earlier definition was compiled in place.
 `defgrammar` keeps `defcc`'s notation where the meaning is the same: alternatives ended by `;`, `:=`,
 `where`, `<e>`, variables, `_`, and a rule named in a value standing for its value. It reads bytes, not
 lists, so a number or a string is a terminal, and patterns in brackets are not. It has no `<!>` and no type
-signatures, and adds repetition, captures, requires and binary fields.
+signatures, and adds parameters, repetition, captures, requires and binary fields.

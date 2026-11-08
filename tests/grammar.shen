@@ -62,6 +62,14 @@
 (defgrammar <g.as> (+ <g.redefined>);)
 (defgrammar <g.redefined> B where (= B 98);)
 (defgrammar <g.bs> (+ <g.redefined>);)
+(defgrammar (<g.nested> D) "[" (require (where (< D 3)) "too deep") (* (<g.nested> (+ D 1))) "]" := D;)
+(defgrammar (<g.is> Q) B where (= B Q);)
+(defgrammar (<g.not> Q) B where (not (= B Q));)
+(defgrammar <g.quoted> Q (* (<g.not> Q)) (<g.is> Q) := Q;)
+(defgrammar (<g.pair2> A B) X := [A B X];)
+(defgrammar <g.swap> A B (<g.pair2> B A) := <g.pair2>;)
+(defgrammar (<g.text-at-least> N) (text <g.digits>) := <g.digits> where (>= (shen-jit.bytes-length (shen-jit.string->bytes <g.digits>)) N);)
+(defgrammar <g.year> (<g.text-at-least> 4) := <g.text-at-least>;)
 (defgrammar <g.vowel> B where (grammar-test.vowel? B);)
 (defgrammar <g.vowels> (+ <g.vowel>);)
 \\ Raises for one byte, so a loop over it cannot make a table and keeps its test.
@@ -170,6 +178,20 @@
 (grammar-test.check "each loop over a redefined class sees its own definition" [true false true false]
   (freeze [(grammar.match? <g.as> (grammar-test.view "aaa")) (grammar.match? <g.as> (grammar-test.view "bbb"))
            (grammar.match? <g.bs> (grammar-test.view "bbb")) (grammar.match? <g.bs> (grammar-test.view "aaa"))]))
+(grammar-test.check "parameters bound the depth" [0 0 [error 4 "too deep"]]
+  (freeze (map (/. T (grammar.parse (<g.nested> 0) (grammar-test.view T) (function grammar-test.fail)))
+               ["[[[]]]" "[[][]]" "[[[[]]]]"])))
+(grammar-test.check "a parameter given by the entry point" [true false]
+  (freeze [(grammar.match? (<g.nested> 2) (grammar-test.view "[]")) (grammar.match? (<g.nested> 3) (grammar-test.view "[]"))]))
+(grammar-test.check "a byte passed into a loop" [39 34 [error 0 "no match"]]
+  (freeze (map (/. T (grammar.parse <g.quoted> (grammar-test.view T) (function grammar-test.fail)))
+               ["'abc'" "c#34;a'bc#34;" "'abc#34;"])))
+(grammar-test.check "arguments are evaluated before parameters are bound" [2 1 3]
+  (freeze (let V (buffer.new 3)
+               _ (buffer.u8! (buffer.u8! (buffer.u8! V 0 1) 1 2) 2 3)
+            (grammar.parse <g.swap> V (function grammar-test.fail)))))
+(grammar-test.check "a parameter in a guard" ["2026" [error 0 "no match"]]
+  (freeze (map (/. T (grammar.parse <g.year> (grammar-test.view T) (function grammar-test.fail))) ["2026" "26"])))
 (grammar-test.raises "not a view" (freeze (grammar.parse <g.digits> "42" (function grammar-test.fail))))
 
 (define grammar-test.fill
@@ -192,6 +214,8 @@
 (grammar-test.refused "an unknown form" "(defgrammar <g.bad> (many 1);)")
 (grammar-test.refused "not a rule name" "(defgrammar bad 1;)")
 (grammar-test.refused "no rules" "(defgrammar <g.bad>)")
+(grammar-test.refused "a call with too many arguments" "(defgrammar <g.bad> (<g.is> 1 2);)")
+(grammar-test.refused "a parameter that is not a variable" "(defgrammar (<g.bad> x) 1;)")
 (grammar-test.refused "a message naming what it requires"
   "(defgrammar <g.bad> (require <g.digit> (make-string c#34;~Ac#34; <g.digit>));)")
 
