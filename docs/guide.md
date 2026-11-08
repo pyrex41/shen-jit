@@ -13,8 +13,9 @@ file of about 1 MB.
 ### Install
 
 Each [release](https://github.com/tizoc/shen-jit/releases) has an archive for each platform, holding two
-executables, the optional libraries and this guide: `shen-jit`, `shen-jit-stlib`, which has the
-[standard library](#the-standard-library) loaded, `lib/`, `include/` and `guide/index.html`.
+executables, the optional libraries, this guide, the example applications and the tests: `shen-jit`,
+`shen-jit-stlib`, which has the [standard library](#the-standard-library) loaded, `lib/`, `include/`,
+`guide/index.html`, `example-apps/` and `tests/`.
 
 | Platform | Archive | Can load C libraries |
 | --- | --- | --- |

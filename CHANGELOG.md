@@ -40,6 +40,7 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
+- Release archives carry the example applications and the tests, beside the libraries and the guide.
 - The JIT reuses scratch buffers across liveness checks while compiling each code object.
   Reported by @pyrex41 in [#17](https://github.com/tizoc/shen-jit/pull/17).
 - Converting strings to byte lists for `read-from-string` takes time linear in the string's length.

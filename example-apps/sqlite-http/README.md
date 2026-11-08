@@ -10,6 +10,9 @@ Run from the repository root with a shared-capable Shen/JIT build and SQLite ins
 build/shen-jit script example-apps/sqlite-http/run.shen counters.db 9000
 ```
 
+From a release archive, which carries this directory, run it from the archive's root with `./shen-jit` in
+place of `build/shen-jit`. The static Linux builds cannot load SQLite.
+
 The service binds to `127.0.0.1`. Its defaults are 16 active connections, a 4096-byte request-body bound,
 a 65536-byte response-body bound and a 1000 ms shutdown grace period. HTTP parsing, buffering,
 deadlines and connection management use our own I/O libraries. Kernel loading is used only to load code.

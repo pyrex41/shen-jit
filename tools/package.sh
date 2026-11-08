@@ -1,5 +1,6 @@
 #!/bin/sh
-# A release archive of the built executables and the guide, with every license they carry. Usage:
+# A release archive of the built executables, the libraries, the guide, the example applications and
+# the tests, with every license they carry. Usage:
 #
 #   sh tools/package.sh PLATFORM    (in a release tarball, after make release stlib)
 #
@@ -14,9 +15,9 @@ if [ -f build/shen-jit.exe ]; then
 else
     cp build/shen-jit build/shen-jit-stlib "build/$name/"
 fi
-# What programs load, what C written for Shen includes, and the rendered guide, which make dist
-# put in the tarball.
-cp -R lib include guide "build/$name/"
+# What programs load, what C written for Shen includes, the rendered guide, which make dist put
+# in the tarball, and the example applications and tests, to run or read beside them.
+cp -R lib include guide example-apps tests "build/$name/"
 cp LICENSE "build/$name/LICENSE.txt"
 cp LICENSE-shen-kernel.txt "build/$name/LICENSE-shen-kernel.txt"
 cp vendor/sljit/LICENSE "build/$name/LICENSE-sljit.txt"
