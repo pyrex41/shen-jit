@@ -2119,13 +2119,6 @@
   [V | Vs] Interned -> (let Id (datalog.intern V Interned)
                          [Id | (datalog.intern-all Vs Interned)]))
 
-\\ The words of a checked fact's values.
-(define datalog.encode
-  [] _ -> []
-  [V | Vs] Interned -> [(datalog.int-word V) | (datalog.encode Vs Interned)] where (integer? V)
-  [V | Vs] Interned -> (let Id (datalog.intern V Interned)
-                         [Id | (datalog.encode Vs Interned)]))
-
 (define datalog.list-forms
   0 _ -> []
   N L -> [[hd L] | (datalog.list-forms (- N 1) [tl L])])
@@ -2151,15 +2144,41 @@
                   _ (shen.dict-> (value datalog.*kernels*) Name F)
                F))))
 
+\\ Facts into their relations. Each relation's record, column types and adder are found once, in a
+\\ dictionary, and values are checked as they are encoded; datalog.check-fact says what is wrong.
 (define datalog.load-facts
+  Facts Relations S Interned -> (datalog.load-each Facts (datalog.fact-table Relations S 1 (shen.dict 8)) Relations Interned))
+
+(define datalog.fact-table
+  [] _ _ Table -> Table
+  [[Rel | Types] | Rs] S I Table
+  -> (do (shen.dict-> Table Rel [(<-address S I) Types (datalog.adder (length Types))])
+         (datalog.fact-table Rs S (+ I 1) Table)))
+
+(define datalog.load-each
   [] _ _ _ -> true
-  [[Rel | Values] | Facts] Relations S Interned
-  -> (let Check (datalog.check-fact Relations [Rel | Values])
-          Ids (datalog.encode Values Interned)
-          R (<-address S (datalog.relation-slot Rel Relations))
-          Add (datalog.adder (length Ids))
-          _ (Add R Ids)
-       (datalog.load-facts Facts Relations S Interned)))
+  [[Rel | Values] | Facts] Table Relations Interned
+  -> (let Entry (datalog.dict-find Table Rel)
+          _ (if (cons? Entry) skip (datalog.check-fact Relations [Rel | Values]))
+          Known (tl Entry)
+          Ids (datalog.encode-checked Values (hd (tl Known)) Interned [Rel | Values] Relations)
+          Add (hd (tl (tl Known)))
+          _ (Add (hd Known) Ids)
+       (datalog.load-each Facts Table Relations Interned))
+  [Fact | _] _ Relations _ -> (datalog.check-fact Relations Fact))
+
+(define datalog.encode-checked
+  [] [] _ _ _ -> []
+  [V | Vs] [integer | Ts] Interned Fact Relations
+  -> (if (datalog.int32? V)
+         [(datalog.int-word V) | (datalog.encode-checked Vs Ts Interned Fact Relations)]
+         (datalog.check-fact Relations Fact))
+  [V | Vs] [T | Ts] Interned Fact Relations
+  -> (if (= (datalog.value-type V) T)
+         (let Id (datalog.intern V Interned)
+           [Id | (datalog.encode-checked Vs Ts Interned Fact Relations)])
+         (datalog.check-fact Relations Fact))
+  _ _ _ Fact Relations -> (datalog.check-fact Relations Fact))
 
 (define datalog.fill-state
   [] S _ -> S

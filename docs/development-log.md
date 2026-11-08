@@ -1662,6 +1662,14 @@ The same rules and facts, written out for Soufflé; every result it finished mat
   On 12 threads it is 2.3 to 8.3 times our time on nonlinear closure, same generation, the skewed join and points-to as written, about even on the dense closure, and behind us on the sparse closure, the call graph, whose recursion goes deep and narrow, and a badly ordered rule. Its build with 32-bit values is also a little faster on one thread than the bottle's with 64. One thread runs Shen at a time here, so this is the gap that stays.
 - **Not measured:** its magic sets.
 
+### Loading facts (2026-11-07, Apple M3 Max, against the commit before)
+
+The call-graph analysis spent 1.3 of its 1.9 ms loading 5,463 facts, and timing the parts showed interning was not most of it. Each fact looked its adder up by a name built from its arity and interned, 482 µs in all; its relation's slot by position in a list, 120 µs; and checked itself apart from encoding, 112 µs. Interning and encoding took about 420 µs.
+
+- **Done:** a dictionary per run gives each relation's record, types and adder, and values are checked as they are encoded, with `datalog.check-fact` called only to say what is wrong. Loading takes 736 µs against 1,310.
+- **Measured:** the analysis 1.1 to 1.2 ms against 1.8, and the four-join chain, 60,000 facts, 5.9 to 6.0 ms against 12.3. Points-to is joins, and did not move.
+- **Left:** interning, about 40 ns a value through `shen.dict`. A table of its own would take more code than this is worth now.
+
 ### Against Soufflé again, with native joins (2026-11-07, Apple M3 Max, the same builds of Soufflé 2.5)
 
 The same comparison after native joins and arithmetic, the same builds and settings, so that only our side changed; load 2 to 2.4, and 6 by the end of the parallel run. Every result Soufflé finished matches ours. Ms, best of three.
