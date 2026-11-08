@@ -5,6 +5,12 @@ All notable changes to this project are documented in this file. The format is b
 
 ## [Unreleased]
 
+### Added
+
+- Optional `lib/curl.shen`, with a small C adapter over libcurl: bounded HTTP(S) requests, reusable clients,
+  binary bodies, headers and trailers, timeouts, TLS verification and explicit redirect limits. The downloader
+  `tools/curl-fetch.shen` saves successful responses through the independent file I/O library. See [the reference](docs/curl.md).
+
 ## [0.5] - 2026-11-07
 
 ### Added

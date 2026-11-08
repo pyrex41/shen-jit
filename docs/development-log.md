@@ -1655,6 +1655,36 @@ about 30 elsewhere and a 140-line header for C written for Shen. Timings are fro
 - **Linux releases are dynamic on an old glibc; static ones stay beside them without the FFI** while they pay for their
   two archives, 2026-11-05. A call there raises `foreign: this static build cannot load libraries`.
 
+### Bounded libcurl client (2026-11-08, Apple M3 Max, macOS arm64)
+
+- Added optional `lib/curl.shen` and a small adapter, `lib/curl.c`, over the public C API.
+  libcurl's write/header callbacks collect bounded native buffers while the VM lock is released;
+  the adapter copies request inputs before release and creates rooted managed results after
+  reacquisition. A plain FFI call to the default FILE writer would not give portable buffered
+  results: Windows libcurl DLLs require a write callback with application-provided WRITEDATA.
+- Reusable easy handles retain connections while every request resets its options and pointers.
+  The independent Python fixture observed the same peer port across requests, then checked that
+  POST data, custom fields and CA-file policy did not leak into subsequent requests. Final headers
+  exclude interim/redirect blocks, trailers remain separate, and header budgets span all blocks.
+  Binary uploads use explicit lengths; response bytes stay owned across request, close and images.
+- A busy guard rejects overlapping request/close without invalidating an active transfer. Close
+  invalidates the shared pointer while holding the VM lock, before native cleanup releases it.
+  A fixture-controlled blocked response exercises this without depending on a timing race. A
+  separate worker collects during a blocked binary POST, with collection on every allocation
+  during result conversion. Saved clients are stale; saved responses remain usable.
+- System libcurl 8.7.1 passed 109 checks, including pure validation, independent HTTP and HTTPS,
+  certificate rejection and explicit trust, hostname checks, forbidden HTTPS downgrade, timeout,
+  partial-body progress, collection limits, typing, executed reference examples, concurrent use,
+  images/GC and the downloader. The downloader uses the independent file I/O library and does not
+  touch an existing destination for transport errors or a non-2xx status. It buffers at most 16 MiB.
+- The fast tier and `make test-san` pass. Both the adapter and runtime were instrumented for the
+  native fixtures with AddressSanitizer and UBSan. This is macOS evidence; CI now builds and tests
+  the adapter on dynamic Linux and Windows too, and explicitly skips it on static builds. The
+  source/build script are shipped; a freshly extracted binary archive built the adapter and passed
+  its native fixture/downloader checks. There is no automatic compilation when loading Shen code.
+  `docs/curl.md` is its own rendered reference page. No throughput or retained-memory comparison
+  was made. Streaming sinks, multi transfers and cancellation remain separate work.
+
 ### SQLite and sockets (2026-11-05)
 
 First libraries, to test whether declarations cover real use: 128 and 206 lines of Shen with no C.

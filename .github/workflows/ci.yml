@@ -1,5 +1,6 @@
 # Every platform builds and tests the same release tarball, with a C compiler
-# alone, as tests/linux.sh does. One job makes the tarball, since only it runs
+# alone, as tests/linux.sh does; optional libcurl tests install their own dependencies.
+# One job makes the tarball, since only it runs
 # a Shen and pandoc. A tag vM.N makes a draft release of what those jobs built,
 # after the fast suites only, as the heavy ones run on main. Someone then makes
 # the draft public, on GitHub.
@@ -72,13 +73,17 @@ jobs:
         with:
           msystem: UCRT64
           update: true
-          install: make diffutils zip mingw-w64-ucrt-x86_64-gcc
+          install: make diffutils zip mingw-w64-ucrt-x86_64-gcc mingw-w64-ucrt-x86_64-curl mingw-w64-ucrt-x86_64-python mingw-w64-ucrt-x86_64-openssl mingw-w64-ucrt-x86_64-pkgconf
       # Debian keeps bullseye in its archive now. A newer release would raise the glibc that the
       # executables need: from 2.34, dlopen and pthreads moved into libc under new versions.
       - if: matrix.container
         run: |
           sed -i 's|deb\.debian\.org|archive.debian.org|' /etc/apt/sources.list
-          apt-get update && apt-get install -y gcc make curl ca-certificates libsqlite3-0
+          apt-get update && apt-get install -y gcc make curl ca-certificates libsqlite3-0 libcurl4-openssl-dev pkg-config python3 openssl
+      # test-san builds a shared-capable executable, including on the static release job.
+      - if: runner.os == 'Linux' && !matrix.container && matrix.heavy
+        run: |
+          sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev pkg-config python3 openssl
       - uses: actions/download-artifact@v8
         with:
           name: tarball
@@ -91,7 +96,7 @@ jobs:
         run: make ${{ matrix.static && 'STATIC=1' || '' }} release stlib
       - name: Tests
         run: |
-          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-overrides; do
+          for suite in check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-curl test-overrides; do
             echo "::group::$suite"
             make "KERNEL_DIR=$KERNEL_DIR" "$suite"
             echo "::endgroup::"

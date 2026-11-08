@@ -23,6 +23,7 @@ on:
       - docs/http-listener.md
       - docs/json.md
       - docs/datalog.md
+      - docs/curl.md
       - site/**
       - assets/**
       - .github/workflows/pages.yml

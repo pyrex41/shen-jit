@@ -19,6 +19,7 @@ local PAGES = {
   ['http-listener'] = 'Bounded HTTP servers',
   json = 'JSON',
   datalog = 'Datalog',
+  curl = 'HTTP clients with libcurl',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 

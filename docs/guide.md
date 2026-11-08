@@ -372,6 +372,13 @@ covers connection limits and controlled shutdown, with a SQLite counter applicat
 [JSON](https://github.com/tizoc/shen-jit/blob/main/docs/json.md) provides bounded UTF-8 decoding and encoding,
 lossless number tokens and typed values. HTTP request bodies can use Content-Length or bounded chunked framing.
 
+### HTTP clients with libcurl
+
+Optional `lib/curl.shen` provides bounded HTTP(S) requests, reusable clients, binary bodies, TLS verification
+and transport errors. It needs the small C adapter built by `make curl`, plus libcurl's shared library.
+[HTTP clients with libcurl](https://github.com/tizoc/shen-jit/blob/main/docs/curl.md) covers installation,
+the API and `tools/curl-fetch.shen`, a downloader using our file I/O library.
+
 ### Calling C
 
 `lib/ffi.shen` lets Shen call plain C functions, with nothing to compile. It is not in the image, and has to be
@@ -845,7 +852,7 @@ its sources.
 The fast tier takes about 20 s, and catches nearly everything:
 
 ```sh
-make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-overrides
+make test test-jit test-ops test-kl check-lowerer check-generated test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-curl test-overrides
 ```
 
 | Target | What it does |
@@ -864,11 +871,12 @@ make test test-jit test-ops test-kl check-lowerer check-generated test-kernel te
 | `make test-datalog` | `lib/datalog.shen`: answers written by hand, its errors, and generated programs against its plain evaluator |
 | `make test-datalog-swipl` | The same generated programs against SWI-Prolog's tabling, if `swipl` is there |
 | `make test-ffi` | C functions called from Shen and C written for Shen, against `tests/ffi_lib.c`, memory outside the heap, and the SQLite and socket libraries |
+| `make test-curl` | Optional libcurl adapter, independent loopback HTTP/TLS fixtures, downloader, typing, threads and images/GC; needs libcurl development headers, Python 3 and `openssl` |
 | `make test-overrides` | Each kernel function that Shen/JIT replaces beside the kernel's own definition, over generated values, as compiled and through C |
 | `make check-lowerer` | Checks the stage 0 output against the lowerer's invariants |
 | `make check-generated` | Compares the generated files with `generated.sha256`. `make update-generated` rewrites it after a change to the lowerer, the port or the lowered test programs |
 | `make test-kl-stress`, `make test-kernel-stress` | The same with frequent collections |
-| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl` and the FFI's tests under AddressSanitizer and UBSan |
+| `make test-san` | `test`, `test-jit`, `test-ops`, `test-kl`, the FFI and libcurl adapter tests under AddressSanitizer and UBSan |
 | `make test-x86` | The same five, built as x86-64 code (under Rosetta on Apple silicon) |
 | `make test-differential` | Each primitive over generated values, however it is compiled and through C, and properties they must keep. `make differential-scheme` lists what differs from Shen/Scheme, to read and not to pass |
 | `make fuzz-native` | Mutated code objects, run if the checker accepts them |
@@ -887,10 +895,10 @@ To run the test suites from a source tarball, point `KERNEL_DIR` at a directory 
 
 ```sh
 make stlib
-make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-overrides
+make KERNEL_DIR=/path/to/kernel check-generated test test-jit test-ops test-kl test-kernel test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-ffi test-curl test-overrides
 ```
 
-On Windows, every suite passes, GC stress included, except what cannot run: `tests/cli.sh` leaves out the tests that
+Windows CI runs these suites and GC stress. `tests/cli.sh` leaves out the tests that
 send a signal, which `make test-ctrlc-windows` covers, or use the profiler. The sanitizers stay on Linux and macOS.
 
 [AGENTS.md](https://github.com/tizoc/shen-jit/blob/main/AGENTS.md) has more on working on it.

@@ -31,6 +31,7 @@ SLJIT_SRC_FLAGS := -D_DEFAULT_SOURCE=
 BUILD := build
 # The library that C written for Shen is tested with, for test-ffi and test-kernel.
 FFI_TEST_LIB := $(BUILD)/ffi_test$(if $(EXE),.dll,.so)
+CURL_ADAPTER := $(BUILD)/shen-curl$(if $(EXE),.dll,.so)
 # Your own paths and targets, which git ignores: see the variables below.
 -include local.mk
 .DEFAULT_GOAL := all
@@ -59,6 +60,16 @@ BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 .PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-datalog test-datalog-swipl bench-datalog bench-datalog-souffle test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
+
+# Optional: the runtime itself has no libcurl dependency.
+.PHONY: curl test-curl
+curl: $(CURL_ADAPTER)
+
+$(CURL_ADAPTER): lib/curl.c lib/build-curl.sh include/shen.h | $(BUILD)
+	CC="$(CC)" CFLAGS="$(CFLAGS)" sh lib/build-curl.sh $@
+
+test-curl: $(BUILD)/shen-jit
+	CC="$(CC)" sh tests/curl.sh $(SHEN_JIT)
 
 # The runtime alone, and the image stage 1 writes with it from the stage 0
 # output.
@@ -192,7 +203,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-streaming http-listener json datalog
+GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-streaming http-listener json datalog curl
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -497,6 +508,8 @@ test-san: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done 
 	$(CC) $(SAN_FLAGS) $(SLJIT_SRC_FLAGS) -DSJ_BUILD_ID='"$(BUILD_ID)"' -DSJ_VERSION='"$(VERSION)"' -o $(BUILD)/shen-jit-san src/runtime/main.c $(RUNTIME_SRC) vendor/sljit/sljit_src/sljitLir.c $(LDLIBS)
 	cd $(BUILD) && ./shen-jit-san --stage1 stage0 shen-jit-san.img && \
 	  $(call FFI_SUITES,ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=shen-jit-san.img ./shen-jit-san)
+	ASAN_OPTIONS=detect_leaks=0:allocator_may_return_null=1 SHEN_JIT_IMAGE=$(abspath $(BUILD)/shen-jit-san.img) \
+	  CC="$(CC)" CFLAGS="$(SAN_FLAGS)" sh tests/curl.sh $(BUILD)/shen-jit-san$(EXE)
 
 test-x86: $(BUILD)/bench/programs.sbc $(BUILD)/kl/ops.sbc $(BUILD)/stage0/.done | $(BUILD)
 	for t in $(TESTS); do \

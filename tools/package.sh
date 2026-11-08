@@ -18,6 +18,8 @@ fi
 # What programs load, what C written for Shen includes, the rendered guide, which make dist put
 # in the tarball, and the example applications and tests, to run or read beside them.
 cp -R lib include guide example-apps tests "build/$name/"
+mkdir "build/$name/tools"
+cp tools/curl-fetch.shen "build/$name/tools/"
 cp LICENSE "build/$name/LICENSE.txt"
 cp LICENSE-shen-kernel.txt "build/$name/LICENSE-shen-kernel.txt"
 cp vendor/sljit/LICENSE "build/$name/LICENSE-sljit.txt"
