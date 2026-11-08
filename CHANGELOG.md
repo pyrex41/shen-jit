@@ -13,7 +13,9 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Changed
 
-- `lib/http-request.shen` parses the request line with a grammar, so `lib/grammar.shen` must be loaded before it.
+- `lib/http-request.shen` parses the request line with a grammar, and `lib/json.shen` decodes with one, so
+  `lib/grammar.shen` must be loaded before either. JSON decoding is 1.2 to 4 times as fast, most for strings without
+  escapes. Some invalid inputs are reported with a different message or offset: what was expected where it failed.
 
 ## [0.5] - 2026-11-07
 

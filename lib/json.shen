@@ -1,4 +1,4 @@
-\\ Complete UTF-8 JSON over byte views. Load buffer.shen first, under (tc -).
+\\ Complete UTF-8 JSON over byte views. Load buffer.shen and grammar.shen first, under (tc -).
 \\ Numbers decode to lossless [number Token] values; native numbers can also be encoded.
 
 (define json.scan-fail
@@ -6,47 +6,6 @@
 
 (define json.scan-byte
   Data I End -> (if (< I End) (shen-jit.u8 Data I) (json.scan-fail I "unexpected end")))
-
-(define json.scan-space
-  Data I End -> I where (>= I End)
-  Data I End -> (let B (shen-jit.u8 Data I)
-                  (if (element? B [32 9 10 13]) (json.scan-space Data (+ I 1) End) I)))
-
-(define json.scan-digit?
-  B -> (and (>= B 48) (<= B 57)))
-
-(define json.scan-digits
-  Data I End -> I where (>= I End)
-  Data I End -> (if (json.scan-digit? (shen-jit.u8 Data I))
-                   (json.scan-digits Data (+ I 1) End) I))
-
-(define json.scan-need-digits
-  Data I End -> (if (json.scan-digit? (json.scan-byte Data I End))
-                   (json.scan-digits Data (+ I 1) End)
-                   (json.scan-fail I "expected digits")))
-
-(define json.scan-number
-  Data I End ->
-    (let First (if (= (json.scan-byte Data I End) 45) (+ I 1) I)
-         B (json.scan-byte Data First End)
-         IntEnd (cond ((= B 48) (+ First 1))
-                      ((and (>= B 49) (<= B 57)) (json.scan-digits Data (+ First 1) End))
-                      (true (json.scan-fail First "expected integer")))
-         FracEnd (if (and (< IntEnd End) (= (shen-jit.u8 Data IntEnd) 46))
-                     (json.scan-need-digits Data (+ IntEnd 1) End) IntEnd)
-         Stop (if (and (< FracEnd End) (element? (shen-jit.u8 Data FracEnd) [69 101]))
-                  (let E (+ FracEnd 1)
-                       At (if (and (< E End) (element? (shen-jit.u8 Data E) [43 45])) (+ E 1) E)
-                    (json.scan-need-digits Data At End))
-                  FracEnd)
-      (@p [number (shen-jit.bytes->string Data I (- Stop I))] Stop)))
-
-(define json.scan-literal
-  _ I _ [] Value -> (@p Value I)
-  Data I End [Byte | Bytes] Value ->
-    (if (= (json.scan-byte Data I End) Byte)
-        (json.scan-literal Data (+ I 1) End Bytes Value)
-        (json.scan-fail I "invalid literal")))
 
 (define json.scan-continuation?
   B -> (and (>= B 128) (<= B 191)))
@@ -71,15 +30,6 @@
                   (json.scan-continuation? (json.scan-byte Data (+ I 2) End))
                   (json.scan-continuation? (json.scan-byte Data (+ I 3) End))) 4)
             (true (json.scan-fail I "invalid UTF-8")))))
-
-(define json.scan-quote-end
-  Data I End ->
-    (let B (json.scan-byte Data I End)
-      (cond ((= B 34) I)
-            ((= B 92) (do (json.scan-byte Data (+ I 1) End)
-                           (json.scan-quote-end Data (+ I 2) End)))
-            ((< B 32) (json.scan-fail I "unescaped control byte"))
-            (true (json.scan-quote-end Data (+ I (json.scan-utf8-width Data I End)) End)))))
 
 (define json.scan-hex
   B I -> (cond ((and (>= B 48) (<= B 57)) (- B 48))
@@ -138,68 +88,113 @@
                                  (true (json.scan-fail I "invalid escape")))
                   (do (shen-jit.u8! Out K Byte)
                       (json.scan-decode Data (+ I 2) Stop Out (+ K 1))))))
-          (let Width (json.scan-utf8-width Data I Stop)
-            (do (shen-jit.copy-bytes Out K Data I Width)
-                (json.scan-decode Data (+ I Width) Stop Out (+ K Width)))))))
+          (let Run (- (json.scan-run Data I Stop) I)
+            (do (shen-jit.copy-bytes Out K Data I Run)
+                (json.scan-decode Data (+ I Run) Stop Out (+ K Run)))))))
 
-(define json.scan-string
-  Data I End -> (let Start (+ I 1) Stop (json.scan-quote-end Data Start End)
-                    Out (shen-jit.bytes (- Stop Start))
-                    N (json.scan-decode Data Start Stop Out 0)
-                 (@p (shen-jit.bytes->string Out 0 N) (+ Stop 1))))
+\\ The grammar has checked the text, so what runs to the next escape is copied as it is.
+(define json.scan-run
+  _ I I -> I
+  Data I Stop -> (if (= (shen-jit.u8 Data I) 92) I (json.scan-run Data (+ I 1) Stop)))
 
-(define json.scan-array
-  Data I End Depth DepthLimit Acc ->
-    (let Parsed (json.scan-value Data I End Depth DepthLimit)
-         At (json.scan-space Data (snd Parsed) End)
-         B (json.scan-byte Data At End) Next [(fst Parsed) | Acc]
-      (cond ((= B 93) (@p (reverse Next) (+ At 1)))
-            ((= B 44) (json.scan-array Data (+ At 1) End Depth DepthLimit Next))
-            (true (json.scan-fail At "expected comma or closing bracket")))))
+\\ V is the span the grammar made: owner, start and end in slots 1 to 3.
+(define json.unescape
+  V -> (let Start (<-address V 2) Stop (<-address V 3) Out (shen-jit.bytes (- Stop Start))
+         (shen-jit.bytes->string Out 0 (json.scan-decode (<-address V 1) Start Stop Out 0))))
 
-(define json.scan-object
-  Data I End Depth DepthLimit Seen Acc ->
-    (let At (json.scan-space Data I End)
-         _ (if (= (json.scan-byte Data At End) 34) true (json.scan-fail At "expected object key"))
-         Key (json.scan-string Data At End)
-         _ (if (trap-error (shen.<-dict Seen (fst Key)) (/. E false))
-               (json.scan-fail At "duplicate object key") true)
-         _ (shen.dict-> Seen (fst Key) true)
-         Colon (json.scan-space Data (snd Key) End)
-         _ (if (= (json.scan-byte Data Colon End) 58) true (json.scan-fail Colon "expected colon"))
-         Val (json.scan-value Data (+ Colon 1) End Depth DepthLimit)
-         NextAt (json.scan-space Data (snd Val) End)
-         B (json.scan-byte Data NextAt End) Next [[(fst Key) (fst Val)] | Acc]
-      (cond ((= B 125) (@p [object | (reverse Next)] (+ NextAt 1)))
-            ((= B 44) (json.scan-object Data (+ NextAt 1) End Depth DepthLimit Seen Next))
-            (true (json.scan-fail NextAt "expected comma or closing brace")))))
+(define json.new-key?
+  Seen Key -> (if (trap-error (shen.<-dict Seen Key) (/. E false))
+                  false
+                  (do (shen.dict-> Seen Key true) true)))
 
-(define json.scan-value
-  Data I End Depth DepthLimit ->
-    (let At (json.scan-space Data I End) B (json.scan-byte Data At End)
-         _ (if (and (element? B [91 123]) (>= Depth DepthLimit))
-               (json.scan-fail At "nesting limit") true)
-      (cond ((= B 34) (json.scan-string Data At End))
-            ((= B 110) (json.scan-literal Data At End [110 117 108 108] null))
-            ((= B 116) (json.scan-literal Data At End [116 114 117 101] true))
-            ((= B 102) (json.scan-literal Data At End [102 97 108 115 101] false))
-            ((or (= B 45) (json.scan-digit? B)) (json.scan-number Data At End))
-            ((= B 91)
-              (let Next (json.scan-space Data (+ At 1) End)
-                (if (= (json.scan-byte Data Next End) 93) (@p [] (+ Next 1))
-                    (json.scan-array Data Next End (+ Depth 1) DepthLimit []))))
-            ((= B 123)
-              (let Next (json.scan-space Data (+ At 1) End)
-                (if (= (json.scan-byte Data Next End) 125) (@p [object] (+ Next 1))
-                    (json.scan-object Data Next End (+ Depth 1) DepthLimit (shen.dict 8) []))))
-            (true (json.scan-fail At "expected value")))))
+(defgrammar json.<ws-byte> B where (or (= B 32) (= B 10) (= B 13) (= B 9));)
+(defgrammar json.<ws> (* json.<ws-byte>);)
+
+(defgrammar json.<digit> B where (and (>= B 48) (<= B 57));)
+(defgrammar json.<nonzero> B where (and (>= B 49) (<= B 57));)
+(defgrammar json.<e> B where (or (= B 69) (= B 101));)
+(defgrammar json.<sign> B where (or (= B 43) (= B 45));)
+(defgrammar json.<int> 48; json.<nonzero> (* json.<digit>);)
+(defgrammar json.<fraction> 46 (require (+ json.<digit>) "expected digits");)
+(defgrammar json.<exponent> json.<e> (? json.<sign>) (require (+ json.<digit>) "expected digits");)
+(defgrammar json.<integer> 45 (require json.<int> "expected integer"); json.<int>;)
+(defgrammar json.<number> json.<integer> (? json.<fraction>) (? json.<exponent>);)
+
+\\ A string's bytes are its text unless it has escapes, which the decoder above turns into bytes.
+(defgrammar json.<plain> B where (and (>= B 32) (< B 128) (not (= B 34)) (not (= B 92)));)
+(defgrammar json.<tail> B where (json.scan-continuation? B);)
+(defgrammar json.<utf8>
+  B json.<tail> where (and (>= B 194) (<= B 223));
+  B C json.<tail> where (and (>= B 224) (<= B 239) (json.scan-continuation? C)
+                             (or (not (= B 224)) (>= C 160)) (or (not (= B 237)) (< C 160)));
+  B C json.<tail> json.<tail> where (and (>= B 240) (<= B 244) (json.scan-continuation? C)
+                                         (or (not (= B 240)) (>= C 144)) (or (not (= B 244)) (< C 144)));)
+(defgrammar json.<char> (+ json.<plain>); json.<utf8>;)
+(defgrammar json.<raw> (* json.<char>);)
+(defgrammar json.<hex> B where (or (and (>= B 48) (<= B 57)) (and (>= B 65) (<= B 70)) (and (>= B 97) (<= B 102)));)
+(defgrammar json.<escape>
+  B where (element? B [34 47 92 98 102 110 114 116]);
+  117 (require json.<hex> json.<hex> json.<hex> json.<hex> "invalid Unicode escape");)
+(defgrammar json.<part> json.<char>; 92 (require json.<escape> "invalid escape");)
+(defgrammar json.<escaped> (* json.<part>);)
+(defgrammar json.<string>
+  34 (text json.<raw>) 34 := json.<raw>;
+  34 (span json.<escaped>) (require 34 "unterminated string") := (json.unescape json.<escaped>);)
+
+\\ Depth counts the containers around a value; a container at the limit is refused.
+(defgrammar (json.<value> Depth Limit)
+  json.<string> := json.<string>;
+  "n" (require "ull" "invalid literal") := null;
+  "t" (require "rue" "invalid literal") := true;
+  "f" (require "alse" "invalid literal") := false;
+  "[" (require (where (< Depth Limit)) "nesting limit") json.<ws> (json.<elements> (+ Depth 1) Limit)
+    := json.<elements>;
+  "{" (require (where (< Depth Limit)) "nesting limit") json.<ws> (json.<members> (+ Depth 1) Limit (shen.dict 8))
+    := [object | json.<members>];
+  (text json.<number>) := [number json.<number>];)
+
+(defgrammar (json.<elements> Depth Limit)
+  "]" := [];
+  (require (json.<value> Depth Limit) "expected value") json.<ws> (json.<more> Depth Limit)
+    := [json.<value> | json.<more>];)
+
+(defgrammar (json.<more> Depth Limit)
+  "]" := [];
+  "," json.<ws> (require (json.<value> Depth Limit) "expected value") json.<ws> (json.<more> Depth Limit)
+    := [json.<value> | json.<more>];
+  (require (where false) "expected comma or closing bracket") := [];)
+
+(defgrammar (json.<members> Depth Limit Seen)
+  "}" := [];
+  (require (json.<member> Depth Limit Seen) "expected object key") json.<ws> (json.<more-members> Depth Limit Seen)
+    := [json.<member> | json.<more-members>];)
+
+(defgrammar (json.<more-members> Depth Limit Seen)
+  "}" := [];
+  "," json.<ws> (require (json.<member> Depth Limit Seen) "expected object key") json.<ws>
+    (json.<more-members> Depth Limit Seen) := [json.<member> | json.<more-members>];
+  (require (where false) "expected comma or closing brace") := [];)
+
+(defgrammar (json.<member> Depth Limit Seen)
+  json.<string> (require (where (json.new-key? Seen json.<string>)) "duplicate object key")
+  json.<ws> (require ":" "expected colon") json.<ws> (require (json.<value> Depth Limit) "expected value")
+    := [json.<string> json.<value>];)
+
+(defgrammar (json.<document> Limit)
+  json.<ws> (require (json.<value> 0 Limit) "expected value") json.<ws> := json.<value>;)
+
+(defgrammar json.<token> (text json.<number>) := [number json.<number>];)
 
 (define json.decode-view
-  View DepthLimit -> (let Data (buffer.owner View) Start (buffer.offset View) End (buffer.end View)
-               Parsed (json.scan-value Data Start End 0 DepthLimit)
-               At (json.scan-space Data (snd Parsed) End)
-            (if (= At End) (fst Parsed) (json.scan-fail At "trailing input"))))
+  View DepthLimit -> (grammar.parse (json.<document> DepthLimit) View (/. At Message (json.syntax View At Message))))
 
+\\ At the end of the input, whatever was expected, the input ended. A string that stopped short
+\\ did so at a control byte or at bytes that are not UTF-8.
+(define json.syntax
+  View At _ -> (json.scan-fail At "unexpected end") where (>= At (buffer.end View))
+  View At "unterminated string" ->
+    (json.scan-fail At (if (< (shen-jit.u8 (buffer.owner View) At) 32) "unescaped control byte" "invalid UTF-8"))
+  _ At Message -> (json.scan-fail At Message))
 
 (define json.options
   Options -> (json.configure Options 1048576 128 []))
@@ -226,11 +221,7 @@
   Text Options -> (json.decode (buffer.from-string Text) Options))
 
 (define json.number
-  Token ->
-    (let B (shen-jit.string->bytes Token)
-         N (shen-jit.bytes-length B)
-         Parsed (json.scan-number B 0 N)
-      (if (= (snd Parsed) N) (fst Parsed) (error "json: invalid number token"))))
+  Token -> (grammar.parse json.<token> (buffer.from-string Token) (/. At Message (error "json: invalid number token"))))
 
 (define json.integer
   [number Token] ->

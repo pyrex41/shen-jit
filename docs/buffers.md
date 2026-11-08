@@ -72,7 +72,7 @@ compatible declaration at its boundary.
 ## Format examples
 
 For two complete-input examples, load [tools/buffer-parsers.shen](../tools/buffer-parsers.shen) after
-buffer/cursor and [json.shen](json.md). `buffer-example.json` delegates to the public JSON decoder with
+buffer/cursor, [grammar.shen](grammar.md) and [json.shen](json.md). `buffer-example.json` delegates to the public JSON decoder with
 a byte bound equal to the input view's size and nesting bound 128. It retains exact number tokens,
 strict UTF-8 and duplicate-key rejection. `buffer-example.packet View Limit` reads a two-byte big-endian tag, four-byte length and owned
 payload, rejecting oversized, incomplete or trailing input. Neither example reads a stream.

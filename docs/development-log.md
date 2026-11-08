@@ -1244,6 +1244,29 @@ the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, 
   arguments, which are evaluated first, and a loop's helper now takes the bound variables its body uses, which also
   lets a loop's item use a value matched before it. A rule with parameters is not a byte class. 65 lines, which bring
   the macro to 389. Nothing that does not use them changed: the grammar and HTTP suites pass as they were.
+- **JSON as a grammar, with parameters, kept.** `json.<value>` takes the depth and its limit, `json.<members>` the
+  dictionary of keys seen; arrays and objects are recursive rules, which ten million frames deep showed safe for any
+  input under the byte limit. A string without escapes is its own text, `(text json.<raw>)`; one with escapes is
+  checked by the grammar and decoded by the scanner's decoder, which now copies the runs between escapes. The escape
+  decoder and the UTF-8 width the encoder uses stay by hand. The part the grammar replaced, 97 lines of code, is 68;
+  the decoder as a whole 177 to 163. Four alternating rounds, against the scanner of the commit before, in µs:
+
+  | Document | By hand | Grammar |
+  | --- | ---: | ---: |
+  | 1,000 numbers | 58 to 59 | 49 to 51 |
+  | 200 objects of six members | 139 to 143 | 83 to 85 |
+  | 900 literals | 34.6 to 35.1 | 20.4 to 21.7 |
+  | 500 ASCII strings | 193 to 195 | 46 to 48 |
+  | 500 UTF-8 strings | 186 to 190 | 81 to 82 |
+  | 500 strings with escapes | 174 to 177 | 163 to 168 |
+
+  Part of this is the shape the grammar made easy, which the scanner could take by hand: strings without escapes
+  copied whole, and runs copied between escapes; before the second, strings with escapes took 228 to 230. Byte tables
+  and rules compiled in place do the rest. The JSON suites and both 256-case oracles pass unchanged, and 6,000 mutated
+  inputs from two seeds, decoded both ways, were accepted alike with equal values. Of the 3,591 rejections, 3.9% name
+  a different problem, as the grammar checks escapes before the decoder pairs surrogates, and 9.5% another offset,
+  as a require reports where it began: after a bracket for the nesting limit, after a key for a duplicate. Every JSON
+  user now loads `lib/grammar.shen` first, which earlier tipped the scalars alone towards rejection.
 - **Counter names in the SQLite example, kept.** `counter-app.<counter>`, `/counters/` and a name of letters,
   digits, `-` and `_`, in 4 lines with its caller, replaces 17. Five rounds of a million calls: `/counters/hits` 49
   to 52 ns against 51 to 53, a 25-byte name 98 to 99 against 148 to 150, `/counters/a/b` 44 to 46 against 34 to 36,
