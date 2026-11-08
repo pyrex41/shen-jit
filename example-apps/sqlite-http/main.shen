@@ -36,12 +36,17 @@
 (defgrammar counter-app.<name-byte>
   B where (or (and (>= B 65) (<= B 90)) (and (>= B 97) (<= B 122)) (and (>= B 48) (<= B 57)) (= B 45) (= B 95));)
 (defgrammar counter-app.<name> (+ counter-app.<name-byte>);)
-(defgrammar counter-app.<counter> "/counters/" (text counter-app.<name>) := counter-app.<name>;)
+(defgrammar counter-app.<resource>
+  "/health" := [health];
+  "/counters.ndjson" := [export];
+  "/counters/" (text counter-app.<name>) := [counter counter-app.<name>];
+  "/counters" := [counters];)
 
-\\ A counter's name from its target, of at most 64 bytes, or [].
-(define counter-app.name
+\\ What a target names: [health], [counters], [export], [counter Name] with a name of at most 64
+\\ bytes, or [] for nothing.
+(define counter-app.resource
   Target -> (let B (shen-jit.string->bytes Target) N (shen-jit.bytes-length B)
-              (if (<= N 74) (grammar.parse-range counter-app.<counter> B 0 N (/. At Message [])) [])))
+              (if (<= N 74) (grammar.parse-range counter-app.<resource> B 0 N (/. At Message [])) [])))
 
 (define counter-app.row-json
   [Name Value] -> [object ["name" Name] ["value" Value]])
@@ -124,42 +129,41 @@
             (sqlite.run Db "UPDATE counters SET value = value + 1 WHERE name = ?" [Name])
             (counter-app.found (sqlite.query Db "SELECT value FROM counters WHERE name = ?" [Name]))))))
 
-(define counter-app.counter
-  Db "GET" Name -> (counter-app.found (sqlite.query Db "SELECT value FROM counters WHERE name = ?" [Name]))
-  Db "HEAD" Name -> (counter-app.counter Db "GET" Name)
-  Db "POST" Name -> (counter-app.increment Db Name)
-  Db "DELETE" Name ->
-    (if (= (sqlite.run Db "DELETE FROM counters WHERE name = ?" [Name]) 0)
-        (counter-app.error 404 "counter not found")
-        (http.response 204 [] (buffer.new 0)))
-  _ _ _ -> (http.response 405 [["Allow" "GET, HEAD, POST, PUT, DELETE"]] (buffer.new 0)))
+(define counter-app.value
+  Db Name -> (counter-app.found (sqlite.query Db "SELECT value FROM counters WHERE name = ?" [Name])))
+
+(define counter-app.delete
+  Db Name -> (if (= (sqlite.run Db "DELETE FROM counters WHERE name = ?" [Name]) 0)
+                 (counter-app.error 404 "counter not found")
+                 (http.response 204 [] (buffer.new 0))))
+
+(define counter-app.not-allowed
+  Methods -> (http.response 405 [["Allow" Methods]] (buffer.new 0)))
+
+\\ One clause for each method on each resource. HEAD is GET, whose body the encoder leaves out.
+(define counter-app.serve
+  Path "HEAD" Resource -> (counter-app.serve Path "GET" Resource)
+  _ "GET" [health] -> (counter-app.json 200 [object ["status" "ok"]])
+  Path "GET" [counters] -> (counter-app.with-db Path (function counter-app.list))
+  Path "GET" [export] -> (counter-app.export Path)
+  Path "GET" [counter Name] -> (counter-app.with-db Path (/. Db (counter-app.value Db Name)))
+  Path "POST" [counter Name] -> (counter-app.with-db Path (/. Db (counter-app.increment Db Name)))
+  Path "DELETE" [counter Name] -> (counter-app.with-db Path (/. Db (counter-app.delete Db Name)))
+  _ _ [counter _] -> (counter-app.not-allowed "GET, HEAD, POST, PUT, DELETE")
+  _ _ [_] -> (counter-app.not-allowed "GET, HEAD")
+  _ _ [] -> (counter-app.error 404 "route not found"))
 
 (define counter-app.route
-  _ "GET" "/health" -> (counter-app.json 200 [object ["status" "ok"]])
-  _ "HEAD" "/health" -> (counter-app.json 200 [object ["status" "ok"]])
-  _ _ "/health" -> (http.response 405 [["Allow" "GET, HEAD"]] (buffer.new 0))
-  Path Method "/counters.ndjson" ->
-    (if (element? Method ["GET" "HEAD"])
-        (counter-app.export Path)
-        (http.response 405 [["Allow" "GET, HEAD"]] (buffer.new 0)))
-  Path Method "/counters" ->
-    (if (element? Method ["GET" "HEAD"])
-        (counter-app.with-db Path (function counter-app.list))
-        (http.response 405 [["Allow" "GET, HEAD"]] (buffer.new 0)))
-  Path Method Target ->
-    (let Name (counter-app.name Target)
-      (if (empty? Name)
-          (counter-app.error 404 "route not found")
-          (counter-app.with-db Path (/. Db (counter-app.counter Db Method Name))))))
+  Path Method Target -> (counter-app.serve Path Method (counter-app.resource Target)))
 
+\\ Only PUT on a counter has a body.
 (define counter-app.handle
-  Path Request ->
-    (let Name (counter-app.name (http.target Request))
-      (cond ((and (= (http.method Request) "PUT") (not (empty? Name)))
-              (counter-app.set-request Path Name Request))
-            ((= (http.content-length Request) 0)
-              (counter-app.route Path (http.method Request) (http.target Request)))
-            (true (counter-app.error 400 "this route expects an empty body")))))
+  Path Request -> (counter-app.request Path Request (counter-app.resource (http.target Request))))
+
+(define counter-app.request
+  Path Request [counter Name] -> (counter-app.set-request Path Name Request) where (= (http.method Request) "PUT")
+  _ Request _ -> (counter-app.error 400 "this route expects an empty body") where (> (http.content-length Request) 0)
+  Path Request Resource -> (counter-app.serve Path (http.method Request) Resource))
 
 (define counter-app.lower
   Text ->

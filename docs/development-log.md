@@ -1161,7 +1161,9 @@ hooks for other kinds of input, which would change every port and still allocate
 Each use was kept only if it was clearly shorter and clearer, its speed within noise of the code it replaced, and the
 suites of that library passed unchanged. Times are old and new library files loaded by the same executable, in
 alternating processes, each a loop over the case in one process, under a load average of 2.3 to 4 from other work.
-`make bench-independent` runs workloads that load none of these libraries, so it cannot move with them.
+`make bench-independent` runs workloads that load none of these libraries, so it cannot move with them: run once on
+the branch, under a load of 1.8 to 2.7, it gave startup 4 ms, kernel tests 187, extensions 25, the standard library
+67, the contract examples 14 and THORN 231, 198, 192 and 250, as the row of 2026-11-06 below.
 
 - **HTTP request line, kept.** `http.<request-line>` reads as RFC 9112 does, method, target and version, with
   CONNECT's authority and OPTIONS' `*` as alternatives, and 20 lines of code replace 33. Ten alternating rounds of
@@ -1218,6 +1220,31 @@ alternating processes, each a loop over the case in one process, under a load av
   and `/health` 22 against 14 to 15, as each parse makes a state. A first version made a view of the target and took
   78 ns for `/counters/hits` and 50 for `/health`; it parses the string's bytes as a range now. The difference on
   other targets is under 1% of a request, which every request pays once.
+
+### Shen features in the SQLite example (2026-11-08, M3 Max, macOS arm64)
+
+A read of the libraries and the example found code that reads like Scheme or ML: index loops, records reached by slot
+number, and `[ok ...]`/`[error ...]` unpacked by hand. A feature was used only where it made the code shorter, safer
+or faster, starting with the example.
+
+- **Routes as pattern matching, kept.** `counter-app.<resource>` decodes a target into `[health]`, `[counters]`,
+  `[export]`, `[counter Name]` or `[]`, and `counter-app.serve` has one clause for each method on each resource, with
+  HEAD as GET. Routing was spread over `counter-app.route`, `counter-app.counter`, `counter-app.handle` and
+  `counter-app.name`; the API is now one table. 234 lines of code to 231, and a counter's target is decoded once per
+  request where it was decoded twice. Its test now asks `counter-app.resource` for the invalid names.
+- **A result binding, `let-ok`, not applied:** the example has no chain of results to bind; its `[ok]` and `[error]`
+  dispatch on what a wait or a cleanup gave, once each. The chains are in the HTTP and I/O libraries, where each read
+  continues in a function of its own.
+- **A resource scope, `with`, not applied:** `counter-app.with-db` already is one, as a function that takes a lambda,
+  and a macro would add the same cleanup and more code. The export's database lives until its stream closes, which a
+  scope cannot express.
+- **Named record fields, not applied:** the example has one record, the export's four slots, which a comment names.
+  A macro would add more than it removed.
+- **Types for protocol state, not applied:** the order was to add them where a mistake they prevent had been made or
+  nearly made, and neither the log nor the history has one; the libraries refuse a body read twice, a read in
+  flight and a closed connection at run time.
+- **Datalog as a query layer and code from specifications, not applied:** the example has no recursive query, and
+  there is no schema to generate from.
 
 ### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
 

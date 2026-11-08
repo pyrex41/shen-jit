@@ -34,7 +34,7 @@
 (counter-test.check "deleted counter" [404 "{c#34;errorc#34;:c#34;counter not foundc#34;}"]
   (freeze (counter-test.response "GET" "/counters/hits")))
 (map (/. Target
-       (counter-test.check "invalid name" [] (freeze (counter-app.name Target))))
+       (counter-test.check "invalid name" [] (freeze (counter-app.resource Target))))
   ["/counters/" "/counters/a/b" "/counters/a%20b" "/counters/a?b" "/counters/a'b"])
 (counter-test.check "in-memory database rejected" true
   (freeze (counter-test.raises? (freeze (counter-app.initialize ":memory:")))))
