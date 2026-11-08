@@ -73,7 +73,7 @@ with tempfile.TemporaryDirectory(prefix='shen-buffer-json-') as name:
     fixture.write_text('\n'.join(forms) + '\n')
     result = subprocess.run(
         [str(executable), 'eval', '-l', 'lib/buffer.shen', '-l', 'lib/cursor.shen',
-         '-l', 'tools/buffer-parsers.shen', '-l', str(fixture)], cwd=root,
+         '-l', 'lib/json.shen', '-l', 'tools/buffer-parsers.shen', '-l', str(fixture)], cwd=root,
         capture_output=True, text=True, timeout=30)
     if result.returncode or '256 independent JSON cases passed' not in result.stdout:
         print(result.stdout[-4000:])

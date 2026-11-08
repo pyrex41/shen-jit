@@ -77,16 +77,35 @@
         "HTTP/1.1 200 OKc#13;c#10;Set-Cookie: a=1c#13;c#10;Set-Cookie: b=2c#13;c#10;Date: Sun, 06 Nov 1994 08:49:37 GMTc#13;c#10;Content-Length: 3c#13;c#10;Connection: closec#13;c#10;c#13;c#10;abc"
         (freeze (buffer.string Reply)))))
 
+(let Seen (io.record [[]])
+     Exchange (server-test.exchange
+                "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;3;x=yc#13;c#10;abcc#13;c#10;0c#13;c#10;X-End: yesc#13;c#10;c#13;c#10;"
+                [] (/. Q (do (address-> Seen 0 [(http.content-length Q) (http.trailers Q)])
+                             (server-test.handler Q))) false)
+     Reply (hd (tl Exchange))
+  (do (server-test.check "chunked request completes before client EOF" 200
+        (freeze (server-test.status Exchange)))
+      (server-test.check "native handler receives decoded length and separate trailers" [3 [["x-end" "yes"]]]
+        (freeze (<-address Seen 0)))
+      (server-test.check "native chunked echo body" "abc"
+        (freeze (buffer.string (buffer.slice Reply (- (buffer.length Reply) 3) 3))))))
+
 (server-test.rejected
   [["GET / HTTP/1.1c#13;c#10;c#13;c#10;" [] 400]
    ["GET / HTTP/1.0c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;" [] 505]
    ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;Content-Length: 3c#13;c#10;c#13;c#10;abc" [] 400]
    ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;c#13;c#10;abc" [[body-limit 2]] 413]
    ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 3c#13;c#10;Expect: 100-continuec#13;c#10;c#13;c#10;" [] 417]
-   ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;" [] 501]
+   ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: gzip, chunkedc#13;c#10;c#13;c#10;" [] 501]
    ["GET / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;c#13;c#10;" [[head-limit 32]] 431]
    ["" [[head-timeout 0]] 408]
-   ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 1c#13;c#10;c#13;c#10;" [[body-timeout 0]] 408]])
+   ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 1c#13;c#10;c#13;c#10;" [[body-timeout 0]] 408]
+   ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;3c#13;c#10;"
+    [[body-limit 2]] 413]
+   ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;0c#13;c#10;Content-Type: text/plainc#13;c#10;c#13;c#10;"
+    [] 400]
+   ["POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;"
+    [[body-timeout 0]] 408]])
 
 (let Exchange (server-test.exchange
        "POST / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Length: 5c#13;c#10;c#13;c#10;abc"

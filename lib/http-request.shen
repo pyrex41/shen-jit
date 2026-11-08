@@ -227,25 +227,25 @@
                       (http.host-labels? B 0 Colon 0 0)
                       (http.host-port? B Colon N)))))))
 
-(define http.connection-tokens
-  Values -> (http.connection-values Values []))
+(define http.token-list
+  Values -> (http.token-values Values []))
 
-(define http.connection-values
-  [] Acc -> Acc
+(define http.token-values
+  [] Acc -> (reverse Acc)
   [Value | Rest] Acc ->
     (let B (shen-jit.string->bytes Value)
-         Tokens (http.connection-parts B 0 (shen-jit.bytes-length B) Acc)
-      (http.connection-values Rest Tokens)))
+         Tokens (http.token-parts B 0 (shen-jit.bytes-length B) Acc)
+      (http.token-values Rest Tokens)))
 
-(define http.connection-parts
+(define http.token-parts
   B At End Acc ->
     (let Comma (http.find-byte B At End 44)
          Start (http.trim-start B At Comma)
          Finish (http.trim-end B Start Comma)
          _ (if (and (< Start Finish) (http.token-range? B Start Finish))
-               true (http.invalid "invalid Connection token"))
+               true (http.invalid "invalid token list"))
          Next [(http.lower (http.text B Start Finish)) | Acc]
-      (if (= Comma End) Next (http.connection-parts B (+ Comma 1) End Next))))
+      (if (= Comma End) Next (http.token-parts B (+ Comma 1) End Next))))
 
 (define http.connection-framing?
   [] -> false
@@ -262,6 +262,38 @@
       (http.decimal B 0 N Limit))
   _ _ -> (http.invalid "duplicate Content-Length"))
 
+(define http.transfer
+  [] -> fixed
+  [Value] ->
+    (let Codings (http.token-list [Value])
+         Last (hd (reverse Codings))
+         _ (if (http.chunked-once? Codings) true (http.invalid "repeated chunked coding"))
+         _ (if (= Last "chunked") true (http.invalid "final request coding must be chunked"))
+      (if (= Codings ["chunked"]) chunked unsupported))
+  _ -> (http.invalid "duplicate Transfer-Encoding"))
+
+(define http.chunked-once?
+  [] -> true
+  ["chunked" | Rest] -> (not (element? "chunked" Rest))
+  [_ | Rest] -> (http.chunked-once? Rest))
+
+(define http.forbidden-trailer?
+  Name -> (element? Name ["host" "content-length" "transfer-encoding" "trailer" "connection"
+                         "te" "keep-alive" "proxy-connection" "upgrade" "expect"
+                         "content-encoding" "content-type" "content-range"
+                         "authorization" "proxy-authorization" "cookie" "range" "cache-control"
+                         "content-disposition" "set-cookie" "location" "retry-after" "vary"
+                         "www-authenticate" "proxy-authenticate" "authentication-info"
+                         "max-forwards" "if-match" "if-none-match" "if-modified-since"
+                         "if-unmodified-since" "if-range"]))
+
+(define http.trailer-names
+  [] _ -> true
+  [Name | Rest] Connection ->
+    (if (or (http.forbidden-trailer? Name) (element? Name Connection))
+        (http.invalid "forbidden trailer field")
+        (http.trailer-names Rest Connection)))
+
 (define http.validate-request
   [Method Target Version] Fields Limit ->
     (let Hosts (http.field-values Fields "host")
@@ -269,26 +301,32 @@
                true (http.invalid "one valid Host is required"))
          Lengths (http.field-values Fields "content-length")
          Coding (http.field-values Fields "transfer-encoding")
-         Connection (http.connection-tokens (http.field-values Fields "connection"))
+         Connection (http.token-list (http.field-values Fields "connection"))
          _ (if (http.connection-framing? Connection)
                (http.invalid "Connection nominates a framing field") true)
       (cond ((not (= Version "HTTP/1.1")) (http.problem 505 "only HTTP/1.1 is supported"))
             ((and (not (empty? Coding)) (not (empty? Lengths)))
               (http.problem 400 "Transfer-Encoding with Content-Length"))
-            ((not (empty? Coding)) (http.problem 501 "transfer coding is unsupported"))
             ((not (empty? (http.field-values Fields "expect")))
               (http.problem 417 "expectations are unsupported"))
             ((or (= Method "CONNECT")
                  (element? "upgrade" Connection)
                  (not (empty? (http.field-values Fields "upgrade"))))
               (http.problem 501 "tunnels and upgrades are unsupported"))
-            ((not (empty? (http.field-values Fields "trailer")))
-              (http.problem 400 "trailers are unsupported"))
             (true
-              (let N (http.length Lengths Limit)
-                (cond ((= N too-large) (http.problem 413 "request body exceeds limit"))
+              (let Framing (http.transfer Coding)
+                   Trailers (http.field-values Fields "trailer")
+                   _ (if (and (not (empty? Trailers)) (not (= Framing chunked)))
+                         (http.invalid "Trailer requires chunked framing") true)
+                   _ (http.trailer-names (http.token-list Trailers) Connection)
+                   N (if (= Framing chunked) chunked (http.length Lengths Limit))
+                (cond ((= Framing unsupported) (http.problem 501 "transfer coding is unsupported"))
+                      ((= N too-large) (http.problem 413 "request body exceeds limit"))
+                      ((= Framing chunked)
+                        [ok (io.record [http.request Method Target Version Fields N unread Limit [] chunked])])
                       ((and (= Method "TRACE") (> N 0)) (http.problem 400 "TRACE cannot have a body"))
-                      (true [ok (io.record [http.request Method Target Version Fields N unread])])))))))
+                      (true
+                        [ok (io.record [http.request Method Target Version Fields N unread Limit [] fixed])])))))))
 
 (define http.syntax-error
   X ->
@@ -335,7 +373,15 @@
   Request -> (<-address (http.request-check Request) 4))
 
 (define http.content-length
-  Request -> (<-address (http.request-check Request) 5))
+  Request ->
+    (let N (<-address (http.request-check Request) 5)
+      (if (= N chunked) (error "http: chunked body length is not known until read") N)))
+
+(define http.chunked?
+  Request -> (= (<-address (http.request-check Request) 9) chunked))
+
+(define http.trailers
+  Request -> (do (http.body Request) (<-address Request 8)))
 
 (define http.header-values
   Request Name -> (http.field-values (http.headers Request) (http.lower Name)))
@@ -346,16 +392,25 @@
       (if (= Body unread) (error "http: request body has not been read") (buffer.check Body))))
 
 (define http.complete-request
-  Request Body ->
+  Request Body -> (http.completed-request Request Body []))
+
+(define http.completed-request
+  Request Body Trailers ->
     (io.record [http.request (http.method Request) (http.target Request) (http.version Request)
-                (http.headers Request) (http.content-length Request) Body]))
+                (http.headers Request) (buffer.length Body) Body (<-address Request 7)
+                Trailers (<-address Request 9)]))
 
 (define http.body-reader
-  R Request ->
+  R Request -> (http.body-reader-with R Request []))
+
+(define http.body-reader-with
+  R Request Options ->
     (let _ (io.reader-check R)
-         N (http.content-length Request)
+         _ (http.request-check Request)
+         N (<-address Request 5)
          _ (if (= (<-address Request 6) unread) true (error "http: request already has a body"))
-      (io.record [http.body-reader R Request N [] false])))
+         Limits (http.chunk-options Options)
+      (io.record [http.body-reader R Request N [] false [] 0 0 0 Limits])))
 
 (define http.body-check
   B ->
@@ -386,15 +441,18 @@
           (do (address-> B 5 true)
               (let Result (trap-error (http.body-ready B D (http.body-budget B D 0))
                              (/. X (do (address-> B 5 false)
+                                       (address-> B 6 [])
                                        (address-> B 4 (http.problem 400 "body read aborted"))
                                        (simple-error (error-to-string X)))))
-                (do (address-> B 5 false) (address-> B 4 Result) Result))))))
+                (do (address-> B 5 false) (address-> B 6 []) (address-> B 4 Result) Result))))))
 
 (define http.body-ready
   _ _ [error Error] -> [error Error]
   B D [ok] ->
-    (let V (buffer.new (<-address B 3))
-      (http.body-read B D V (io.reader-exact (<-address B 1) V))))
+    (if (= (<-address B 3) chunked)
+        (do (address-> B 6 (buffer.builder (<-address (<-address B 2) 7))) (http.chunk-next B D))
+        (let V (buffer.new (<-address B 3))
+          (http.body-read B D V (io.reader-exact (<-address B 1) V)))))
 
 (define http.body-read
   _ _ _ [eof N] ->
@@ -412,8 +470,265 @@
 (declare http.version [http.request --> string])
 (declare http.headers [http.request --> [list [list string]]])
 (declare http.content-length [http.request --> number])
+(declare http.chunked? [http.request --> boolean])
+(declare http.trailers [http.request --> [list [list string]]])
 (declare http.header-values [http.request --> [string --> [list string]]])
 (declare http.body [http.request --> buffer.view])
 (declare http.body-reader [io.reader --> [http.request --> http.body-reader]])
 (declare http.read-body [http.body-reader --> [io.result http.request]])
 (declare http.read-body-until [http.body-reader --> [deadline --> [io.result http.request]]])
+
+\\ Chunked decoding shares the fixed body's one-shot result and total deadline.
+\\ Separate decoded/metadata bounds prevent tiny chunks or extensions defeating the body limit.
+(define http.chunk-option-index
+  chunk-line-limit -> 0
+  chunk-metadata-limit -> 1
+  trailer-limit -> 2
+  trailer-fields-limit -> 3
+  chunk-count-limit -> 4
+  _ -> (error "http: unknown chunked body option"))
+
+(define http.chunk-options
+  Options -> (http.chunk-configure (io.record [8192 65536 16384 100 4096]) Options []))
+
+(define http.chunk-configure
+  Limits [] _ -> Limits
+  Limits [[Name Value] | Rest] Seen ->
+    (let I (http.chunk-option-index Name)
+         _ (if (element? Name Seen) (error "http: duplicate chunked body option") true)
+         N (buffer.index Value)
+         _ (if (and (<= N 1048576) (or (not (element? I [0 4])) (> N 0)))
+               true (error "http: invalid chunked body limit"))
+         _ (address-> Limits I N)
+      (http.chunk-configure Limits Rest [Name | Seen]))
+  _ _ _ -> (error "http: chunked body options must be [Name Number] pairs"))
+
+(define http.chunk-error
+  B Status Message ->
+    [error (io.progress (io.native-error http-body http Status "HTTP chunked body" Message) (<-address B 7))])
+
+(define http.chunk-syntax
+  B X -> (http.chunk-syntax-result B (http.syntax-error X)))
+
+(define http.chunk-syntax-result
+  B [error Error] -> (http.chunk-error B (io.error-code Error) (io.error-message Error)))
+
+(define http.chunk-next
+  B D -> (http.chunk-next-ready B D (http.body-budget B D (<-address B 7))))
+
+(define http.chunk-next-ready
+  _ _ [error Error] -> [error Error]
+  B D [ok] ->
+    (if (>= (<-address B 9) (<-address (<-address B 10) 4))
+        (http.chunk-error B 413 "chunk count exceeds limit")
+        (do (address-> B 9 (+ 1 (<-address B 9)))
+            (http.chunk-size-line B D (http.chunk-line B D)))))
+
+(define http.chunk-size-line
+  _ _ [error Error] -> [error Error]
+  B D [ok V] ->
+    (let Size (trap-error [ok (http.chunk-size V (- (<-address (<-address B 2) 7) (<-address B 7)))]
+                 (/. X (http.chunk-syntax B X)))
+      (http.chunk-sized B D Size)))
+
+(define http.chunk-sized
+  _ _ [error Error] -> [error Error]
+  B D [ok too-large] -> (http.chunk-error B 413 "request body exceeds limit")
+  B D [ok 0] -> (http.chunk-trailers B D 0 0 [])
+  B D [ok N] ->
+    (if (= (http.method (<-address B 2)) "TRACE")
+        (http.chunk-error B 400 "TRACE cannot have a body")
+        (let V (buffer.new N)
+          (http.chunk-data B D V (io.reader-exact (<-address B 1) V)))))
+
+(define http.chunk-data
+  B _ _ [eof N] ->
+    (do (address-> B 7 (+ (<-address B 7) N)) (http.chunk-error B 400 "incomplete chunk data"))
+  B _ _ [error Error N] -> [error (io.progress Error (+ (<-address B 7) N))]
+  B D V [ok N] ->
+    (do (buffer.append! (<-address B 6) V)
+        (address-> B 7 (+ (<-address B 7) N))
+        (http.chunk-end-ready B D (http.body-budget B D (<-address B 7)))))
+
+(define http.chunk-end-ready
+  _ _ [error Error] -> [error Error]
+  B D [ok] ->
+    (if (> 2 (- (<-address (<-address B 10) 1) (<-address B 8)))
+        (http.chunk-error B 413 "chunk metadata exceeds limit")
+        (let End (buffer.new 2)
+          (http.chunk-end B D End (io.reader-exact (<-address B 1) End)))))
+
+(define http.chunk-end
+  B _ _ [eof _] -> (http.chunk-error B 400 "incomplete chunk delimiter")
+  B _ _ [error Error _] -> [error (io.progress Error (<-address B 7))]
+  B D End [ok _] ->
+    (do (address-> B 8 (+ 2 (<-address B 8)))
+        (if (and (= (buffer.u8 End 0) 13) (= (buffer.u8 End 1) 10))
+            (http.chunk-next B D)
+            (http.chunk-error B 400 "invalid chunk delimiter"))))
+
+(define http.chunk-line
+  B D ->
+    (http.chunk-line-more B D (buffer.builder (+ 2 (<-address (<-address B 10) 0))) false))
+
+(define http.chunk-line-more
+  B D Out CR ->
+    (http.chunk-line-budget B D Out CR (http.body-budget B D (<-address B 7))))
+
+(define http.chunk-line-budget
+  _ _ _ _ [error Error] -> [error Error]
+  B D Out CR [ok] ->
+    (let Left (io.min (- (+ 2 (<-address (<-address B 10) 0)) (buffer.builder-length Out))
+                     (- (<-address (<-address B 10) 1) (<-address B 8)))
+      (if (= Left 0)
+          (http.chunk-error B 413 "chunk metadata exceeds limit")
+          (http.chunk-line-input B D Out CR (io.peek-up-to (<-address B 1) (io.min Left 64))))))
+
+(define http.chunk-line-input
+  B _ _ _ [eof] -> (http.chunk-error B 400 "incomplete chunked body line")
+  B _ _ _ [error Error] -> [error (io.progress Error (<-address B 7))]
+  B D Out CR [ok V] ->
+    (http.chunk-line-scanned B D Out V
+      (http.chunk-line-scan (buffer.owner V) (buffer.offset V) (buffer.end V) CR)))
+
+(define http.chunk-line-scan
+  _ At At CR -> [more CR]
+  Data At End true -> (if (= (shen-jit.u8 Data At) 10) [done (+ At 1)] [bad])
+  Data At End false ->
+    (let Byte (shen-jit.u8 Data At)
+      (cond ((= Byte 13) (http.chunk-line-scan Data (+ At 1) End true))
+            ((or (= Byte 10) (= Byte 127) (and (< Byte 32) (not (= Byte 9)))) [bad])
+            (true (http.chunk-line-scan Data (+ At 1) End false)))))
+
+(define http.chunk-line-copy
+  B Out V N ->
+    (do (buffer.append! Out (buffer.slice V 0 N))
+        (address-> B 8 (+ (<-address B 8) N))
+        (io.consume (<-address B 1) N)))
+
+(define http.chunk-line-scanned
+  B _ _ _ [bad] -> (http.chunk-error B 400 "invalid chunked body line")
+  B D Out V [more CR] ->
+    (do (http.chunk-line-copy B Out V (buffer.length V)) (http.chunk-line-more B D Out CR))
+  B D Out V [done End] ->
+    (let _ (http.chunk-line-copy B Out V (- End (buffer.offset V)))
+         Line (buffer.finish Out)
+      (http.chunk-line-finished Line (http.body-budget B D (<-address B 7)))))
+
+(define http.chunk-line-finished
+  _ [error Error] -> [error Error]
+  V [ok] -> [ok (buffer.slice V 0 (- (buffer.length V) 2))])
+
+(define http.chunk-hex-end
+  Data At End ->
+    (if (and (< At End) (http.hex? (shen-jit.u8 Data At)))
+        (http.chunk-hex-end Data (+ At 1) End) At))
+
+(define http.chunk-hex-value
+  B -> (cond ((<= B 57) (- B 48)) ((<= B 70) (- B 55)) (true (- B 87))))
+
+(define http.chunk-size
+  V Limit ->
+    (let Data (buffer.owner V)
+         Start (buffer.offset V)
+         End (buffer.end V)
+         Stop (http.chunk-hex-end Data Start End)
+         _ (if (> Stop Start) true (http.invalid "empty or invalid chunk size"))
+         _ (http.chunk-extensions Data Stop End)
+      (http.chunk-hex Data Start Stop 0 (shen-jit.shift-right Limit 4) (shen-jit.bit-and Limit 15))))
+
+(define http.chunk-hex
+  _ At At N _ _ -> N
+  Data At End N Tens Last ->
+    (let Digit (http.chunk-hex-value (shen-jit.u8 Data At))
+      (if (or (> N Tens) (and (= N Tens) (> Digit Last)))
+          too-large
+          (http.chunk-hex Data (+ At 1) End (+ (* N 16) Digit) Tens Last))))
+
+(define http.token-end
+  Data At End ->
+    (if (and (< At End) (http.token-byte? (shen-jit.u8 Data At)))
+        (http.token-end Data (+ At 1) End) At))
+
+(define http.chunk-extensions
+  _ At At -> true
+  Data At End ->
+    (let Semi (http.trim-start Data At End)
+         _ (if (and (< Semi End) (= (shen-jit.u8 Data Semi) 59))
+               true (http.invalid "invalid chunk extension separator"))
+         Start (http.trim-start Data (+ Semi 1) End)
+         NameEnd (http.token-end Data Start End)
+         _ (if (> NameEnd Start) true (http.invalid "invalid chunk extension name"))
+         Equal (http.trim-start Data NameEnd End)
+      (if (and (< Equal End) (= (shen-jit.u8 Data Equal) 61))
+          (let Value (http.trim-start Data (+ Equal 1) End)
+               _ (if (< Value End) true (http.invalid "missing chunk extension value"))
+               Stop (if (= (shen-jit.u8 Data Value) 34)
+                        (http.chunk-quoted Data (+ Value 1) End)
+                        (http.token-end Data Value End))
+               _ (if (> Stop Value) true (http.invalid "invalid chunk extension value"))
+            (http.chunk-extensions Data Stop End))
+          (http.chunk-extensions Data NameEnd End))))
+
+(define http.chunk-quoted
+  _ At End -> (http.invalid "unterminated chunk extension string") where (>= At End)
+  Data At End ->
+    (let Byte (shen-jit.u8 Data At)
+      (cond ((= Byte 34) (+ At 1))
+            ((= Byte 92)
+              (if (and (< (+ At 1) End)
+                       (let Next (shen-jit.u8 Data (+ At 1))
+                         (or (= Next 9) (and (>= Next 32) (not (= Next 127))))))
+                  (http.chunk-quoted Data (+ At 2) End)
+                  (http.invalid "invalid quoted chunk extension")))
+            ((or (= Byte 9) (and (>= Byte 32) (not (= Byte 127))))
+              (http.chunk-quoted Data (+ At 1) End))
+            (true (http.invalid "invalid quoted chunk extension")))))
+
+(define http.chunk-trailers
+  B D Bytes Count Acc -> (http.chunk-trailer-line B D Bytes Count Acc (http.chunk-line B D)))
+
+(define http.chunk-trailer-line
+  _ _ _ _ _ [error Error] -> [error Error]
+  B D Bytes Count Acc [ok V] ->
+    (let Total (+ Bytes (buffer.length V) 2)
+      (cond ((> Total (<-address (<-address B 10) 2)) (http.chunk-error B 413 "trailers exceed byte limit"))
+            ((= (buffer.length V) 0)
+              [ok (http.completed-request (<-address B 2) (buffer.finish (<-address B 6)) (reverse Acc))])
+            ((>= Count (<-address (<-address B 10) 3)) (http.chunk-error B 413 "trailers exceed field limit"))
+            (true
+              (let Field (trap-error
+                            (let Pair (http.field (buffer.owner V) (buffer.offset V) (buffer.end V))
+                                 _ (http.trailer-names [(hd Pair)]
+                                     (http.token-list (http.header-values (<-address B 2) "connection")))
+                              [ok Pair])
+                            (/. X (http.chunk-syntax B X)))
+                (http.chunk-trailer-field B D Total Count Acc Field))))))
+
+(define http.chunk-trailer-field
+  _ _ _ _ _ [error Error] -> [error Error]
+  B D Total Count Acc [ok Field] -> (http.chunk-trailers B D Total (+ Count 1) [Field | Acc]))
+
+(datatype http-chunk-options
+  N : number;
+  ======================================
+  [chunk-line-limit N] : http.chunk-option;
+
+  N : number;
+  ======================================
+  [chunk-metadata-limit N] : http.chunk-option;
+
+  N : number;
+  ======================================
+  [trailer-limit N] : http.chunk-option;
+
+  N : number;
+  ======================================
+  [trailer-fields-limit N] : http.chunk-option;
+
+  N : number;
+  ======================================
+  [chunk-count-limit N] : http.chunk-option;)
+
+(declare http.body-reader-with
+  [io.reader --> [http.request --> [[list http.chunk-option] --> http.body-reader]]])

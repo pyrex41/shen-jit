@@ -28,6 +28,7 @@
   409 -> "Conflict"
   413 -> "Content Too Large"
   414 -> "URI Too Long"
+  415 -> "Unsupported Media Type"
   417 -> "Expectation Failed"
   422 -> "Unprocessable Content"
   431 -> "Request Header Fields Too Large"

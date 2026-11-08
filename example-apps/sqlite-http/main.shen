@@ -26,12 +26,12 @@
              )")))))
 
 (define counter-app.json
-  Status Text ->
-    (http.response Status [["Content-Type" "application/json"]] (buffer.from-string Text)))
+  Status Value ->
+    (http.response Status [["Content-Type" "application/json"]] (json.encode Value [[byte-limit 65536]])))
 
 (define counter-app.error
   Status Message ->
-    (counter-app.json Status (make-string "{c#34;errorc#34;:c#34;~Ac#34;}" Message)))
+    (counter-app.json Status [object ["error" Message]]))
 
 (define counter-app.name-byte?
   B -> (or (and (>= B 65) (<= B 90))
@@ -55,21 +55,16 @@
           [])))
 
 (define counter-app.row-json
-  [Name Value] -> (make-string "{c#34;namec#34;:c#34;~Ac#34;,c#34;valuec#34;:~A}" Name Value))
-
-(define counter-app.join
-  [] -> ""
-  [Text] -> Text
-  [Text | Rest] -> (cn Text (cn "," (counter-app.join Rest))))
+  [Name Value] -> [object ["name" Name] ["value" Value]])
 
 (define counter-app.list
-  Db ->
-    (let Rows (sqlite.query Db "SELECT name, value FROM counters ORDER BY name LIMIT 100" [])
-      (counter-app.json 200 (cn "[" (cn (counter-app.join (map (function counter-app.row-json) Rows)) "]")))))
+  Db -> (counter-app.json 200
+          (map (function counter-app.row-json)
+               (sqlite.query Db "SELECT name, value FROM counters ORDER BY name LIMIT 100" []))))
 
 (define counter-app.found
   [] -> (counter-app.error 404 "counter not found")
-  [[Value]] -> (counter-app.json 200 (make-string "{c#34;valuec#34;:~A}" Value)))
+  [[Value]] -> (counter-app.json 200 [object ["value" Value]]))
 
 (define counter-app.increment
   Db Name ->
@@ -87,11 +82,11 @@
     (if (= (sqlite.run Db "DELETE FROM counters WHERE name = ?" [Name]) 0)
         (counter-app.error 404 "counter not found")
         (http.response 204 [] (buffer.new 0)))
-  _ _ _ -> (http.response 405 [["Allow" "GET, HEAD, POST, DELETE"]] (buffer.new 0)))
+  _ _ _ -> (http.response 405 [["Allow" "GET, HEAD, POST, PUT, DELETE"]] (buffer.new 0)))
 
 (define counter-app.route
-  _ "GET" "/health" -> (counter-app.json 200 "{c#34;statusc#34;:c#34;okc#34;}")
-  _ "HEAD" "/health" -> (counter-app.json 200 "{c#34;statusc#34;:c#34;okc#34;}")
+  _ "GET" "/health" -> (counter-app.json 200 [object ["status" "ok"]])
+  _ "HEAD" "/health" -> (counter-app.json 200 [object ["status" "ok"]])
   _ _ "/health" -> (http.response 405 [["Allow" "GET, HEAD"]] (buffer.new 0))
   Path Method "/counters" ->
     (if (element? Method ["GET" "HEAD"])
@@ -105,9 +100,61 @@
 
 (define counter-app.handle
   Path Request ->
-    (if (= (http.content-length Request) 0)
-        (counter-app.route Path (http.method Request) (http.target Request))
-        (counter-app.error 400 "this API expects an empty body")))
+    (let Name (counter-app.name (http.target Request))
+      (cond ((and (= (http.method Request) "PUT") (not (empty? Name)))
+              (counter-app.set-request Path Name Request))
+            ((= (http.content-length Request) 0)
+              (counter-app.route Path (http.method Request) (http.target Request)))
+            (true (counter-app.error 400 "this route expects an empty body")))))
+
+(define counter-app.lower
+  Text ->
+    (let B (buffer.from-string Text)
+         _ (counter-app.lower-bytes (buffer.owner B) 0 (buffer.length B))
+      (buffer.string B)))
+
+(define counter-app.lower-bytes
+  _ At At -> true
+  B At End ->
+    (let Byte (shen-jit.u8 B At)
+         _ (if (and (>= Byte 65) (<= Byte 90)) (shen-jit.u8! B At (+ Byte 32)) true)
+      (counter-app.lower-bytes B (+ At 1) End)))
+
+(define counter-app.json-type?
+  [Value] -> (element? (counter-app.lower Value)
+                ["application/json" "application/json; charset=utf-8" "application/json;charset=utf-8"])
+  _ -> false)
+
+(define counter-app.json-error
+  X ->
+    (let Text (error-to-string X)
+         B (shen-jit.string->bytes Text)
+      (if (and (>= (shen-jit.bytes-length B) 6) (= (shen-jit.bytes->string B 0 6) "json: "))
+          [invalid] (simple-error Text))))
+
+(define counter-app.input-value
+  [object ["value" Value]] ->
+    (let N (json.integer Value) (if (and (>= N 0) (<= N 1000000000000)) [ok N] [invalid]))
+  _ -> [invalid])
+
+(define counter-app.set-request
+  Path Name Request ->
+    (if (counter-app.json-type? (http.header-values Request "content-type"))
+        (let Value (trap-error
+                      (counter-app.input-value (json.decode (http.body Request) [[byte-limit 4096]]))
+                      (function counter-app.json-error))
+          (counter-app.set-input Path Name Value))
+        (counter-app.error 415 "expected application/json")))
+
+(define counter-app.set-input
+  _ _ [invalid] -> (counter-app.error 400 "expected an object with one decimal integer value in 0..1000000000000")
+  Path Name [ok N] ->
+    (counter-app.with-db Path
+      (/. Db (sqlite.transaction Db
+               (freeze
+                 (do (sqlite.run Db "INSERT OR IGNORE INTO counters (name, value) VALUES (?, 0)" [Name])
+                     (sqlite.run Db "UPDATE counters SET value = ? WHERE name = ?" [N Name])
+                     (counter-app.found (sqlite.query Db "SELECT value FROM counters WHERE name = ?" [Name]))))))))
 
 (define counter-app.start
   Path Host Port Options ->
@@ -143,7 +190,7 @@
               ((> (http.content-length Request) 0)
                 (counter-app.error 400 "this API expects an empty body"))
               (true (do (address-> Stop 0 true)
-                        (counter-app.json 202 "{c#34;stoppingc#34;:true}"))))
+                        (counter-app.json 202 [object ["stopping" true]]))))
         (counter-app.handle Path Request)))
 
 (define counter-app.run-until-stopped

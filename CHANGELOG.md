@@ -7,6 +7,10 @@ All notable changes to this project are documented in this file. The format is b
 
 ### Added
 
+- Optional JSON decoding and encoding over byte views, with typed values, strict UTF-8, lossless number
+  tokens, exact integer conversion and bounded output builders. The SQLite example accepts JSON PUT bodies.
+- Bounded chunked HTTP requests, validated extensions and separate trailers, with decoded/metadata limits,
+  total body deadlines and preserved following bytes. Readers can peek an available span under a copy limit.
 - A bounded HTTP listener with connection limits, cooperative socket cancellation, controlled shutdown
   and completion snapshots. A runnable SQLite counter API in `example-apps/sqlite-http/` demonstrates
   per-request database ownership, atomic increments, JSON responses and an explicit shutdown command.

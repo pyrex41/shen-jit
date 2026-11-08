@@ -1125,6 +1125,38 @@ Built from a table of call sites the JIT records when it compiles, so nothing is
   Empty-file tests check both whole-file results and repeated EOF. The fixed runtime passes its tests and all
   196 CLI checks. This changes error handling, with no performance claim.
 
+### JSON values and chunked HTTP bodies (2026-11-07, M3 Max, macOS arm64)
+
+- Promoted the complete-input JSON decoder to `lib/json.shen` and made the earlier example delegate to
+  it. Added encoding, typed values, strict UTF-8/escape checks, ordered objects, duplicate-key rejection,
+  explicit byte/depth bounds and exact integer conversion. Numbers retain their original tokens, including
+  large values, negative zero and exponents, with no Shen-reader or implicit real conversion. The encoder
+  also validates native-number output and refuses non-finite values and malformed value structures.
+- Added a managed buffer builder with geometric capacity growth under a byte limit. Append copies its
+  source; finish transfers storage and seals the builder. It serves JSON output and chunked bodies without
+  repeated prefix concatenation. An image test exposed a Shen-specific tag mistake: a vector whose first
+  field names a bound function uses it as a printer. The builder now uses a separate unbound record tag.
+- HTTP accepts a single chunked coding, rejects CL/TE ambiguity, duplicate/reordered chunked coding and
+  unsupported combinations, checks hex sizes before multiplication/allocation, validates token/quoted
+  extensions and stores trailers separately. Protected or hop-by-hop nominated trailers are rejected.
+  Decoded bytes, size lines, metadata and trailers have independent limits; one body deadline spans them.
+  Failure remains terminal, preserves decoded progress/native details and releases accumulated payload.
+- `io.peek-up-to` waits for availability and bounds the owned span it copies. Short chunk-size lines can
+  inspect 64 bytes instead of copying the whole queued body or waiting for a full lookahead buffer.
+  Bounded request bodies still finish in memory; streaming request/response APIs remain separate work.
+- The SQLite example now uses the public JSON encoder throughout and accepts bounded JSON PUT bodies
+  over fixed or chunked framing. It validates the media type, one integer field and its application range,
+  uses parameterized transactional writes, and keeps malformed input from changing stored values.
+- All 88 JSON checks and 497 HTTP checks pass, including typed builders/options, foreign storage, partial
+  native failures, every small transport split, metadata limits, native loopback, images and GC before
+  every allocation. The full fast tier passes. Independent checks cover 256 JSON decode/encode cases with
+  number/string distinctions, the earlier 256-case example oracle, 32 HTTP wire cases including a chunk
+  larger than the reader buffer, and JSON updates, persistence and concurrent SQLite operations.
+- JSON has its own rendered reference linked from the guide; the HTTP, buffer and I/O references and
+  application instructions describe the new contracts. Twelve documentation examples, the example launch
+  and seven curl commands, rendered links and publication checks pass. This adds no runtime or C code
+  and makes no comparative performance claim.
+
 ### Bounded HTTP admission, shutdown and a SQLite application (2026-11-07, M3 Max, macOS arm64)
 
 - Added `lib/http-listener.shen` above the one-request handler: one supervisor owns the listener and

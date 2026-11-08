@@ -275,12 +275,19 @@
 
 \\ Unlike peek Count, this waits only for some input, then exposes an owned available span.
 (define io.peek-some
-  R ->
+  R -> (do (io.reader-check R) (io.peek-up-to R (buffer.length (<-address R 2)))))
+
+\\ Wait for one byte, then copy no more than Count from the available span.
+\\ This bounds copying for a short delimiter without waiting to fill Count bytes.
+(define io.peek-up-to
+  R Count ->
     (let _ (io.reader-check R)
-         _ (io.fill-reader R 1)
+         Maximum (buffer.index Count)
+         _ (io.fill-reader R (if (= Maximum 0) 0 1))
          N (- (<-address R 4) (<-address R 3))
-      (if (> N 0)
-          [ok (buffer.wrap (buffer.bytes (buffer.slice (<-address R 2) (<-address R 3) N)))]
+      (if (or (> N 0) (= Maximum 0))
+          [ok (buffer.wrap (buffer.bytes (buffer.slice (<-address R 2) (<-address R 3)
+                                                     (io.min N Maximum))))]
           (io.reader-terminal R))))
 
 (define io.consume
@@ -644,6 +651,7 @@
 (declare io.position [io.reader --> number])
 (declare io.peek [io.reader --> [number --> io.peek-result]])
 (declare io.peek-some [io.reader --> io.peek-result])
+(declare io.peek-up-to [io.reader --> [number --> io.peek-result]])
 (declare io.consume [io.reader --> [number --> io.reader]])
 (declare io.read-chunk [io.reader --> io.chunk-result])
 (declare io.read-into [io.reader --> [buffer.view --> io.read-result]])

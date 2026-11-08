@@ -21,6 +21,7 @@ a dedicated file, rather than `:memory:`, because requests use separate connecti
 ```sh
 curl -X POST http://127.0.0.1:9000/counters/hits
 curl http://127.0.0.1:9000/counters/hits
+curl -X PUT -H 'Content-Type: application/json' --data-binary '{"value":42}' http://127.0.0.1:9000/counters/hits
 curl http://127.0.0.1:9000/counters
 curl -I http://127.0.0.1:9000/counters/hits
 curl -X DELETE http://127.0.0.1:9000/counters/hits
@@ -33,11 +34,18 @@ curl -X POST http://127.0.0.1:9000/shutdown
 | `GET /counters` | Up to 100 counters ordered by name, such as `[{"name":"hits","value":1}]` |
 | `GET /counters/NAME` | `{"value":1}`, or 404 when absent |
 | `POST /counters/NAME` | Create at zero if absent, then increment atomically and return the value |
+| `PUT /counters/NAME` | Set/create from `{"value":42}` with Content-Type application/json |
 | `DELETE /counters/NAME` | Delete and return 204, or 404 when absent |
 | `POST /shutdown` | Return 202 with `{"stopping":true}`, then stop accepting and drain the server |
 
 HEAD follows the GET routes with representation length and no response body. Other methods on known
-routes return 405 and Allow. All request bodies must be empty; no JSON request decoder is needed.
+routes return 405 and Allow. PUT accepts a bounded JSON object with exactly one `value` member. Other request bodies must be empty.
+Responses and PUT input use the public [JSON library](../../docs/json.md). Content-Length and chunked
+request bodies both work, with the same decoded-size bound and total deadline. Duplicate JSON keys,
+invalid UTF-8, unknown members and invalid values return 400; an unsupported/missing media type returns 415.
+The media type accepts ASCII case variations of application/json, with optional `charset=utf-8` in the
+shown conventional form. The value must be a decimal integer token in 0..1000000000000; exponent and
+fraction forms are rejected by the application schema even when mathematically integral.
 Names are 1..64 ASCII letters, digits, underscores or hyphens. Targets are not percent-decoded and query
 parameters are unsupported. Values are integers bounded by the database constraint at 1000000000000;
 a constraint or other database failure produces the HTTP driver's empty 500 response and rolls back.
@@ -68,8 +76,8 @@ make test-http
 ```
 
 The independent Python test uses temporary files, HTTP clients and SQLite to check routes, HEAD,
-malformed input, parameter handling, 32 concurrent increments, persistence across restart and shutdown
-with a stalled body. It also launches `run.shen` and exercises its shutdown command. `make test-http`
+malformed input, parameter handling, JSON PUT bodies, 32 concurrent increments, persistence across restart
+and shutdown with stalled fixed-body and chunk-extension input. It also launches `run.shen` and exercises its shutdown command. `make test-http`
 runs the Shen regression tests on supported platforms, including static-build skips for native parts.
 
 The [bounded server reference](../../docs/http-listener.md) documents the reusable API and ownership

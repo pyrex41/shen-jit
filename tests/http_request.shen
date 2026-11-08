@@ -49,7 +49,7 @@
    ["Content-Length:c#13;c#10;" 400]
    ["Content-Length: 1025c#13;c#10;" 413]
    ["Content-Length: 999999999999999999999999999999999c#13;c#10;" 413]
-   ["Transfer-Encoding: chunkedc#13;c#10;" 501]
+   ["Transfer-Encoding: chunkedc#13;c#10;" 0]
    ["Transfer-Encoding: identityc#13;c#10;Content-Length: 0c#13;c#10;" 400]
    ["Content-Length: 0c#13;c#10;Transfer-Encoding: chunkedc#13;c#10;" 400]
    ["Expect: 100-continuec#13;c#10;" 417]

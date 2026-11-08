@@ -50,4 +50,31 @@
           (freeze (counter-test.raises? (freeze (counter-app.increment Db "limit")))))
         (counter-test.check "failed increment rolls back" [[1000000000000]]
           (freeze (sqlite.query Db "SELECT value FROM counters WHERE name = ?" ["limit"]))))))
+(define counter-test.put
+  Text Type ->
+    (let V (buffer.from-string Text)
+         Head (buffer.from-string
+                (make-string "PUT /counters/body HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Content-Type: ~Ac#13;c#10;Content-Length: ~Ac#13;c#10;c#13;c#10;"
+                  Type (buffer.length V)))
+         Q (hd (tl (http.parse-request Head 4096)))
+         E (io.input-buffer V)
+         Full (hd (tl (http.read-body (http.body-reader (io.reader E []) Q))))
+         _ (io.close E)
+         Response (counter-app.handle (value counter-test.path) Full)
+      [(<-address Response 1) (buffer.string (<-address Response 3))]))
+
+(counter-test.check "JSON body updates the database" [200 "{c#34;valuec#34;:42}"]
+  (freeze (counter-test.put "{c#34;valuec#34;:42}" "application/json")))
+(counter-test.check "JSON media type matching ignores ASCII case" [200 "{c#34;valuec#34;:43}"]
+  (freeze (counter-test.put "{c#34;valuec#34;:43}" "APPLICATION/JSON")))
+(counter-test.check "invalid JSON gives 400" 400
+  (freeze (hd (counter-test.put "{c#34;valuec#34;:" "application/json"))))
+(counter-test.check "duplicate JSON members give 400" 400
+  (freeze (hd (counter-test.put "{c#34;valuec#34;:1,c#34;valuec#34;:2}" "application/json"))))
+(counter-test.check "nonintegral JSON gives 400" 400
+  (freeze (hd (counter-test.put "{c#34;valuec#34;:1.0}" "application/json"))))
+(counter-test.check "wrong JSON media type gives 415" 415
+  (freeze (hd (counter-test.put "{c#34;valuec#34;:1}" "text/plain"))))
+(counter-test.check "invalid updates leave the stored value alone" [200 "{c#34;valuec#34;:43}"]
+  (freeze (counter-test.response "GET" "/counters/body")))
 (output "~A passed, ~A failed~%" (value counter-test.passed) (value counter-test.failed))

@@ -108,6 +108,65 @@
            (and (= N (- (<-address Y 3) J))
                 (buffer.equal-range? (<-address X 1) I (<-address Y 1) J N))))
 
+\\ A single-owner builder grows geometrically under an explicit byte limit.
+\\ Finish transfers its managed storage to a view and seals the builder.
+(define buffer.builder
+  Limit ->
+    (let N (buffer.index Limit)
+         B (absvector 5)
+      (do (address-> B 0 buffer.builder-state) (address-> B 1 N)
+          (address-> B 2 (buffer.new 0)) (address-> B 3 0) (address-> B 4 false) B)))
+
+(define buffer.builder-check
+  B ->
+    (if (trap-error (and (absvector? B) (= (<-address B 0) buffer.builder-state) (not (<-address B 4)))
+          (/. X false))
+        B (error "buffer: not an open builder")))
+
+(define buffer.builder-length
+  B -> (<-address (buffer.builder-check B) 3))
+
+(define buffer.builder-reserve
+  B Need ->
+    (let Old (<-address B 2)
+         Cap (buffer.length Old)
+      (if (<= Need Cap)
+          Old
+          (let Limit (<-address B 1)
+               Grow (if (= Cap 0) (if (< Limit 256) Limit 256)
+                        (+ Cap (if (< Cap (- Limit Cap)) Cap (- Limit Cap))))
+               Next (buffer.new (if (> Need Grow) Need Grow))
+               _ (buffer.copy! Next 0 Old 0 (<-address B 3))
+            (do (address-> B 2 Next) Next)))))
+
+(define buffer.append!
+  B V ->
+    (let _ (buffer.builder-check B)
+         N (buffer.length V)
+         At (<-address B 3)
+         _ (if (<= N (- (<-address B 1) At)) true (error "buffer: builder exceeds byte limit"))
+         End (+ At N)
+         Out (buffer.builder-reserve B End)
+         _ (buffer.copy! Out At V 0 N)
+      (do (address-> B 3 End) B)))
+
+(define buffer.append-byte!
+  B Byte ->
+    (let _ (buffer.builder-check B)
+         Value (shen-jit.bit-or Byte 0)
+         _ (if (and (>= Value 0) (<= Value 255)) true (error "buffer: invalid byte"))
+         At (<-address B 3)
+         _ (if (< At (<-address B 1)) true (error "buffer: builder exceeds byte limit"))
+         Out (buffer.builder-reserve B (+ At 1))
+         _ (buffer.u8! Out At Value)
+      (do (address-> B 3 (+ At 1)) B)))
+
+(define buffer.finish
+  B ->
+    (let _ (buffer.builder-check B)
+         Out (buffer.slice (<-address B 2) 0 (<-address B 3))
+      (do (address-> B 4 true) (address-> B 2 []) Out)))
+
 (declare buffer.view? [A --> boolean])
 (declare buffer.new [number --> buffer.view])
 (declare buffer.wrap [buffer.storage --> buffer.view])
@@ -123,3 +182,8 @@
 (declare buffer.string [buffer.view --> string])
 (declare buffer.copy! [buffer.view --> [number --> [buffer.view --> [number --> [number --> buffer.view]]]]])
 (declare buffer.equal? [buffer.view --> [buffer.view --> boolean]])
+(declare buffer.builder [number --> buffer.builder])
+(declare buffer.builder-length [buffer.builder --> number])
+(declare buffer.append! [buffer.builder --> [buffer.view --> buffer.builder]])
+(declare buffer.append-byte! [buffer.builder --> [number --> buffer.builder]])
+(declare buffer.finish [buffer.builder --> buffer.view])

@@ -77,6 +77,7 @@ positive fixnums, at most 1048576 bytes, and cannot exceed the endpoint's own bo
 | --- | --- |
 | `io.read-chunk R` | `[chunk OwnedView]`, `[eof]` or `[error Error]`; consumes available input |
 | `io.peek R Count` | `[ok OwnedView]`, `[eof]` or `[error Error]`; fill up to Count without consuming |
+| `io.peek-up-to R Count` | Wait for some input and return at most Count owned bytes without consuming |
 | `io.peek-some R` | `[ok OwnedView]`, EOF or error; wait only for some input, preserving it in the queue |
 | `io.consume R Count` | Consume only already available bytes, returning R |
 | `io.available R`, `io.position R` | Queued bytes and total bytes consumed since reader creation |
@@ -84,7 +85,8 @@ positive fixnums, at most 1048576 bytes, and cannot exceed the endpoint's own bo
 | `io.reader-exact R View` | Fill View, or `[eof Total]` / `[error Error Total]` |
 | `io.read-all R Limit` | `[ok OwnedView]` or `[error Error]`; aggregate up to the explicit limit |
 
-A peek count cannot exceed reader capacity. Peek can return a shorter view at EOF/error; queued bytes
+`io.peek` Count cannot exceed reader capacity. `io.peek-up-to` accepts any nonnegative maximum and
+copies at most that many available bytes; it waits for one byte, without waiting to fill the maximum. Peek can return a shorter view at EOF/error; queued bytes
 are delivered before the pending terminal condition. EOF and hard errors are remembered; timeouts are
 transient after they have been reported, and a later reader operation can retry under a new budget.
 Consuming a queued prefix does not discard its pending timeout. A zero peek returns an

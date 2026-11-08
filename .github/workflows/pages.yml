@@ -20,6 +20,7 @@ on:
       - docs/http-head.md
       - docs/http.md
       - docs/http-listener.md
+      - docs/json.md
       - site/**
       - assets/**
       - .github/workflows/pages.yml

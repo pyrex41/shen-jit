@@ -39,7 +39,9 @@ progress is zero. Invalid view/limit arguments and unexpected failures raise.
 | `http.method Request`, `http.target Request`, `http.version Request` | Owned strings |
 | `http.headers Request` | Ordered `[Name Value]` pairs, with ASCII-lowercased names and outer OWS removed |
 | `http.header-values Request Name` | All matching values in wire order, without merging |
-| `http.content-length Request` | Validated exact body size; zero if absent |
+| `http.content-length Request` | Fixed body length immediately, or decoded chunked length after reading; raises while chunked length is unknown |
+| `http.chunked? Request` | Whether the request used chunked transfer coding |
+| `http.trailers Request` | Ordered, separate trailer fields after reading the body |
 | `http.body Request` | Owned body view after a successful body read; raises before that |
 
 The request type is opaque. Reading a body returns a new complete request; it does not mutate a parsed
@@ -67,8 +69,11 @@ and response semantics in [RFC 9110](https://www.rfc-editor.org/rfc/rfc9110.html
   even if equal; comma lists, signs and exponents are rejected. Leading zeros are allowed. Values beyond
   BodyLimit return 413 without body allocation or consumption, and decimal conversion checks its bound
   before multiplication, including near the largest fixnum.
-- Any Transfer-Encoding is unsupported (501); its combination with Content-Length is rejected (400).
-  All Expect fields return 417 before waiting for a body. Upgrades/tunnels return 501; Trailer is rejected.
+- Transfer-Encoding accepts a single field containing `chunked`, with case-insensitive token matching.
+  Its combination with Content-Length, repeated chunked coding, coding parameters or a final coding other
+  than chunked is rejected (400). Bare coding lists ending in chunked with an additional unsupported
+  coding return 501. All Expect fields return 417 before waiting for a body. Upgrades/tunnels return 501.
+  Trailer declarations require chunked framing and cannot name protected fields.
   Connection values are validated token lists and cannot nominate Host or body-framing fields. A peer's
   keep-alive preference does not cause this driver to reuse a connection.
 
@@ -79,8 +84,10 @@ No close-delimited request body is inferred, and malformed framing is never repa
 ## Bounded bodies
 
 `http.body-reader Reader Request` borrows the same reader that produced the head.
-`http.read-body B` returns `[ok CompleteRequest]` or `[error Error]`. It allocates the already bounded
-Content-Length once and fills it through short reads; zero length needs no transport probe. The next
+`http.read-body B` returns `[ok CompleteRequest]` or `[error Error]`. For fixed framing it allocates the
+already bounded Content-Length once and fills it through short reads; zero length needs no transport probe.
+For chunked framing it checks each hexadecimal size against the remaining decoded-body bound before
+allocating that chunk, and appends payloads to bounded geometric storage. The next
 request or other following bytes remain unread. Returned body bytes are owned and can contain NUL or 255.
 
 ```shen
@@ -105,6 +112,57 @@ checks a total budget before starting and before completion. Install that same D
 inside `io.reader-exact`. As with heads, changing a transport budget does not resume a failed protocol body.
 Saved managed state can be read again in a new execution; native resources and deadlines reload stale.
 Allocation failures raise, and native storage must remain alive while it is used.
+
+## Chunked request bodies
+
+Chunked bodies use the same reader and one-shot body API. Their Content-Length becomes available as
+an accessor only on the completed request; original wire headers are retained, without inventing a
+Content-Length field. `http.chunked?` remains true on that completed request.
+
+```shen
+(let Q (hd (tl (http.parse-request
+                 (buffer.from-string "PUT / HTTP/1.1c#13;c#10;Host: localhostc#13;c#10;Transfer-Encoding: chunkedc#13;c#10;c#13;c#10;") 16)))
+     E (io.input-buffer (buffer.from-string "3;note=yesc#13;c#10;abcc#13;c#10;0c#13;c#10;X-Check: okc#13;c#10;c#13;c#10;NEXT"))
+     R (io.reader E [])
+     Full (hd (tl (http.read-body (http.body-reader R Q))))
+     Tail (hd (tl (io.read-all R 4)))
+     _ (io.close E)
+  [(buffer.string (http.body Full)) (http.trailers Full) (buffer.string Tail)])
+```
+
+This yields body `abc`, trailer `[["x-check" "ok"]]` and remainder `NEXT`. Sizes use overflow-checked hex;
+multiple zero digits are accepted for the final chunk. Chunk data and metadata lines require exact CRLF.
+Unknown extensions are syntax-checked then ignored, including token/quoted values and quoted-pair escapes,
+as described in [RFC 9112 section 7.1](https://www.rfc-editor.org/rfc/rfc9112.html#section-7.1).
+
+Trailer fields are checked like header fields, copied, and kept separately. They are never merged into
+headers and need not have been announced. Framing, routing, connection, authentication, content-processing,
+cache/conditional control fields and fields nominated by Connection are forbidden in trailers. See
+`http.forbidden-trailer?` in the source for the conservative list. Applications interpret any retained
+custom metadata explicitly. TRACE with a positive chunk is rejected before consuming its payload.
+
+`http.body-reader-with Reader Request Options` allows additional bounds; `http.body-reader` uses their
+defaults. The server and listener accept the same five options:
+
+| Option | Default | Bound |
+| --- | --- | --- |
+| `chunk-line-limit` | 8192 | Size/extension or trailer line bytes, excluding CRLF |
+| `chunk-metadata-limit` | 65536 | All chunk framing, extensions, delimiters and trailers, excluding payload |
+| `trailer-limit` | 16384 | Trailer section bytes, including its final CRLF |
+| `trailer-fields-limit` | 100 | Number of trailer fields |
+| `chunk-count-limit` | 4096 | Number of size lines, including the final zero-size line |
+
+Limits are exact nonnegative fixnums up to 1048576; line/count limits must be positive. A trailer byte
+limit below two cannot accommodate even the final empty line; use `trailer-fields-limit 0` to allow no
+fields. The decoded `body-limit` and these metadata bounds are independent, so many tiny chunks or large
+extensions cannot bypass the resource policy. Resource excess returns 413; malformed syntax, delimiters,
+forbidden trailers and truncation return 400, with field syntax limits also able to return 431.
+
+Progress counts decoded payload bytes, including a consumed partial chunk, rather than wire delimiters.
+Transport errors retain their native details. Chunk scanning checks the same deadline between bounded
+metadata spans and data chunks and before completion; native waits use that same installed budget.
+No deadline is renewed by a new chunk. Any failure remains terminal and releases accumulated payload
+storage. Complete bodies remain owned in memory; streaming body delivery is a separate API.
 
 ## Response encoding
 
@@ -188,11 +246,13 @@ shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.sh
 ```
 
 Send a request from another terminal, for example `curl --http1.1 --data-binary 'hello' http://127.0.0.1:9000/`.
-The process handles that connection and exits. TLS, proxy requests, chunked coding, persistent connections,
-streaming bodies/responses, routing policy, authentication and concurrency limits are separate work.
+The process handles that connection and exits. TLS, proxy requests, persistent connections, streaming
+bodies/responses, routing policy and authentication are separate work. The bounded listener supplies
+connection limits and shutdown.
 
 Public declarations cover `http.request`, `http.body-reader`, `http.response`, server options and I/O result
 families. `make test-http` checks syntax/smuggling cases, every small transport split, body ownership, exact
 response bytes, partial failures, Date formatting, typed clients and image/GC behavior. CI runs it on each
 platform, skipping native cases explicitly on static builds. `python3 tests/http_wire.py build/shen-jit` adds
-an independent standard-library client for binary bodies, HEAD/bodyless statuses, rejections and slow input.
+an independent standard-library client for fixed/chunked binary bodies, trailers, HEAD/bodyless statuses,
+rejections and slow input.

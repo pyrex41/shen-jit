@@ -73,10 +73,17 @@
   head-timeout -> 4
   body-timeout -> 5
   write-timeout -> 6
+  chunk-line-limit -> 7
+  chunk-metadata-limit -> 8
+  trailer-limit -> 9
+  trailer-fields-limit -> 10
+  chunk-count-limit -> 11
   _ -> (error "http: unknown server option"))
 
 (define http.server-options
-  Options -> (http.configure (io.record [16384 1048576 16384 1048576 5000 5000 5000]) Options []))
+  Options ->
+    (http.configure (io.record [16384 1048576 16384 1048576 5000 5000 5000
+                               8192 65536 16384 100 4096]) Options []))
 
 (define http.configure
   Config [] _ -> Config
@@ -88,6 +95,7 @@
                (if (and (>= N (if (= I 2) 128 4)) (<= N 1048576))
                    true (error "http: invalid server head limit"))
                true)
+         _ (if (>= I 7) (http.chunk-options [[Name N]]) true)
          _ (address-> Config I N)
       (http.configure Config Rest [Name | Seen]))
   _ _ _ -> (error "http: server options must be [Name Number] pairs"))
@@ -117,8 +125,13 @@
   E R Handler Config [ok Request] ->
     (let D (clock.deadline (<-address Config 5))
          _ (io.socket-deadline E D)
-         B (http.body-reader R Request)
+         B (http.body-reader-with R Request (http.server-body-options Config))
       (http.server-body E Handler Config (http.read-body-until B D))))
+
+(define http.server-body-options
+  Config -> [[chunk-line-limit (<-address Config 7)] [chunk-metadata-limit (<-address Config 8)]
+             [trailer-limit (<-address Config 9)] [trailer-fields-limit (<-address Config 10)]
+             [chunk-count-limit (<-address Config 11)]])
 
 (define http.server-body
   E _ Config [error Error] -> (http.server-fail E Config Error)
@@ -168,6 +181,10 @@
   Error [error Other N] -> [error (io.secondary Error (io.progress Other N))])
 
 (datatype http-server-options
+  Option : http.chunk-option;
+  ===========================
+  Option : http.option;
+
   N : number;
   ===========================
   [head-limit N] : http.option;

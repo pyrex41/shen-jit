@@ -34,6 +34,26 @@ Views share mutations; captures copy. Generic `=` on view records is not logical
 views should not be dictionary keys. Hot scanners can unpack owner/start/end once instead of using a cursor
 for each byte.
 
+## Bounded builders
+
+`buffer.builder Limit` creates an empty single-owner builder. `buffer.append! B View` copies input bytes;
+`buffer.append-byte! B Byte` appends one exact byte. Both return B. `buffer.builder-length B` reports the
+current length, and `buffer.finish B` transfers managed storage to an owned logical view and seals B.
+Subsequent appends or finishes raise. Empty builders are valid, including a zero byte limit.
+
+```shen
+(let B (buffer.builder 32)
+     _ (buffer.append! B (buffer.from-string "hello"))
+     _ (buffer.append-byte! B 33)
+  (buffer.string (buffer.finish B)))
+```
+
+This returns `hello!`. Capacity grows geometrically under the explicit limit; finish may retain spare
+capacity within that bound. Count/byte/source validation happens before mutation, and exceeding the
+limit preserves earlier bytes. Input storage must remain live during append; it can be changed or
+released after append because the builder owns a copy. Builders are opaque managed values and can be
+saved in images. The [JSON encoder](json.md) and [chunked body decoder](http.md) use this API.
+
 ## Ownership and lifetime
 
 A view borrows the exact storage object; it never frees it or creates an independent pointer copy.
@@ -45,15 +65,14 @@ owners reload dead. Managed use also works in static builds, whose FFI allocator
 ## Typed clients
 
 Load the libraries under `(tc -)`; their declarations expose opaque `buffer.view`, `buffer.cursor` and
-`buffer.storage` types to typed clients. Normal clients can use `buffer.new` and `buffer.from-string` without
+`buffer.storage` and `buffer.builder` types to typed clients. Normal clients can use `buffer.new` and `buffer.from-string` without
 raw storage declarations. As with other opaque FFI values, a typed foreign allocator needs an explicit
 compatible declaration at its boundary.
 
 ## Format examples
 
-For two complete-input examples, load [tools/buffer-parsers.shen](../tools/buffer-parsers.shen) after the libraries. `buffer-example.json`
-takes a view and returns arrays as lists, ordered `[object [Key Value] ...]` objects, strings, booleans and
-`null`. Numbers remain exact `[number Token]` values. It validates UTF-8/escapes, rejects duplicate keys and
-limits nesting to 128; diagnostics use backing-owner byte offsets. This is an example reader, not a numeric
-conversion API. `buffer-example.packet View Limit` reads a two-byte big-endian tag, four-byte length and owned
+For two complete-input examples, load [tools/buffer-parsers.shen](../tools/buffer-parsers.shen) after
+buffer/cursor and [json.shen](json.md). `buffer-example.json` delegates to the public JSON decoder with
+a byte bound equal to the input view's size and nesting bound 128. It retains exact number tokens,
+strict UTF-8 and duplicate-key rejection. `buffer-example.packet View Limit` reads a two-byte big-endian tag, four-byte length and owned
 payload, rejecting oversized, incomplete or trailing input. Neither example reads a stream.

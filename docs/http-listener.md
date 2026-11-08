@@ -98,10 +98,10 @@ whose unfinished body is cancelled can observe EOF/reset; no extra HTTP rejectio
 ## A complete application
 
 [example-apps/sqlite-http](../example-apps/sqlite-http/README.md) contains a persistent counter API with
-JSON responses, parameterized SQL, per-request database ownership and explicit local shutdown. Its
+JSON requests/responses, parameterized SQL, per-request database ownership and explicit local shutdown. Its
 README gives launch commands, routes and the independent Python HTTP/SQLite test.
 
 `make test-http` includes connection-cap, backlog, graceful response, partial cancellation, handler and
 supervisor failure, typed-option, image and every-allocation GC cases, plus the counter application's
-database tests. Native cases skip explicitly on static builds. Broader HTTP framing, streaming responses,
+database tests. Native cases skip explicitly on static builds. Streaming request/response APIs,
 connection reuse, TLS and signal handling are separate work.

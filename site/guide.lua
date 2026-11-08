@@ -16,6 +16,7 @@ local PAGES = {
   ['http-head'] = 'HTTP head framing',
   http = 'HTTP requests and responses',
   ['http-listener'] = 'Bounded HTTP servers',
+  json = 'JSON',
 }
 local REPOSITORY = 'https://github.com/tizoc/shen-jit/blob/main/'
 

@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-LIBRARIES = ["ffi", "socket", "sqlite", "buffer", "io", "deadline", "clock", "io-socket",
+LIBRARIES = ["ffi", "socket", "sqlite", "buffer", "io", "json", "deadline", "clock", "io-socket",
              "http-head", "http-request", "http-response", "http-server", "http-listener"]
 
 
@@ -22,10 +22,10 @@ def shen_string(text):
     return '"' + str(text).replace("c#", "c#99;#").replace('"', "c#34;") + '"'
 
 
-def request(port, method, target, body=None, status=200):
+def request(port, method, target, body=None, status=200, headers=None, chunked=False):
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=10)
     try:
-        connection.request(method, target, body)
+        connection.request(method, target, body, headers or {}, encode_chunked=chunked)
         response = connection.getresponse()
         data = response.read()
         assert response.status == status, (target, response.status, data)
@@ -48,7 +48,7 @@ def server(executable, database):
     program = f'''(counter-app.initialize {shen_string(database.as_posix())})
       (define counter-test.handle
         Q -> (cases (= (http.target Q) "/__test_stop")
-                     (do (http.stop (value counter-test.server)) (counter-app.json 202 "{{}}"))
+                     (do (http.stop (value counter-test.server)) (counter-app.json 202 [object]))
                     (= (http.target Q) "/__test_fail") (error "test application failure")
                     true (counter-app.handle {shen_string(database.as_posix())} Q)))
       (set counter-test.server
@@ -113,7 +113,17 @@ def main():
             assert request(port, "GET", "/counters/hits") == {"value": 2}
             request(port, "HEAD", "/counters/hits")
             assert request(port, "GET", "/counters") == [{"name": "hits", "value": 2}]
-            request(port, "PUT", "/counters/hits", status=405)
+            request(port, "PUT", "/counters/hits", status=415)
+            assert request(port, "PUT", "/counters/hits", b'{"value":42}',
+                           headers={"Content-Type": "application/json"}) == {"value": 42}
+            assert request(port, "PUT", "/counters/hits", [b'{"val', b'ue":', b'7}'],
+                           headers={"Content-Type": "APPLICATION/JSON; CHARSET=UTF-8"},
+                           chunked=True) == {"value": 7}
+            for invalid in [b'{"value":1,"value":2}', b'{"value":1.0}', b'{"value":-1}',
+                            b'{"value":1000000000001}', b'{"value":1,"extra":2}', b'"\xff"']:
+                request(port, "PUT", "/counters/hits", invalid, status=400,
+                        headers={"Content-Type": "application/json"})
+            assert request(port, "GET", "/counters/hits") == {"value": 7}
             request(port, "POST", "/counters/hits", b"not empty", status=400)
             request(port, "POST", "/counters/x%27%3BDROP%20TABLE%20counters", status=404)
             request(port, "GET", "/__test_fail", status=500)
@@ -138,9 +148,15 @@ def main():
                 # Context exit requests shutdown while this connection remains open below.
                 # Its owner closes it after the 100 ms grace period.
                 held = stalled.dup()
-        held.settimeout(2)
-        assert held.recv(1) == b""
-        held.close()
+            with socket.create_connection(("127.0.0.1", port), timeout=5) as stalled_chunk:
+                stalled_chunk.sendall(b"PUT /counters/x HTTP/1.1\r\nHost: localhost\r\n"
+                                      b"Transfer-Encoding: chunked\r\nContent-Type: application/json\r\n\r\n3;x=\"a")
+                time.sleep(0.1)
+                held_chunk = stalled_chunk.dup()
+        for peer in (held, held_chunk):
+            peer.settimeout(2)
+            assert peer.recv(1) == b""
+            peer.close()
 
         with sqlite3.connect(database) as db:
             assert db.execute("SELECT name, value FROM counters").fetchall() == [("shared", 32)]

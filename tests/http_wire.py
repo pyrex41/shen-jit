@@ -21,6 +21,9 @@ HANDLER = '''(define wire.handler
              ((= (http.target Q) "/204") (http.response 204 [] (buffer.new 0)))
              ((= (http.target Q) "/205") (http.response 205 [] (buffer.new 0)))
              ((= (http.target Q) "/304") (http.response 304 [] (buffer.new 0)))
+             ((= (http.target Q) "/trailers")
+               (http.response 200 [] (buffer.from-string
+                 (if (= (http.trailers Q) [["x-ok" "yes"]]) "trailers-ok" "bad trailers"))))
              ((= (http.target Q) "/raise") (error "private handler failure"))
              ((= (http.target Q) "/injection")
                (http.response 200 [["X" "badc#13;c#10;Injected: yes"]] (buffer.new 0)))
@@ -123,7 +126,7 @@ def main():
         (b"POST / HTTP/1.1\r\n" + host + b"Content-Length: 0\r\nContent-Length: 0\r\n\r\n", 400, b"", {}),
         (b"POST / HTTP/1.1\r\n" + host + b"Content-Length: 0,0\r\n\r\n", 400, b"", {}),
         (b"POST / HTTP/1.1\r\n" + host + b"Transfer-Encoding: chunked\r\nContent-Length: 0\r\n\r\n", 400, b"", {}),
-        (b"POST / HTTP/1.1\r\n" + host + b"Transfer-Encoding: chunked\r\n\r\n", 501, b"", {}),
+        (b"POST / HTTP/1.1\r\n" + host + b"Transfer-Encoding: gzip, chunked\r\n\r\n", 501, b"", {}),
         (b"POST / HTTP/1.1\r\n" + host + b"Content-Length: 3\r\nExpect: 100-continue\r\n\r\n", 417, b"", {}),
         (b"POST / HTTP/1.1\r\n" + host + b"Content-Length: 3\r\n\r\nabc", 413, b"", {"options": "[[body-limit 2]]"}),
         (b"POST / HTTP/1.1\r\n" + host + b"Content-Length: 4\r\n\r\nabc", 400, b"", {"finish": True}),
@@ -132,6 +135,24 @@ def main():
         (b"GET /injection HTTP/1.1\r\n" + host + b"\r\n", 500, b"", {}),
         (b"GET / HTTP/1.1\r\n" + host + b"\r\n", 408, b"", {"slow": True, "options": "[[head-timeout 100]]"}),
     ]
+    chunked = b"POST /echo HTTP/1.1\r\n" + host + b"Transfer-Encoding: chunked\r\n\r\n"
+    cases += [
+        (chunked + b"0\r\n\r\n", 200, b"", {}),
+        (chunked + b'3;x="a;\\\"b"\r\na\0\xff\r\n1;ignored=yes\r\nz\r\n00\r\n\r\n', 200, b"a\0\xffz", {}),
+        (chunked.replace(b"/echo", b"/trailers") + b"0\r\nX-Ok: yes\r\n\r\n", 200, b"trailers-ok", {}),
+        (chunked + b"2\r\nab\r\n2\r\n", 413, b"", {"options": "[[body-limit 3]]"}),
+        (chunked + b"0\r\nContent-Length: 0\r\n\r\n", 400, b"", {}),
+        (chunked + b"1\r\naXX", 400, b"", {}),
+        (chunked + b"3\r\nab", 400, b"", {"finish": True}),
+        (chunked + b"ffffffffffffffffffff\r\n", 413, b"", {}),
+        (chunked + b"1\r\na\r\n0\r\n\r\n", 413, b"", {"options": "[[chunk-count-limit 1]]"}),
+        (chunked + b"0;oversized=yes\r\n\r\n", 413, b"", {"options": "[[chunk-line-limit 4]]"}),
+        (chunked + b"0\r\nX: y\r\n\r\n", 413, b"", {"options": "[[trailer-limit 7]]"}),
+        (chunked + b"1\r\na\r\n0\r\n\r\n", 408, b"", {"slow": True, "options": "[[body-timeout 100]]"}),
+    ]
+    payload = bytes(range(256)) * 257
+    cases.append((chunked + f"{len(payload):x}\r\n".encode() + payload + b"\r\n0\r\n\r\n",
+                  200, payload, {}))
     for request, status, body, kwargs in cases:
         exchange(executable, request, status, body, **kwargs)
     print(f"{len(cases)} independent HTTP wire cases passed")

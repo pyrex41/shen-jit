@@ -56,7 +56,7 @@ SHA256 := $(shell command -v sha256sum 2>/dev/null || echo shasum -a 256)
 # An image loads only into the build that wrote it.
 BUILD_ID := $(shell cat $(RUNTIME_SRC) $(RUNTIME_HDR) | $(SHA256) | cut -c1-16)
 
-.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-io test-http test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
+.PHONY: all release install stlib test-stlib test-thorn test-native test-buffer test-json test-io test-http test-ffi test-differential test-overrides differential-scheme fuzz-native generated update-generated check-generated deps host guide dist test test-san test-x86 test-jit test-ops test-kl test-kl-stress test-kernel test-kernel-stress test-ctrlc-windows test-linux bench bench-independent bench-numeric stage0 check-lowerer measure load-kernel clean
 
 all: $(BUILD)/shen-jit
 
@@ -192,7 +192,7 @@ check-generated: generated
 
 # The guide, docs/guide.md, with the documents that have a page of their own, as GitHub Pages
 # serves them and release archives carry them.
-GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-listener
+GUIDE_PAGES := design semantics bytecode ffi buffers io framing io-sockets deadlines http-head http http-listener json
 GUIDE_PANDOC := pandoc -f gfm -t html --standalone --toc --toc-depth=2 --section-divs --wrap=none \
   --template=site/template.html --lua-filter=site/guide.lua
 guide:
@@ -295,11 +295,19 @@ test-native: $(BUILD)/shen-jit
 test-buffer: $(BUILD)/shen-jit
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen \
-	  -l tools/buffer-parsers.shen -l tests/buffer_examples.shen | $(FFI_RESULT)
+	  -l lib/json.shen -l tools/buffer-parsers.shen -l tests/buffer_examples.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/cursor.shen -e '(tc +)' -l tests/buffer_typed.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/handle.shen \
 	  -l lib/buffer.shen -l lib/cursor.shen -l tests/buffer_memory.shen | $(FFI_RESULT)
 	sh tests/buffer_image.sh $(SHEN_JIT)
+
+# Complete UTF-8 JSON and bounded output, without FFI or kernel streams.
+test-json: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/json.shen -l tests/json.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/json.shen -e '(tc +)' -l tests/json_typed.shen | $(FFI_RESULT)
+	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/memory.shen -l lib/buffer.shen -l lib/json.shen \
+	  -l tests/json_memory.shen | $(FFI_RESULT)
+	sh tests/json_image.sh $(SHEN_JIT)
 
 # Independent chunk I/O, native file descriptors, typed results and image/GC safety.
 test-io: $(BUILD)/shen-jit
@@ -327,6 +335,8 @@ test-io: $(BUILD)/shen-jit
 
 # Complete request parsing, bounded bodies and one-request HTTP connections.
 test-http: $(BUILD)/shen-jit
+	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/deadline.shen -l lib/http-head.shen \
+	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_chunked.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/buffer.shen -l lib/io.shen -l lib/http-head.shen \
 	  -l lib/http-request.shen -l lib/http-response.shen -l tests/http_request.shen | $(FFI_RESULT)
 	$(BUILD)/shen-jit eval -l lib/ffi.shen -l lib/socket.shen -l lib/buffer.shen -l lib/io.shen \
