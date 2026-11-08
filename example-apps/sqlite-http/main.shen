@@ -1,4 +1,4 @@
-\\ A small persistent counter API. Load the public HTTP listener and SQLite libraries first.
+\\ A small persistent counter API. Load the public HTTP listener, grammar and SQLite libraries first.
 \\ Each database connection belongs to the request worker that opens it.
 
 (define counter-app.with-db
@@ -33,26 +33,15 @@
   Status Message ->
     (counter-app.json Status [object ["error" Message]]))
 
-(define counter-app.name-byte?
-  B -> (or (and (>= B 65) (<= B 90))
-           (and (>= B 97) (<= B 122))
-           (and (>= B 48) (<= B 57))
-           (= B 45) (= B 95)))
+(defgrammar counter-app.<name-byte>
+  B where (or (and (>= B 65) (<= B 90)) (and (>= B 97) (<= B 122)) (and (>= B 48) (<= B 57)) (= B 45) (= B 95));)
+(defgrammar counter-app.<name> (+ counter-app.<name-byte>);)
+(defgrammar counter-app.<counter> "/counters/" (text counter-app.<name>) := counter-app.<name>;)
 
-(define counter-app.name-range?
-  _ At At -> true
-  B At End ->
-    (and (counter-app.name-byte? (shen-jit.u8 B At)) (counter-app.name-range? B (+ At 1) End)))
-
+\\ A counter's name from its target, of at most 64 bytes, or [].
 (define counter-app.name
-  Target ->
-    (let B (shen-jit.string->bytes Target)
-         N (shen-jit.bytes-length B)
-      (if (and (> N 10) (<= N 74)
-               (= (shen-jit.bytes->string B 0 10) "/counters/")
-               (counter-app.name-range? B 10 N))
-          (shen-jit.bytes->string B 10 (- N 10))
-          [])))
+  Target -> (let B (shen-jit.string->bytes Target) N (shen-jit.bytes-length B)
+              (if (<= N 74) (grammar.parse-range counter-app.<counter> B 0 N (/. At Message [])) [])))
 
 (define counter-app.row-json
   [Name Value] -> [object ["name" Name] ["value" Value]])

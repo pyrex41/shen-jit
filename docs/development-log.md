@@ -1212,6 +1212,12 @@ alternating processes, each a loop over the case in one process, under a load av
   the bytes after one check of the view, where `frame.uint` makes six checked `buffer.u8` calls, which it could avoid
   by hand. Not worth making every framing user load `lib/grammar.shen`. `tools/buffer-parsers.shen` was left as it is:
   it shows the cursor API, and its payload's length is counted by its header, which a rule cannot take as an argument.
+- **Counter names in the SQLite example, kept.** `counter-app.<counter>`, `/counters/` and a name of letters,
+  digits, `-` and `_`, in 4 lines with its caller, replaces 17. Five rounds of a million calls: `/counters/hits` 49
+  to 52 ns against 51 to 53, a 25-byte name 98 to 99 against 148 to 150, `/counters/a/b` 44 to 46 against 34 to 36,
+  and `/health` 22 against 14 to 15, as each parse makes a state. A first version made a view of the target and took
+  78 ns for `/counters/hits` and 50 for `/health`; it parses the string's bytes as a range now. The difference on
+  other targets is under 1% of a request, which every request pays once.
 
 ### Bounded NDJSON batches and HTTP reader sizes (2026-11-07, M3 Max, macOS arm64)
 
